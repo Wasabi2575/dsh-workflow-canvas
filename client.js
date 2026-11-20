@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: '@local/dsh-workflow-canvas',
+  id: 'dsh-workflow-canvas',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
