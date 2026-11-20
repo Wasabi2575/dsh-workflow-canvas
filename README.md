@@ -22,7 +22,7 @@ Requires DeepSeek Harness **0.2.2** or newer (the package declares
   review; see the
   [catalog PR](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180).
 - **From npm** — install the published package `dsh-workflow-canvas`
-  (latest `0.1.0`) from the **Plugins** panel, or via the `plugin_manager` tool /
+  (latest `0.1.2`) from the **Plugins** panel, or via the `plugin_manager` tool /
   `dsh` CLI with `install_bundle` and `target: dsh-workflow-canvas`.
 - **From source** — clone the repository and install it as a local directory
   with **Plugins → Add plugin**, pointing at the checkout.
@@ -55,18 +55,26 @@ pipelines compiled to `ctx.workflows`, see
 | `structured` | blue | a JSON object; the upstream node is asked for structured output automatically |
 | `session` | purple | the upstream child session, so the downstream runs **inside it** |
 
-Drag from a right socket to a left socket, or from a left socket to a right one.
-Drag a connected left socket away to detach. Hold the **right button** and sweep
-across links to cut them (toggle in `⋯`).
+Drag from a right socket to a left socket, or from a left socket to a right one
+(cycles are blocked immediately). Drag a connected left socket away to detach.
+Hold the **right button** and sweep across links to cut them (toggle in `⋯`).
+Hold the **middle button** (or Space + drag) to pan, and press `⊡ Fit` to frame
+the whole graph.
+
+Shortcuts: `Shift+A` opens a Blender-style Add Node menu at the cursor, `Ctrl+D`
+duplicates selected nodes, `Delete` removes selected nodes, `Ctrl+Z` undoes, and
+`Esc` closes popups. `⋯` also offers `⊞ Auto layout` and `⇧ Copy JSON`.
 
 ## Running
 
-1. Write the task in the entry Lead, and a role for each node.
+1. Write the task in the entry Lead, and a role for each node (or leave the task
+   blank and pass `task` from chat when reusing a template).
 2. Connect the nodes — unlinked nodes are dashed and skipped.
 3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat
-   to run it.
+   to run it (pass `reset: true` to restart from scratch).
 4. The run proceeds in parallel waves (up to 4 at a time) and pauses at each Lead
-   node with the results collected so far.
+   node with the results collected so far. Click a subagent's status pill to jump
+   straight to its live chat pane.
 
 ## Lead handover
 
@@ -74,19 +82,22 @@ When a `session` link points into a Lead node, the run reports that child sessio
 id at the Lead step, so the conversation can keep talking to that agent instead of
 only receiving its text.
 
-## Generating and editing the canvas from chat
+## Inspecting, generating and editing the canvas from chat
 
+- `canvas_inspect` — read the current canvas (enabled state, task, node ids/models/roles
+  and links), so the agent can safely patch manually edited or preset graphs.
 - `canvas_generate` — build a whole canvas from a node/edge sketch (replaces it).
 - `canvas_patch` — edit it in place: update nodes by id, add or remove nodes and
   links, leaving positions and everything else untouched.
 
-Both write the canvas to the workspace, and the panel picks it up within ~1.5s.
+Generate and patch both write the canvas to the workspace, and the panel picks it
+up within ~1.5s.
 
-## Presets
+## Presets & sharing
 
-Name a canvas and press `☆ Save`; load it in another session from `☰ Presets`.
-Presets live in browser storage, shared across sessions of the same origin, and are
-not synchronised across machines.
+`☰ Presets` ships with ready-to-run starter templates; name any canvas and press
+`☆ Save` to keep your own. Presets live in browser storage; to share across
+machines or between Desktop and `dsh web`, use `⋯ → ⇧ Copy JSON` and `⇩ Import`.
 
 ## Memory
 

@@ -90,8 +90,8 @@ window.__ModuleLoader__.load({
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
         tipZoom: '滚轮缩放（以光标为中心）',
         tipResetZoom: '回到 100% 并把画面中心拉到 Lead 节点',
-        tipLocate: '把画面中心拉到 Lead（本对话）节点',
-        locate: '◎ 定位',
+        tipLocate: '自适应缩放并居中，让所有节点完整显示在视野内',
+        locate: '⊡ 全览',
         importBtn: '⇩ 导入',
         tipImport: '从剪贴板导入模型生成的画布（先复制聊天里的画布 JSON）',
         importOk: '已导入画布，共 ',
@@ -115,13 +115,28 @@ window.__ModuleLoader__.load({
           '10. 预设名 + ☆ 保存 可以把整张图存下来，新对话里从「☰ 预设」载入。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
+          '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点右下角状态可直达它的对话记录。',
+          '14. 快捷键：Shift+A 在光标处新建节点（Blender 风格），Ctrl+D 复制选中节点，Delete 批量删除，Ctrl+Z 撤销，Esc 关闭弹窗。',
         ].join('\n'),
+        openChat: '会话',
+        tipOpenRun: '点击打开该子代理的对话记录',
+        exportBtn: '⇧ 复制 JSON',
+        exportOk: '已复制画布 JSON 到剪贴板',
+        exportFail: '复制失败（剪贴板不可用）',
+        autoLayoutBtn: '⊞ 自动排版',
+        layoutDone: '已自动整理布局',
+        cycleBlocked: '不能形成环，已阻止连线',
+        builtinTemplates: '内置示例模板',
+        myPresets: '我的预设',
+        duplicatedNodes: '已复制节点',
+        deletedNodes: '已删除节点（可用 ↶ 撤销）',
+        addMenuTitle: '新建节点 (Shift+A)',
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
-        tipMemory: '记忆：复用这个节点上一次的会话（仅同一进程内有效）',
+        tipMemory: '记忆：复用这个节点上一次的会话（跨运行及重启后可恢复）',
         tipPreset: '能力范围（点一下切换）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
         tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
@@ -165,8 +180,8 @@ window.__ModuleLoader__.load({
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
         tipZoom: 'Wheel zooms around the cursor',
         tipResetZoom: 'Reset to 100% and centre the view on the Lead node',
-        tipLocate: 'Centre the view on the Lead (this conversation) node',
-        locate: '◎ Locate',
+        tipLocate: 'Fit all nodes into the visible canvas',
+        locate: '⊡ Fit',
         importBtn: '⇩ Import',
         tipImport: 'Import a model-generated canvas from the clipboard (copy the canvas JSON from chat first)',
         importOk: 'Canvas imported, ',
@@ -190,13 +205,28 @@ window.__ModuleLoader__.load({
           '10. Name a preset and press ☆ Save to keep the canvas for other sessions.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
+          '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge to open its chat.',
+          '14. Shortcuts: Shift+A adds a node at cursor (Blender style), Ctrl+D duplicates, Delete removes selected, Ctrl+Z undoes, Esc closes popups.',
         ].join('\n'),
+        openChat: 'Chat',
+        tipOpenRun: 'Click to open this subagent conversation',
+        exportBtn: '⇧ Copy JSON',
+        exportOk: 'Canvas JSON copied to clipboard',
+        exportFail: 'Copy failed (clipboard unavailable)',
+        autoLayoutBtn: '⊞ Auto layout',
+        layoutDone: 'Layout tidied',
+        cycleBlocked: 'Cannot create a cycle',
+        builtinTemplates: 'Starter templates',
+        myPresets: 'Saved presets',
+        duplicatedNodes: 'Duplicated nodes',
+        deletedNodes: 'Deleted nodes (use Undo to restore)',
+        addMenuTitle: 'Add node (Shift+A)',
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
-        tipMemory: 'Memory: reuse this node\'s previous session (same process only)',
+        tipMemory: 'Memory: reuse this node\'s previous session (persisted across runs and restarts)',
         tipPreset: 'Capability (click to toggle): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
         tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
@@ -236,12 +266,17 @@ window.__ModuleLoader__.load({
         background: C.base, color: C.text, fontSize: '13px',
       },
       toolbar: {
-        display: 'flex', alignItems: 'center', gap: '6px',
+        display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px',
         padding: '8px 10px', borderBottom: '1px solid ' + C.border, flex: '0 0 auto',
       },
       btn: {
         padding: '5px 10px', borderRadius: '6px', border: '1px solid ' + C.border,
         background: C.raised, color: C.text, fontSize: '12px', cursor: 'pointer', whiteSpace: 'nowrap',
+      },
+      btnDirty: {
+        padding: '5px 10px', borderRadius: '6px', border: '1px solid ' + C.accent,
+        background: C.raised, color: C.accent, fontSize: '12px', fontWeight: 600,
+        cursor: 'pointer', whiteSpace: 'nowrap',
       },
       toggleOn: {
         padding: '5px 12px', borderRadius: '6px', border: '1px solid ' + C.accent,
@@ -258,16 +293,20 @@ window.__ModuleLoader__.load({
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       },
       floatOn: {
-        position: 'absolute', top: '52px', left: '10px', zIndex: 30,
+        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.accent,
         background: C.elevated, color: C.accent, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
       },
       floatOff: {
-        position: 'absolute', top: '52px', left: '10px', zIndex: 30,
+        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+      },
+      canvasWrap: {
+        position: 'relative', flex: '1 1 auto', minHeight: '0',
+        display: 'flex', flexDirection: 'column',
       },
       moreBar: { position: 'relative', flex: '0 0 auto' },
       moreMenu: {
@@ -279,6 +318,21 @@ window.__ModuleLoader__.load({
         padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
         whiteSpace: 'nowrap', color: C.text,
       },
+      addMenu: {
+        position: 'absolute', minWidth: '164px',
+        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '7px',
+        zIndex: 85, padding: '4px', boxShadow: '0 12px 30px rgba(0,0,0,0.5)',
+      },
+      addMenuHead: {
+        padding: '4px 8px 3px', fontSize: '10px', color: C.dim,
+        borderBottom: '1px solid ' + C.border, marginBottom: '3px',
+      },
+      addMenuRow: {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+        padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
+        color: C.text, whiteSpace: 'nowrap',
+      },
+      addMenuHint: { fontSize: '10px', color: C.dim },
       helpOverlay: {
         position: 'absolute', inset: '0', background: 'rgba(0,0,0,0.45)', zIndex: 90,
         display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px',
@@ -318,7 +372,7 @@ window.__ModuleLoader__.load({
       },
       presetEmpty: { padding: '6px', fontSize: '10px', color: C.dim },
       syncNote: { fontSize: '10px', color: C.dim, maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-      canvas: { position: 'relative', flex: '1 1 auto', overflow: 'auto', minHeight: '0', userSelect: 'none' },
+      canvas: { position: 'relative', flex: '1 1 auto', overflow: 'hidden', minHeight: '0', userSelect: 'none' },
       content: { position: 'relative', width: CONTENT_W, height: CONTENT_H },
 
       node: {
@@ -347,8 +401,15 @@ window.__ModuleLoader__.load({
         borderRadius: '10px 10px 0 0', zIndex: 2, pointerEvents: 'none',
       },
       statusChip: {
-        position: 'absolute', right: '10px', bottom: '3px', fontSize: '9px', lineHeight: '14px',
+        position: 'absolute', right: '12px', bottom: '4px', fontSize: '10px', lineHeight: '14px',
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
+      },
+      statusBtn: {
+        position: 'absolute', right: '12px', bottom: '3px', fontSize: '10px', lineHeight: '14px',
+        padding: '1px 5px', borderRadius: '4px', border: '1px solid ' + C.border,
+        background: C.elevated, color: C.text, cursor: 'pointer', pointerEvents: 'auto',
+        zIndex: 7, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '2px',
+        outline: 'none',
       },
 
       fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '28px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
@@ -473,9 +534,9 @@ window.__ModuleLoader__.load({
 
     function defaultNodes() {
       return [
-        { id: 'lead', kind: 'lead', x: 30, y: 30, label: 'Lead', task: '', provider: '', model: '', role: '' },
-        { id: 'n1', kind: 'agent', x: 40, y: 230, label: 'Classifier', provider: '', model: 'deepseek-v4-flash', role: '把请求分类' },
-        { id: 'n2', kind: 'agent', x: 340, y: 420, label: 'Executor', provider: '', model: 'deepseek-v4-pro', role: '执行方案' },
+        { id: 'lead', kind: 'lead', x: 40, y: 80, label: 'Lead', task: '', provider: '', model: '', role: '' },
+        { id: 'n1', kind: 'agent', x: 340, y: 80, label: pick('步骤 1：分析', 'Step 1: Analyze'), provider: '', model: '', role: pick('拆解任务并给出思路', 'Break down the task and propose an approach') },
+        { id: 'n2', kind: 'agent', x: 640, y: 80, label: pick('步骤 2：执行', 'Step 2: Execute'), provider: '', model: '', role: pick('按上游思路完成输出', 'Execute the plan from upstream') },
       ];
     }
 
@@ -690,12 +751,135 @@ window.__ModuleLoader__.load({
       return set;
     }
 
+    /** True when adding `fromId -> toId` would create a cycle or point into entry Lead. */
+    function wouldCycle(nodes, edges, fromId, toId) {
+      if (!fromId || !toId || fromId === toId || toId === 'lead') return true;
+      const adj = new Map();
+      for (const e of edges || []) {
+        if (!adj.has(e.from)) adj.set(e.from, []);
+        adj.get(e.from).push(e.to);
+      }
+      const seen = new Set([toId]);
+      const queue = [toId];
+      while (queue.length) {
+        const cur = queue.shift();
+        if (cur === fromId) return true;
+        for (const next of adj.get(cur) || []) {
+          if (!seen.has(next)) { seen.add(next); queue.push(next); }
+        }
+      }
+      return false;
+    }
+
+    /** Tidy a DAG into symmetrical left-to-right columns by longest-path depth. */
+    function layoutGraph(nodes, edges) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const linkList = Array.isArray(edges) ? edges : [];
+      if (!list.length) return [];
+      const reachable = reachableFrom(list, linkList);
+      const depth = new Map(list.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
+      for (let pass = 0; pass < list.length; pass += 1) {
+        let changed = false;
+        for (const e of linkList) {
+          if (!reachable.has(e.from) || !reachable.has(e.to) || e.to === 'lead') continue;
+          const next = Math.min(list.length, (depth.get(e.from) || 0) + 1);
+          if (next > (depth.get(e.to) || 0)) { depth.set(e.to, next); changed = true; }
+        }
+        if (!changed) break;
+      }
+      let maxDepth = 0;
+      for (const n of list) {
+        if (reachable.has(n.id)) maxDepth = Math.max(maxDepth, depth.get(n.id) || 0);
+      }
+      const columns = new Map();
+      for (const n of list) {
+        const col = reachable.has(n.id) ? (depth.get(n.id) || 0) : maxDepth + 1;
+        if (!columns.has(col)) columns.set(col, []);
+        columns.get(col).push(n);
+      }
+      const posById = new Map();
+      const COL_PITCH = 300;
+      const ROW_PITCH = 250;
+      const MID_Y = 320;
+      for (const [col, colNodes] of columns.entries()) {
+        const ordered = colNodes.slice().sort((a, b) => (a.y || 0) - (b.y || 0));
+        const totalH = (ordered.length - 1) * ROW_PITCH + NODE_H;
+        const startY = Math.round(MID_Y - totalH / 2);
+        ordered.forEach((n, row) => {
+          posById.set(n.id, { x: 40 + col * COL_PITCH, y: startY + row * ROW_PITCH });
+        });
+      }
+      return list.map((n) => {
+        const p = posById.get(n.id);
+        return p ? { ...n, x: p.x, y: p.y } : { ...n };
+      });
+    }
+
+    /** Starter templates shipped with the plugin so new users can try one click away. */
+    function builtinTemplates(lang) {
+      const en = lang === 'en';
+      const prdNodes = [
+        { id: 'lead', kind: 'lead', label: 'Lead', task: en ? 'Turn this PRD into an implementation plan: run three parallel researches (competitors, feasibility, cost), synthesize a structured plan, pause for my decision, then build code, docs and a test checklist in parallel before my final review.' : '把这份 PRD 变成可实施方案：先并行做三项调研（竞品、技术可行性、成本），合成一份结构化方案，我拍板后并行产出代码与文档、并按方案生成测试清单，最后我终审。', provider: '', model: '', role: '' },
+        { id: 'n_comp', kind: 'agent', label: en ? 'Competitors' : '竞品调研', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Research how similar products solve this and list key trade-offs.' : '调研同类产品的做法，列出优缺点与差异化机会。' },
+        { id: 'n_tech', kind: 'agent', label: en ? 'Feasibility' : '技术可行性', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: true, role: en ? 'Assess whether our current stack can support it and identify key risks.' : '评估现有技术栈能否实现，指出核心难点与依赖。' },
+        { id: 'n_cost', kind: 'agent', label: en ? 'Cost Estimate' : '成本估算', provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false, role: en ? 'Estimate effort, timeline, and external dependencies.' : '估算人力、时间与依赖，给出保守与乐观两档评估。' },
+        { id: 'n_synth', kind: 'agent', label: en ? 'Plan Synthesis' : '方案合成', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Merge the three research inputs into one actionable structured plan with options, steps and risks.' : '合并三份调研为一份可执行的结构化方案（含备选路线、steps 与 risks）。' },
+        { id: 'n_decide', kind: 'lead', label: en ? 'Lead Decision' : 'Lead 拍板', provider: '', model: '', role: en ? 'Pick one route from the synthesized plan and define scope & non-goals.' : '从合成方案里选定一条路线，写清实施边界与不做的事。' },
+        { id: 'n_tests', kind: 'agent', label: en ? 'Test Checklist' : '测试清单', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Continue from the synthesized plan and derive acceptance tests covering steps & risks.' : '基于方案中的 steps 与 risks 生成可验证的验收测试清单。' },
+        { id: 'n_code', kind: 'agent', label: en ? 'Write Code' : '写代码', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Implement the core changes following the approved plan.' : '按拍板后的方案实现核心改动并自测。' },
+        { id: 'n_docs', kind: 'agent', label: en ? 'Write Docs' : '写文档', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Write user-facing usage notes and changelog.' : '写使用说明与变更记录，面向使用者而非开发者。' },
+        { id: 'n_final', kind: 'lead', label: en ? 'Lead Final Review' : 'Lead 终审', provider: '', model: '', role: en ? 'Verify code, docs and test checklist align with the plan and give a ship/no-ship call.' : '核对代码、文档、测试清单三者是否对齐方案，给出能否交付的结论。' },
+      ];
+      const prdEdges = [
+        { id: 't1', from: 'lead', to: 'n_comp', type: 'prompt' },
+        { id: 't2', from: 'lead', to: 'n_tech', type: 'prompt' },
+        { id: 't3', from: 'lead', to: 'n_cost', type: 'prompt' },
+        { id: 't4', from: 'n_comp', to: 'n_synth', type: 'prompt' },
+        { id: 't5', from: 'n_tech', to: 'n_synth', type: 'prompt' },
+        { id: 't6', from: 'n_cost', to: 'n_synth', type: 'prompt' },
+        { id: 't7', from: 'n_synth', to: 'n_decide', type: 'structured' },
+        { id: 't8', from: 'n_synth', to: 'n_tests', type: 'session-ref' },
+        { id: 't9', from: 'n_decide', to: 'n_code', type: 'prompt' },
+        { id: 't10', from: 'n_decide', to: 'n_docs', type: 'prompt' },
+        { id: 't11', from: 'n_code', to: 'n_final', type: 'prompt' },
+        { id: 't12', from: 'n_tests', to: 'n_final', type: 'prompt' },
+        { id: 't13', from: 'n_docs', to: 'n_final', type: 'prompt' },
+      ];
+      const abNodes = [
+        { id: 'lead', kind: 'lead', label: 'Lead', task: '', provider: '', model: '', role: '' },
+        { id: 'n_a', kind: 'agent', label: en ? 'Option A (Safe)' : '方案 A（稳健）', provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false, role: en ? 'Propose a low-risk, minimal-change solution.' : '提出低风险、改动最小的稳健方案。' },
+        { id: 'n_b', kind: 'agent', label: en ? 'Option B (Bold)' : '方案 B（创新）', provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false, role: en ? 'Propose a high-leverage alternative with better long-term payoff.' : '提出上限更高、长期收益更大的进阶方案。' },
+        { id: 'n_pick', kind: 'lead', label: en ? 'Lead Pick' : 'Lead 拍板', provider: '', model: '', role: en ? 'Compare both options and pick the direction to execute.' : '对比两份方案，选定最终路线并补充约束。' },
+        { id: 'n_exec', kind: 'agent', label: en ? 'Execute' : '执行落地', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Deliver the chosen solution end to end.' : '按照拍板路线完成最终交付。' },
+      ];
+      const abEdges = [
+        { id: 'a1', from: 'lead', to: 'n_a', type: 'prompt' },
+        { id: 'a2', from: 'lead', to: 'n_b', type: 'prompt' },
+        { id: 'a3', from: 'n_a', to: 'n_pick', type: 'prompt' },
+        { id: 'a4', from: 'n_b', to: 'n_pick', type: 'prompt' },
+        { id: 'a5', from: 'n_pick', to: 'n_exec', type: 'prompt' },
+      ];
+      return [
+        {
+          id: 'tpl-prd',
+          name: en ? 'PRD Research → Decide → Build → Review' : 'PRD 调研 → 拍板 → 并行产出 → 终审',
+          nodes: layoutGraph(prdNodes, prdEdges),
+          edges: prdEdges,
+        },
+        {
+          id: 'tpl-ab',
+          name: en ? 'Parallel Options → Decide → Execute' : '并行方案对比 → 拍板 → 执行',
+          nodes: layoutGraph(abNodes, abEdges),
+          edges: abEdges,
+        },
+      ];
+    }
+
     /** Everything the Host executor needs; no prompts are pre-rendered here. */
     function buildPlan(nodes, edges) {
       const entry = nodes.find((n) => n.id === 'lead');
       if (!entry) return { error: '缺少入口 Lead 节点' };
       const task = String(entry.task || '').trim();
-      if (!task) return { error: '请先在 Lead 节点填写「本次任务」' };
       const rest = nodes.filter((n) => n.id !== 'lead');
       if (!rest.length) return { error: '画布上还没有可执行的节点' };
       // Nodes the entry Lead cannot reach are skipped rather than refused; the
@@ -869,9 +1053,19 @@ window.__ModuleLoader__.load({
       const [openModelFor, setOpenModelFor] = useState(null);
       const [enabled, setEnabled] = useState(() => Boolean(initial && initial.enabled));
 
+      const rootElRef = useRef(null);
+      const canvasWrapRef = useRef(null);
       const contentRef = useRef(null);
       const canvasElRef = useRef(null);
-      const nodeDrag = useRef(null);      const statusTimer = useRef(null);
+      const pointerInsideRoot = useRef(false);
+      const lastMouseRef = useRef(null);
+      const [addMenu, setAddMenu] = useState(null);
+      const nodeDrag = useRef(null);
+      const panDrag = useRef(null);
+      const [panning, setPanning] = useState(false);
+      const spaceDown = useRef(false);
+      const [spaceHeld, setSpaceHeld] = useState(false);
+      const statusTimer = useRef(null);
       const dropdownRef = useRef(null);
       const syncTimer = useRef(null);
       const lastSync = useRef('');
@@ -881,6 +1075,7 @@ window.__ModuleLoader__.load({
       const viewRef = useRef(view);
       viewRef.current = view;
       const [statusById, setStatusById] = useState({});
+      const [runsById, setRunsById] = useState({});
       const [presets, setPresets] = useState(loadPresets);
       const [presetOpen, setPresetOpen] = useState(null);
       const [presetName, setPresetName] = useState('');
@@ -893,6 +1088,10 @@ window.__ModuleLoader__.load({
       };
       const nodesRef = useRef(nodes);
       nodesRef.current = nodes;
+      const edgesRef = useRef(edges);
+      edgesRef.current = edges;
+      const selectedIdsRef = useRef(selectedIds);
+      selectedIdsRef.current = selectedIds;
 
       useEffect(() => {
         const stamp = applyStamp.current;
@@ -1004,47 +1203,76 @@ window.__ModuleLoader__.load({
         statusTimer.current = setTimeout(() => setStatus(''), 3200);
       };
 
-      // Live node status for subagent nodes only: the catalog lists children by
-      // `label#nodeId`. Lead steps run inside the conversation, so the canvas
-      // cannot observe them and must not pretend to.
+      const NODE_MARK = /#([^\s#]+)$/;
+
+      const readCatalog = () => {
+        try {
+          const sessions = hostCtx && hostCtx.sessions;
+          if (!sessions || !sessionId) return { status: null, runs: null };
+          const state = sessions.list.getSnapshot();
+          const proj = state && state.projectionsBySession && state.projectionsBySession[sessionId];
+          const catalog = proj && proj.values && proj.values.subagentCatalog;
+          if (!Array.isArray(catalog)) return { status: null, runs: null };
+          const known = new Set(nodesRef.current.map((n) => n.id));
+          const nextStatus = {};
+          const nextRuns = {};
+          for (const entry of catalog) {
+            const label = String(entry.label || entry.name || entry.description || '');
+            const m = NODE_MARK.exec(label);
+            if (!m || !known.has(m[1])) continue;
+            const nodeId = m[1];
+            const child = state.byId && state.byId[entry.id];
+            const timingProj = state.projectionsBySession && state.projectionsBySession[entry.id];
+            const timing = timingProj && timingProj.values && timingProj.values.subagentTiming;
+            if (child && child.running) nextStatus[nodeId] = 'running';
+            else if (timing && timing.lastTurnCompleted === false) nextStatus[nodeId] = 'failed';
+            else nextStatus[nodeId] = 'done';
+            if (entry.id) {
+              const prev = nextRuns[nodeId];
+              nextRuns[nodeId] = {
+                childId: entry.id,
+                label,
+                mode: entry.mode || 'continuable',
+                count: prev ? prev.count + 1 : 1,
+              };
+            }
+          }
+          return { status: nextStatus, runs: nextRuns };
+        } catch (_e) {
+          return { status: null, runs: null };
+        }
+      };
+
+      // Live node status & child session links for subagent nodes only: the
+      // catalog lists children by `label#nodeId`. Lead steps run inside the
+      // conversation, so the canvas cannot observe them and must not pretend to.
       useEffect(() => {
         const sessions = hostCtx && hostCtx.sessions;
         const face = sessionFace(sessionId);
         if (!sessions || !sessionId || !face || typeof face.subscribe !== 'function') return undefined;
         let timer = null;
         const read = () => {
-          try {
-            const state = sessions.list.getSnapshot();
-            const proj = state && state.projectionsBySession && state.projectionsBySession[sessionId];
-            const catalog = proj && proj.values && proj.values.subagentCatalog;
-            if (!Array.isArray(catalog)) return;
-            const known = new Set(nodesRef.current.map((n) => n.id));
-            const next = {};
-            for (const entry of catalog) {
-              const m = NODE_MARK.exec(String(entry.label || ''));
-              if (!m || !known.has(m[1])) continue;
-              const child = state.byId && state.byId[entry.id];
-              const timingProj = state.projectionsBySession && state.projectionsBySession[entry.id];
-              const timing = timingProj && timingProj.values && timingProj.values.subagentTiming;
-              if (child && child.running) next[m[1]] = 'running';
-              else if (timing && timing.lastTurnCompleted === false) next[m[1]] = 'failed';
-              else next[m[1]] = 'done';
-            }
-            setStatusById(next);
-          } catch (_e) { /* ignore */ }
+          const { status: nextStatus, runs: nextRuns } = readCatalog();
+          if (nextStatus) setStatusById(nextStatus);
+          if (nextRuns) setRunsById(nextRuns);
         };
         const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
         let wasRunning = false;
         try { wasRunning = Boolean(face.getSnapshot().running); } catch (_e) { wasRunning = false; }
-        if (wasRunning) { read(); timer = setInterval(read, 700); }
+        read();
+        if (wasRunning) timer = setInterval(read, 700);
         const onSnapshot = () => {
           let running = false;
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
           // A new turn means a new run: drop the previous run's statuses first.
           if (running && !wasRunning) setStatusById({});
+          const finished = !running && wasRunning;
           wasRunning = running;
           if (running && !timer) { read(); timer = setInterval(read, 700); }
           if (!running && timer) { stop(); read(); }
+          if (finished && typeof sessions.refreshProjections === 'function') {
+            Promise.resolve(sessions.refreshProjections(sessionId)).then(read, () => {});
+          }
         };
         let unsub;
         try { unsub = face.subscribe(onSnapshot); } catch (_e) { unsub = undefined; }
@@ -1113,23 +1341,60 @@ window.__ModuleLoader__.load({
         };
       };
 
-      const focusLead = () => {
+      const focusLead = (nextK) => {
         const lead = nodes.find((n) => n.id === 'lead');
         if (!lead) return;
-        centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2);
+        centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2, nextK);
+      };
+
+      /** Zoom and pan so every node sits comfortably inside the viewport. */
+      const fitView = (targetNodes) => {
+        const el = canvasElRef.current;
+        const list = Array.isArray(targetNodes) && targetNodes.length ? targetNodes : nodesRef.current;
+        if (!el || !list.length) return;
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+        for (const n of list) {
+          if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+          if (n.x < minX) minX = n.x;
+          if (n.y < minY) minY = n.y;
+          if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
+          if (n.y + NODE_H > maxY) maxY = n.y + NODE_H;
+        }
+        if (!Number.isFinite(minX)) return;
+        const cw = el.clientWidth || 1;
+        const chh = el.clientHeight || 1;
+        const padX = 36;
+        const padTop = 44;
+        const padBottom = 36;
+        const availW = Math.max(80, cw - padX * 2);
+        const availH = Math.max(80, chh - padTop - padBottom);
+        const bw = Math.max(NODE_W, maxX - minX);
+        const bh = Math.max(NODE_H, maxY - minY);
+        const k = Math.max(0.2, Math.min(1, Math.min(availW / bw, availH / bh)));
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        setView({
+          k,
+          x: cw / 2 - (cx + WORLD_PAD) * k,
+          y: padTop + (chh - padTop - padBottom) / 2 - (cy + WORLD_PAD) * k,
+        });
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
       };
 
       // The world origin is padded, so the initial viewport would otherwise show
-      // empty space. Centre on the entry Lead the first time the pane mounts.
+      // empty space. Fit all nodes into view the first time the pane mounts.
       const didCenter = useRef(false);
       useEffect(() => {
         if (didCenter.current) return;
-        const lead = nodesRef.current.find((n) => n.id === 'lead');
-        if (!lead) return;
+        if (!nodesRef.current.length) return;
         didCenter.current = true;
         const raf = typeof requestAnimationFrame === 'function'
-          ? requestAnimationFrame(() => centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2))
-          : setTimeout(() => centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2), 0);
+          ? requestAnimationFrame(() => fitView(nodesRef.current))
+          : setTimeout(() => fitView(nodesRef.current), 0);
         return () => {
           if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
           else clearTimeout(raf);
@@ -1151,77 +1416,62 @@ window.__ModuleLoader__.load({
         flash(t('undoDone'));
       };
 
-      const NODE_MARK = /#([A-Za-z0-9_]+)/;
-
-      /** Match this canvas's spawned subagent sessions back to their nodes. */
-      const refreshRuns = async () => {
-        try {
-          const sessions = hostCtx && hostCtx.sessions;
-          if (!sessions || !sessionId) { flash('没有会话上下文'); return; }
-          try { await sessions.refreshProjections(sessionId); } catch (_e) { /* ignore */ }
-          const state = sessions.list.getSnapshot();
-          const proj = state && state.projectionsBySession && state.projectionsBySession[sessionId];
-          const values = proj && (proj.values || (proj.state === 'ready' ? proj.values : undefined));
-          const catalog = values && values.subagentCatalog;
-          if (!Array.isArray(catalog)) {
-            flash('读不到子代理目录（' + (proj ? '没有 subagentCatalog' : '没有该会话投影') + '）');
-            return;
-          }
-          if (!catalog.length) { flash('子代理目录是空的（这次运行可能没产生子会话）'); return; }
-          const known = new Set(nodes.map((n) => n.id));
-          const byNode = new Map();
-          const samples = [];
-          for (const entry of catalog) {
-            const label = String(entry.label || entry.name || entry.description || '');
-            if (samples.length < 2) samples.push(label || '(无 label)');
-            const m = NODE_MARK.exec(label);
-            if (!m) continue;
-            const nodeId = m[1];
-            if (!known.has(nodeId)) continue;
-            if (!byNode.has(nodeId)) byNode.set(nodeId, []);
-            byNode.get(nodeId).push({ childId: entry.id, label, mode: entry.mode || 'continuable' });
-          }
-          if (!byNode.size) {
-            flash('目录 ' + catalog.length + ' 项但没有带 #节点id 的，示例：' + samples.join(' / '));
-            return;
-          }
-          setNodes((ns) => ns.map((n) => (byNode.has(n.id) ? { ...n, runs: byNode.get(n.id) } : n)));
-          flash('已同步 ' + byNode.size + ' 个节点的运行记录');
-        } catch (_e) {
-          flash('同步运行记录失败：' + String((_e && _e.message) || _e));
-        }
-      };
-
       const openRun = (node, run) => {
         try {
           const sr = hostCtx && hostCtx.sidebarRight;
-          if (!sr || typeof sr.openResource !== 'function') { flash('无法打开会话'); return; }
+          if (!sr || typeof sr.openResource !== 'function') { flash(t('cannotOpen')); return; }
           const addr = 'dsh-resource://subagentchat/session/' + encodeURIComponent(run.childId)
             + '?parent=' + encodeURIComponent(sessionId)
             + '&mode=' + encodeURIComponent(run.mode || 'continuable');
           sr.openResource(addr, { kind: 'subagentchat', preferNewPane: true });
         } catch (_e) {
-          flash('打开会话失败');
+          flash(t('cannotOpen'));
         }
       };
 
-      const addNode = (kind) => {
+      const openNodeSession = async (node) => {
+        let run = runsById[node.id];
+        if (!run) {
+          const sessions = hostCtx && hostCtx.sessions;
+          if (sessions && sessionId && typeof sessions.refreshProjections === 'function') {
+            try { await sessions.refreshProjections(sessionId); } catch (_e) { /* ignore */ }
+          }
+          const { status: nextStatus, runs: nextRuns } = readCatalog();
+          if (nextStatus) setStatusById(nextStatus);
+          if (nextRuns) {
+            setRunsById(nextRuns);
+            run = nextRuns[node.id];
+          }
+        }
+        if (!run) { flash(t('cannotOpen')); return; }
+        openRun(node, run);
+      };
+
+      const addNode = (kind, atWorld) => {
         pushSnapshot();
+        const newId = 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 4);
         setNodes((ns) => {
           const i = ns.length;
           const center = viewportCenterWorld();
+          const x = atWorld && typeof atWorld.x === 'number'
+            ? Math.round(atWorld.x - NODE_W / 2)
+            : center.x + 40 + (ns.length % 3) * 30;
+          const y = atWorld && typeof atWorld.y === 'number'
+            ? Math.round(atWorld.y - NODE_H / 2)
+            : center.y - NODE_H / 2 + (ns.length % 3) * 40;
           return [...ns, {
-            id: 'n' + Date.now().toString(36),
+            id: newId,
             kind: kind === 'lead' ? 'lead' : 'agent',
-            // New nodes land near the middle of the viewport, nudged right.
-            x: center.x + 40 + (ns.length % 3) * 30,
-            y: center.y - NODE_H / 2 + (ns.length % 3) * 40,
+            x,
+            y,
             label: kind === 'lead' ? 'Lead 步骤 ' + i : 'Node ' + i,
             provider: '',
             model: '',
             role: '',
           }];
         });
+        setSelectedIds([newId]);
+        setAddMenu(null);
       };
 
       const updateNode = (id, patch) => {
@@ -1237,8 +1487,110 @@ window.__ModuleLoader__.load({
         flash(t('deletedNode'));
       };
 
+      const deleteSelected = () => {
+        const curSel = selectedIdsRef.current;
+        if (!curSel.length) return;
+        const targets = curSel.filter((id) => id !== 'lead');
+        if (!targets.length) { flash(t('leadLocked')); return; }
+        const drop = new Set(targets);
+        pushSnapshot();
+        setNodes((ns) => ns.filter((n) => !drop.has(n.id)));
+        setEdges((es) => es.filter((e) => !drop.has(e.from) && !drop.has(e.to)));
+        setSelectedIds([]);
+        flash(targets.length === 1 ? t('deletedNode') : t('deletedNodes') + ' ×' + targets.length);
+      };
+
+      const duplicateSelected = () => {
+        const curSel = selectedIdsRef.current;
+        const curNodes = nodesRef.current;
+        const sources = curSel
+          .filter((id) => id !== 'lead')
+          .map((id) => curNodes.find((n) => n.id === id))
+          .filter(Boolean);
+        if (!sources.length) return;
+        pushSnapshot();
+        const stamp = Date.now().toString(36);
+        const clones = sources.map((src, idx) => {
+          const { runs: _runs, ...rest } = src;
+          return {
+            ...rest,
+            id: 'n' + stamp + '_' + idx + Math.random().toString(36).slice(2, 4),
+            x: (src.x || 0) + 28,
+            y: (src.y || 0) + 28,
+          };
+        });
+        setNodes((ns) => ns.concat(clones));
+        setSelectedIds(clones.map((c) => c.id));
+        flash(t('duplicatedNodes') + ' ×' + clones.length);
+      };
+
+      const autoLayout = () => {
+        const curNodes = nodesRef.current;
+        const curEdges = edgesRef.current;
+        if (!curNodes.length) return;
+        pushSnapshot();
+        const next = layoutGraph(curNodes, curEdges);
+        setNodes(next);
+        setTimeout(() => fitView(next), 0);
+        flash(t('layoutDone'));
+      };
+
+      const exportToClipboard = () => {
+        const cleanNodes = nodesRef.current.map((n) => {
+          const { runs: _runs, ...rest } = n;
+          return rest;
+        });
+        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current }, null, 2);
+        const fallbackCopy = () => {
+          try {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand && document.execCommand('copy');
+            document.body.removeChild(ta);
+            flash(ok ? t('exportOk') : t('exportFail'));
+          } catch (_e) {
+            flash(t('exportFail'));
+          }
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => flash(t('exportOk')), fallbackCopy);
+            return;
+          }
+        } catch (_e) { /* fall through */ }
+        fallbackCopy();
+      };
+
+      const openAddMenuAtCursor = () => {
+        const wrap = canvasWrapRef.current;
+        const content = contentRef.current;
+        if (!wrap || !content) return;
+        const wrapRect = wrap.getBoundingClientRect();
+        const contentRect = content.getBoundingClientRect();
+        const k = viewRef.current.k || 1;
+        const mouse = lastMouseRef.current;
+        const insideWrap = mouse
+          && mouse.clientX >= wrapRect.left && mouse.clientX <= wrapRect.right
+          && mouse.clientY >= wrapRect.top && mouse.clientY <= wrapRect.bottom;
+        const cx = insideWrap ? mouse.clientX : (wrapRect.left + wrapRect.width / 2);
+        const cy = insideWrap ? mouse.clientY : (wrapRect.top + wrapRect.height / 2);
+        const sx = Math.max(8, Math.min(wrapRect.width - 176, cx - wrapRect.left));
+        const sy = Math.max(8, Math.min(wrapRect.height - 96, cy - wrapRect.top));
+        const wx = (cx - contentRect.left) / k - WORLD_PAD;
+        const wy = (cy - contentRect.top) / k - WORLD_PAD;
+        setAddMenu({ sx, sy, wx, wy });
+        setMenuOpen(false);
+        setPresetOpen(null);
+        setOpenModelFor(null);
+      };
+
       /** Dragging any selected node moves the whole selection together. */
       const onNodeDown = (e, id) => {
+        if (e.button !== 0 || spaceDown.current) return;
         if (!contentRef.current) return;
         const node = nodes.find((n) => n.id === id);
         if (!node) return;
@@ -1252,6 +1604,7 @@ window.__ModuleLoader__.load({
         nodeDrag.current = { origins, startX: p.x, startY: p.y, moved: false };
         setDragging(true);
         setOpenModelFor(null);
+        setAddMenu(null);
         e.preventDefault();
         e.stopPropagation();
       };
@@ -1275,11 +1628,15 @@ window.__ModuleLoader__.load({
         e.stopPropagation();
         const toId = pending.toId;
         if (toId && toId !== id) {
-          pushSnapshot();
-          setEdges((es) => {
-            if (es.some((x) => x.from === id && x.to === toId && x.type === type)) return es;
-            return [...es, { id: 'e' + Date.now().toString(36), from: id, to: toId, type }];
-          });
+          if (wouldCycle(nodesRef.current, edgesRef.current, id, toId)) {
+            flash(t('cycleBlocked'));
+          } else {
+            pushSnapshot();
+            setEdges((es) => {
+              if (es.some((x) => x.from === id && x.to === toId && x.type === type)) return es;
+              return [...es, { id: 'e' + Date.now().toString(36), from: id, to: toId, type }];
+            });
+          }
         }
         setPending(null);
         setDragging(false);
@@ -1317,15 +1674,146 @@ window.__ModuleLoader__.load({
         e.stopPropagation();
         if (pending.fromId !== id) {
           const fromId = pending.fromId;
-          pushSnapshot();
-          setEdges((es) => {
-            if (es.some((x) => x.from === fromId && x.to === id && x.type === type)) return es;
-            return [...es, { id: 'e' + Date.now().toString(36), from: fromId, to: id, type }];
-          });
+          if (wouldCycle(nodesRef.current, edgesRef.current, fromId, id)) {
+            flash(t('cycleBlocked'));
+          } else {
+            pushSnapshot();
+            setEdges((es) => {
+              if (es.some((x) => x.from === fromId && x.to === id && x.type === type)) return es;
+              return [...es, { id: 'e' + Date.now().toString(36), from: fromId, to: id, type }];
+            });
+          }
         }
         setPending(null);
         setDragging(false);
       };
+
+      // Middle-mouse drag (or Space + left-drag) pans the canvas from anywhere inside it.
+      useEffect(() => {
+        const inside = (ev) => {
+          const el = canvasElRef.current;
+          return Boolean(el) && ev.target instanceof Node && el.contains(ev.target);
+        };
+        const isEditable = (target) => {
+          if (!target || !(target instanceof HTMLElement)) return false;
+          const tag = target.tagName;
+          return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+        };
+        const onDown = (ev) => {
+          if (!inside(ev)) return;
+          const wantPan = ev.button === 1 || (ev.button === 0 && spaceDown.current);
+          if (!wantPan) return;
+          ev.preventDefault();
+          ev.stopPropagation();
+          try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
+          const cur = viewRef.current;
+          panDrag.current = { startX: ev.clientX, startY: ev.clientY, originX: cur.x, originY: cur.y };
+          setPanning(true);
+          setDragging(true);
+        };
+        const onAuxClick = (ev) => {
+          if (ev.button === 1 && inside(ev)) ev.preventDefault();
+        };
+        const onKeyDown = (ev) => {
+          if (ev.code === 'Space' && !isEditable(ev.target)) {
+            spaceDown.current = true;
+            setSpaceHeld(true);
+          }
+        };
+        const onKeyUp = (ev) => {
+          if (ev.code === 'Space') {
+            spaceDown.current = false;
+            setSpaceHeld(false);
+          }
+        };
+        const onBlur = () => {
+          spaceDown.current = false;
+          setSpaceHeld(false);
+        };
+        window.addEventListener('mousedown', onDown, true);
+        window.addEventListener('auxclick', onAuxClick, true);
+        window.addEventListener('keydown', onKeyDown);
+        window.addEventListener('keyup', onKeyUp);
+        window.addEventListener('blur', onBlur);
+        return () => {
+          window.removeEventListener('mousedown', onDown, true);
+          window.removeEventListener('auxclick', onAuxClick, true);
+          window.removeEventListener('keydown', onKeyDown);
+          window.removeEventListener('keyup', onKeyUp);
+          window.removeEventListener('blur', onBlur);
+        };
+      }, []);
+
+      // Canvas keyboard shortcuts (Blender-style Shift+A, Ctrl+Z, Ctrl+D, Delete, Esc).
+      const keyActionsRef = useRef(null);
+      keyActionsRef.current = {
+        undo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode,
+        addMenu, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen,
+        setAddMenu, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen,
+      };
+      useEffect(() => {
+        const isEditable = (target) => {
+          if (!target || !(target instanceof HTMLElement)) return false;
+          const tag = target.tagName;
+          return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+        };
+        const onKey = (ev) => {
+          const act = keyActionsRef.current;
+          if (!act) return;
+          if (ev.key === 'Escape') {
+            if (act.addMenu || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen) {
+              ev.preventDefault();
+              act.setAddMenu(null);
+              act.setRoleEditFor(null);
+              act.setOpenModelFor(null);
+              act.setMenuOpen(false);
+              act.setPresetOpen(null);
+              act.setHelpOpen(false);
+            }
+            return;
+          }
+          if (isEditable(ev.target)) return;
+          if (act.addMenu) {
+            if (ev.key === '1' || ev.key === 'Enter') {
+              ev.preventDefault();
+              act.addNode('agent', { x: act.addMenu.wx, y: act.addMenu.wy });
+              return;
+            }
+            if (ev.key === '2') {
+              ev.preventDefault();
+              act.addNode('lead', { x: act.addMenu.wx, y: act.addMenu.wy });
+              return;
+            }
+          }
+          const root = rootElRef.current;
+          const activeInRoot = Boolean(root && document.activeElement && root.contains(document.activeElement));
+          if (!pointerInsideRoot.current && !activeInRoot) return;
+          const mod = ev.ctrlKey || ev.metaKey;
+          if (!mod && !ev.altKey && ev.shiftKey && (ev.key === 'A' || ev.key === 'a')) {
+            ev.preventDefault();
+            act.openAddMenuAtCursor();
+            return;
+          }
+          if (mod && !ev.shiftKey && !ev.altKey && (ev.key === 'z' || ev.key === 'Z')) {
+            ev.preventDefault();
+            act.undo();
+            return;
+          }
+          if (mod && !ev.shiftKey && !ev.altKey && (ev.key === 'd' || ev.key === 'D')) {
+            ev.preventDefault();
+            act.duplicateSelected();
+            return;
+          }
+          if (!mod && !ev.altKey && (ev.key === 'Delete' || ev.key === 'Backspace')) {
+            if (selectedIdsRef.current.length) {
+              ev.preventDefault();
+              act.deleteSelected();
+            }
+          }
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+      }, []);
 
       // Suppress the host context menu over the canvas while cutting is on.
       useEffect(() => {
@@ -1340,7 +1828,9 @@ window.__ModuleLoader__.load({
           ev.preventDefault();
           const start = pointTo(ev);
           cutRef.current = start;
+          cutHits.current = new Set();
           setCutPath([start]);
+          setCutVictims([]);
           setDragging(true);
         };
         window.addEventListener('contextmenu', onCtx, true);
@@ -1379,6 +1869,8 @@ window.__ModuleLoader__.load({
         if (e.button !== 0) return;
         if (roleEditFor) setRoleEditFor(null);
         if (menuOpen) setMenuOpen(false);
+        if (addMenu) setAddMenu(null);
+        if (presetOpen) setPresetOpen(null);
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
         const p = pointTo(e);
@@ -1389,6 +1881,13 @@ window.__ModuleLoader__.load({
       };
 
       const onCanvasMove = (e) => {
+        if (panDrag.current) {
+          const pan = panDrag.current;
+          const dx = e.clientX - pan.startX;
+          const dy = e.clientY - pan.startY;
+          setView((cur) => ({ ...cur, x: pan.originX + dx, y: pan.originY + dy }));
+          return;
+        }
         if (nodeDrag.current) {
           const p = pointTo(e);
           const drag = nodeDrag.current;
@@ -1454,6 +1953,10 @@ window.__ModuleLoader__.load({
           setSelectedIds(hitTest(marquee));
           setMarquee(null);
         }
+        if (panDrag.current) {
+          panDrag.current = null;
+          setPanning(false);
+        }
         nodeDrag.current = null;
         setPending(null);
         setDragging(false);
@@ -1475,68 +1978,69 @@ window.__ModuleLoader__.load({
       };
 
       /** Load a canvas document produced by the model. */
-      const applyCanvasDoc = (doc) => {
+      const applyCanvasDoc = (doc, remoteAt) => {
         if (!doc || !Array.isArray(doc.nodes)) return false;
         const merge = doc.mode === 'merge';
         if (!merge && !doc.nodes.length) return false;
         pushSnapshot();
-        applyStamp.current = typeof doc.at === 'number' ? doc.at : null;
+        const stamp = typeof remoteAt === 'number' ? remoteAt : (typeof doc.at === 'number' ? doc.at : null);
+        applyStamp.current = stamp;
+        const removedNodes = new Set(doc.removeNodes || []);
+        const rawIncomingEdges = Array.isArray(doc.edges) ? doc.edges : [];
         setNodes((existing) => {
           const byId = new Map(existing.map((n) => [n.id, n]));
+          const placed = new Map(existing.map((n) => [n.id, { x: n.x, y: n.y }]));
+          let addedCount = 0;
           const incoming = doc.nodes.map((n, i) => {
             const prev = byId.get(n.id) || {};
-            return {
-              ...prev,
-              ...n,
-              // keep the position the user placed, unless the document sets one
-              x: typeof n.x === 'number' ? n.x : (typeof prev.x === 'number' ? prev.x : 60 + i * 300),
-              y: typeof n.y === 'number' ? n.y : (typeof prev.y === 'number' ? prev.y : 80),
-            };
+            let x = typeof n.x === 'number' ? n.x : prev.x;
+            let y = typeof n.y === 'number' ? n.y : prev.y;
+            if (typeof x !== 'number' || typeof y !== 'number') {
+              // Place a newly patched node to the right of its first upstream node when possible.
+              const parentEdge = rawIncomingEdges.find((e) => e && e.to === n.id && placed.has(e.from));
+              if (parentEdge) {
+                const parentPos = placed.get(parentEdge.from);
+                const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.x - (parentPos.x + 300)) < 40).length;
+                x = parentPos.x + 300;
+                y = parentPos.y + siblingCount * 240;
+              } else {
+                const leadPos = placed.get('lead') || { x: 40, y: 80 };
+                x = merge ? leadPos.x + 300 : 60 + i * 300;
+                y = merge ? leadPos.y + (addedCount + 1) * 240 : 80;
+              }
+              addedCount += 1;
+            }
+            placed.set(n.id, { x, y });
+            return { ...prev, ...n, x, y };
           });
           if (!merge) return incoming;
           const touched = new Set(incoming.map((n) => n.id));
-          const removed = new Set(doc.removeNodes || []);
-          const kept = existing.filter((n) => !touched.has(n.id) && !removed.has(n.id));
+          const kept = existing.filter((n) => !touched.has(n.id) && !removedNodes.has(n.id));
           return kept.concat(incoming);
         });
         setEdges((existing) => {
-          const incoming = (Array.isArray(doc.edges) ? doc.edges : []).map((e, i) => ({
+          const incoming = rawIncomingEdges.map((e, i) => ({
             id: e.id || 'e' + i + '-' + Math.random().toString(36).slice(2, 6),
             from: e.from,
             to: e.to,
             type: e.type || 'prompt',
           }));
           if (!merge) return incoming;
-          const drop = new Set((doc.removeEdges || []).map((e) => String(e.from) + '>' + String(e.to)));
-          const kept = existing.filter((e) => !drop.has(e.from + '>' + e.to));
+          const rawDrops = Array.isArray(doc.removeEdges) ? doc.removeEdges : [];
+          const matchesDrop = (e) => rawDrops.some((r) => r
+            && String(r.from) === e.from
+            && String(r.to) === e.to
+            && (!r.type || r.type === e.type));
+          const kept = existing.filter((e) => !matchesDrop(e) && !removedNodes.has(e.from) && !removedNodes.has(e.to));
           const seen = new Set(kept.map((e) => e.from + '>' + e.to + '|' + e.type));
-          const added = incoming.filter((e) => !seen.has(e.from + '>' + e.to + '|' + e.type));
+          const added = incoming.filter((e) => !removedNodes.has(e.from) && !removedNodes.has(e.to) && !seen.has(e.from + '>' + e.to + '|' + e.type));
           return kept.concat(added);
         });
         setSelectedIds([]);
         setStatusById({});
-        // Remember what the remote document claimed, so re-reading it on the next
-        // start does not resurrect nodes the user has deleted since.
-        if (typeof doc.at === 'number') {
-          try {
-            const key = storageKey(sessionId);
-            const raw = window.localStorage.getItem(key);
-            const local = raw ? JSON.parse(raw) : {};
-            if (!local || typeof local.at !== 'number' || local.at <= doc.at) {
-              window.localStorage.setItem(key, JSON.stringify({
-                nodes: doc.nodes,
-                edges: Array.isArray(doc.edges) ? doc.edges : [],
-                enabled: Boolean(local && local.enabled),
-                at: doc.at,
-              }));
-            }
-          } catch (_e) { /* storage unavailable */ }
-        }
-        const lead = doc.nodes.find((n) => n.id === 'lead') || doc.nodes[0];
-        if (lead) {
-          const lx = typeof lead.x === 'number' ? lead.x : 60;
-          const ly = typeof lead.y === 'number' ? lead.y : 80;
-          setTimeout(() => centerOn(lx + NODE_W / 2, ly + NODE_H / 2), 0);
+        if (!merge) {
+          setRunsById({});
+          setTimeout(() => fitView(nodesRef.current), 0);
         }
         return true;
       };
@@ -1592,9 +2096,10 @@ window.__ModuleLoader__.load({
                 return;
               }
             } catch (_e) { /* ignore */ }
-            const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
+            const valid = canvas && Array.isArray(canvas.nodes)
+              && (canvas.mode === 'merge' || canvas.nodes.length > 0)
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas)) {
+            if (valid && applyCanvasDoc(canvas, doc.at)) {
               flash(t('generated'));
               setSyncNote(t('syncApplied'));
               setTimeout(() => setSyncNote(''), 4000);
@@ -1636,8 +2141,25 @@ window.__ModuleLoader__.load({
         setEdges(preset.edges);
         setSelectedIds([]);
         setStatusById({});
+        setRunsById({});
         setPresetOpen(null);
+        setTimeout(() => fitView(preset.nodes), 0);
         flash(t('loadedPreset') + ': ' + name);
+      };
+
+      const applyTemplate = (tpl) => {
+        if (!tpl || !Array.isArray(tpl.nodes) || !Array.isArray(tpl.edges)) return;
+        const clonedNodes = tpl.nodes.map((n) => ({ ...n }));
+        const clonedEdges = tpl.edges.map((e) => ({ ...e }));
+        pushSnapshot();
+        setNodes(clonedNodes);
+        setEdges(clonedEdges);
+        setSelectedIds([]);
+        setStatusById({});
+        setRunsById({});
+        setPresetOpen(null);
+        setTimeout(() => fitView(clonedNodes), 0);
+        flash(t('loadedPreset') + ': ' + tpl.name);
       };
 
       const deletePreset = (name) => {
@@ -1656,10 +2178,17 @@ window.__ModuleLoader__.load({
       };
 
       const modelValue = (node) => (node.provider ? node.provider + '::' : '') + (node.model || '');
-      const modelEntry = (node) => models.find((m) => m.provider + '::' + m.model === modelValue(node));
+      const modelEntry = (node) => {
+        if (!node || !node.model) return undefined;
+        if (node.provider) {
+          const exact = models.find((m) => m.provider === node.provider && m.model === node.model);
+          if (exact) return exact;
+        }
+        return models.find((m) => m.model === node.model);
+      };
       const modelLabel = (node) => {
         const hit = modelEntry(node);
-        return hit ? hit.modelName : (node.model || t('pickModel'));
+        return hit ? (hit.modelName || hit.model) : (node.model || t('pickModel'));
       };
       // Reasoning ids are adapter-declared per model; '' means "use the model default".
       const reasoningOptions = (node) => {
@@ -1688,7 +2217,10 @@ window.__ModuleLoader__.load({
         const key = 'f:' + node.id;
         const isOpen = openModelFor === key;
         const current = node.fallbackModel;
-        const shown = models.find((m) => m.model === current);
+        const shown = current
+          ? ((node.fallbackProvider && models.find((m) => m.provider === node.fallbackProvider && m.model === current))
+            || models.find((m) => m.model === current))
+          : undefined;
         const rows = [];
         rows.push(h('div', {
           key: 'none',
@@ -1701,7 +2233,7 @@ window.__ModuleLoader__.load({
             rows.push(h('div', { key: 'h-' + m.provider, style: S.menuHead }, m.providerName || m.provider));
             lastProvider = m.provider;
           }
-          const picked = m.model === current;
+          const picked = shown ? (m.provider === shown.provider && m.model === shown.model) : (m.model === current);
           rows.push(h('div', {
             key: m.provider + '::' + m.model,
             style: picked ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
@@ -1774,6 +2306,7 @@ window.__ModuleLoader__.load({
           });
         }
         const current = modelValue(node);
+        const matched = modelEntry(node);
         const isOpen = openModelFor === node.id;
         const rows = [];
         let lastProvider = null;
@@ -1782,7 +2315,9 @@ window.__ModuleLoader__.load({
             rows.push(h('div', { key: 'h-' + m.provider, style: S.menuHead }, m.providerName || m.provider));
             lastProvider = m.provider;
           }
-          const selectedRow = m.provider + '::' + m.model === current;
+          const selectedRow = matched
+            ? (m.provider === matched.provider && m.model === matched.model)
+            : (m.provider + '::' + m.model === current);
           rows.push(h('div', {
             key: m.provider + '::' + m.model,
             style: selectedRow ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
@@ -1863,13 +2398,18 @@ window.__ModuleLoader__.load({
           .map((n) => n.id);
       };
 
-      return h('div', { style: S.root },
+      return h('div', {
+        ref: rootElRef,
+        style: S.root,
+        onMouseEnter: () => { pointerInsideRoot.current = true; },
+        onMouseLeave: () => { pointerInsideRoot.current = false; },
+      },
         h('div', { style: S.toolbar },
           h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
           h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
           h('button', {
-            style: S.btn,
+            style: enabled && dirty ? S.btnDirty : S.btn,
             onClick: () => pushPlan(enabled),
             type: 'button',
             title: t('tipSync'),
@@ -1877,13 +2417,13 @@ window.__ModuleLoader__.load({
 
           h('button', {
             style: S.btn,
-            onClick: focusLead,
+            onClick: () => fitView(),
             type: 'button',
             title: t('tipLocate'),
           }, t('locate')),
           h('button', {
             style: S.btn,
-            onClick: () => focusLead(),
+            onClick: () => focusLead(1),
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
@@ -1913,8 +2453,14 @@ window.__ModuleLoader__.load({
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
                 onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-                onClick: () => { setMenuOpen(false); setHelpOpen(true); },
-              }, t('help')),
+                onClick: () => { setMenuOpen(false); exportToClipboard(); },
+              }, t('exportBtn')),
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { setMenuOpen(false); autoLayout(); },
+              }, t('autoLayoutBtn')),
               h('div', {
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
@@ -1925,6 +2471,12 @@ window.__ModuleLoader__.load({
                   saveCutMode(next);
                 },
               }, t('cutLinks') + t('sep') + (cutMode ? t('on') : t('off'))),
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { setMenuOpen(false); setHelpOpen(true); },
+              }, t('help')),
             ),
           ),
           h('div', { style: S.presetBar },
@@ -1953,7 +2505,17 @@ window.__ModuleLoader__.load({
               status || (enabled ? (dirty ? t('unsaved') : t('synced')) : '')),
             presetOpen === 'menu' && (() => {
               const names = Object.keys(presets);
+              const templates = builtinTemplates(lang);
               return h('div', { style: S.presetMenu, onMouseDown: (e) => e.stopPropagation() },
+                h('div', { style: S.menuHead }, t('builtinTemplates')),
+                templates.map((tpl) => h('div', {
+                  key: tpl.id,
+                  style: S.presetRow,
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => applyTemplate(tpl),
+                }, h('span', { style: S.presetRowText, title: tpl.name }, tpl.name))),
+                h('div', { style: S.menuHead }, t('myPresets')),
                 names.length
                   ? names.map((name) => h('div', {
                       key: name,
@@ -1978,14 +2540,41 @@ window.__ModuleLoader__.load({
             h('div', { style: S.helpBody }, t('helpBody').split('\n').map((line, i) => h('div', { key: i, style: S.helpLine }, line))),
           ),
         ),
-        h('button', {
-          style: enabled ? S.floatOn : S.floatOff,
-          type: 'button',
-          onMouseDown: (e) => e.stopPropagation(),
-          onClick: toggleEnabled,
-          title: t('tipToggle'),
-        }, enabled ? t('enabled') : t('disabled')),
-        h('div', { ref: canvasElRef, style: S.canvas, onMouseDown: onCanvasDown },
+        h('div', {
+          ref: canvasWrapRef,
+          style: S.canvasWrap,
+          onMouseMove: (e) => { lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY }; },
+        },
+          h('button', {
+            style: enabled ? S.floatOn : S.floatOff,
+            type: 'button',
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: toggleEnabled,
+            title: t('tipToggle'),
+          }, enabled ? t('enabled') : t('disabled')),
+          addMenu && h('div', {
+            style: { ...S.addMenu, left: addMenu.sx + 'px', top: addMenu.sy + 'px' },
+            onMouseDown: (e) => e.stopPropagation(),
+          },
+            h('div', { style: S.addMenuHead }, t('addMenuTitle')),
+            h('div', {
+              style: S.addMenuRow,
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+              onClick: () => addNode('agent', { x: addMenu.wx, y: addMenu.wy }),
+            }, h('span', null, t('addAgent')), h('span', { style: S.addMenuHint }, '1')),
+            h('div', {
+              style: S.addMenuRow,
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+              onClick: () => addNode('lead', { x: addMenu.wx, y: addMenu.wy }),
+            }, h('span', null, t('addLead')), h('span', { style: S.addMenuHint }, '2')),
+          ),
+          h('div', {
+            ref: canvasElRef,
+            style: { ...S.canvas, cursor: panning ? 'grabbing' : (spaceHeld ? 'grab' : undefined) },
+            onMouseDown: onCanvasDown,
+          },
           h('div', {
             ref: contentRef,
             style: {
@@ -2049,20 +2638,37 @@ window.__ModuleLoader__.load({
                     background: isLeadKind ? '#2f81f7' : '#3fb950',
                   },
                 }),
-                enabled && h('div', {
-                  style: {
-                    ...S.statusChip,
-                    color: isLeadKind ? C.dim
-                      : statusById[node.id] === 'running' ? '#2f81f7'
-                        : statusById[node.id] === 'failed' ? '#e5534b'
-                          : statusById[node.id] === 'done' ? '#3fb950' : C.dim,
-                  },
-                  title: isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus')),
-                }, isOrphan ? t('stOrphan')
-                  : isLeadKind ? t('stLead')
-                    : statusById[node.id] === 'running' ? t('stRunning')
-                      : statusById[node.id] === 'failed' ? t('stFailed')
-                        : statusById[node.id] === 'done' ? t('stDone') : t('stPending')),
+                (() => {
+                  const nodeStatus = statusById[node.id];
+                  const latestRun = !isLeadKind ? runsById[node.id] : null;
+                  const statusColor = isLeadKind ? C.dim
+                    : nodeStatus === 'running' ? '#2f81f7'
+                      : nodeStatus === 'failed' ? '#e5534b'
+                        : nodeStatus === 'done' ? '#3fb950' : C.dim;
+                  const statusLabel = isOrphan ? t('stOrphan')
+                    : isLeadKind ? t('stLead')
+                      : nodeStatus === 'running' ? t('stRunning')
+                        : nodeStatus === 'failed' ? t('stFailed')
+                          : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                  if (latestRun) {
+                    const label = enabled ? statusLabel : t('openChat');
+                    const color = enabled ? statusColor : C.accent;
+                    return h('button', {
+                      type: 'button',
+                      style: { ...S.statusBtn, color, borderColor: color === C.dim ? C.border : color },
+                      title: t('tipOpenRun'),
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                      onMouseLeave: (e) => { e.currentTarget.style.background = C.elevated; },
+                      onClick: (e) => { e.stopPropagation(); openNodeSession(node); },
+                    }, label, ' ↗');
+                  }
+                  if (!enabled) return null;
+                  return h('div', {
+                    style: { ...S.statusChip, color: statusColor },
+                    title: isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus')),
+                  }, statusLabel);
+                })(),
                 isEntry
                   ? h('div', { style: S.titleReadonly }, t('leadThis'))
                   : h('input', {
@@ -2154,6 +2760,7 @@ window.__ModuleLoader__.load({
             }),
           ),
         ),
+        ),
       );
     }
 
@@ -2186,7 +2793,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });

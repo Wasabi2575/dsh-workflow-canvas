@@ -15,17 +15,23 @@ itself.
 - **Sockets are typed** (`prompt` / `structured` / `session`); a link can only
   join the same type, in either direction. Drag a connected input away to detach.
 - Nodes the entry cannot reach are drawn dashed and skipped at run time.
-- Wheel zooms around the cursor; the percentage button resets and recentres on the
-  Lead; `◎ 定位` recentres without changing zoom.
+- Wheel zooms around the cursor; middle-drag (or Space + drag) pans; the
+  percentage button resets to 100% on the Lead; `⊡ 全览` fits all nodes into
+  the visible viewport.
 - Marquee selection: press on empty canvas and drag; dragging any selected node
   moves the whole selection.
 - Right-drag across links cuts them on release; the swept path and the links about
   to be cut are drawn in red. Toggle it under `⋯`.
 
+- Shortcuts: `Shift+A` opens an Add Node menu at the cursor, `Ctrl+D` duplicates
+  selected nodes, `Delete` removes selected nodes, `Ctrl+Z` undoes, `Esc` closes
+  popups. `⋯` provides `⊞ Auto layout` and `⇧ Copy JSON`.
+
 ## Editing from chat
 
 | Tool | Effect |
 |---|---|
+| `canvas_inspect` | reads the current session canvas (nodes, models, roles, links) |
 | `canvas_generate` | replaces the canvas with a node/edge sketch |
 | `canvas_patch` | edits in place: update nodes by id, add/remove nodes and links |
 

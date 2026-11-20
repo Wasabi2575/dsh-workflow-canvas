@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, normalizeCanvas, executePlan } from '../index.js';
+import { orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, normalizeCanvas, applyPatch, inspectPlan, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -116,4 +116,216 @@ test('a generate-shaped plan runs without task loss or a redundant Lead pause', 
   assert.ok(prompts[0].includes('【总任务】总任务原始数据'), 'task reaches the first node');
   assert.ok(!prompts[0].includes('（没有结果）'));
   assert.ok(!prompts[0].includes('来自【Lead'));
+});
+
+test('applyPatch allows wiring new branches from entry Lead and reports removed edges', () => {
+  const base = {
+    task: '总任务',
+    nodes: [
+      { id: 'n1', kind: 'agent', label: '调研A', role: 'A' },
+      { id: 'n2', kind: 'agent', label: '汇总', role: '汇总' },
+    ],
+    edges: [
+      { from: 'lead', to: 'n1', type: 'prompt' },
+      { from: 'n1', to: 'n2', type: 'prompt' },
+    ],
+  };
+
+  const patched = applyPatch(base, {
+    nodes: [{ id: 'n3', kind: 'agent', label: '调研B', role: 'B' }],
+    edges: [
+      { from: 'lead', to: 'n3', type: 'prompt' },
+      { from: 'n3', to: 'n2', type: 'structured' },
+      { from: 'n3', to: 'lead', type: 'prompt' }, // invalid: cannot point into entry lead
+    ],
+    removeEdges: [{ from: 'n1', to: 'n2' }],
+  });
+
+  assert.equal(patched.plan.nodes.length, 3);
+  assert.ok(patched.plan.edges.some((e) => e.from === 'lead' && e.to === 'n3'), 'edge from lead is preserved');
+  assert.ok(!patched.plan.edges.some((e) => e.from === 'n1' && e.to === 'n2'), 'removed edge is dropped');
+  assert.ok(!patched.plan.edges.some((e) => e.to === 'lead'), 'edge into lead is rejected');
+  assert.deepEqual(patched.removeEdges, [{ from: 'n1', to: 'n2' }]);
+  assert.equal(patched.plan.nodes.find((n) => n.id === 'n3').structured, true, 'structured edge marks source node');
+});
+
+test('structured edge automatically requests outputSchema even when node.structured is omitted', async () => {
+  const specs = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        specs.push(spec);
+        return Promise.resolve({
+          childId: 'kid-' + spec.label,
+          result: Promise.resolve(spec.outputSchema
+            ? { structured: { summary: 'ok' }, output: [], stopReason: 'completed' }
+            : { output: [{ type: 'text', text: 'done' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const canvas = normalizeCanvas({
+    task: '总任务',
+    nodes: [
+      { id: 'a', label: '结构化产出', role: '产 JSON' },
+      { id: 'b', label: '消费者', role: '读 JSON' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'b', type: 'structured' },
+    ],
+  });
+  // Simulate a plan where structured flag was not pre-set on node 'a'
+  const plan = {
+    task: '总任务',
+    nodes: canvas.nodes.map((n) => ({ ...n, structured: false })),
+    edges: canvas.edges,
+  };
+
+  const exec = { agent: { id: 's2' }, signal: new AbortController().signal };
+  const result = await executePlan(scope, plan, {}, exec);
+
+  assert.equal(result.status, 'done');
+  assert.ok(specs[0].outputSchema, 'upstream of structured edge gets outputSchema');
+  assert.equal(specs[1].outputSchema, undefined, 'downstream without structured out-edge has no outputSchema');
+  assert.ok(specs[1].prompt[0].text.includes('{"summary":"ok"}'), 'structured JSON reaches downstream');
+});
+
+test('executePlan supports task override and reset across paused Lead runs', async () => {
+  const runs = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        runs.push(spec.prompt[0].text);
+        return Promise.resolve({
+          childId: 'kid-' + runs.length,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out-' + runs.length }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '',
+    nodes: [
+      { id: 'n1', kind: 'agent', label: '调研', role: '做调研' },
+      { id: 'l1', kind: 'lead', label: '拍板', role: '决定路线' },
+      { id: 'n2', kind: 'agent', label: '落地', role: '执行' },
+    ],
+    edges: [
+      { from: 'lead', to: 'n1', type: 'prompt' },
+      { from: 'n1', to: 'l1', type: 'prompt' },
+      { from: 'l1', to: 'n2', type: 'prompt' },
+    ],
+  };
+  const exec = { agent: { id: 's-reset' }, signal: new AbortController().signal };
+
+  // Empty task without override is rejected
+  const missing = await executePlan(scope, plan, {}, exec);
+  assert.ok(missing.error);
+
+  // Override task pauses at Lead
+  const paused = await executePlan(scope, plan, { task: '新任务 A' }, exec);
+  assert.equal(paused.status, 'need-lead');
+  assert.ok(runs[0].includes('【总任务】新任务 A'));
+
+  // Reset discards paused progress and re-runs n1 from scratch
+  const restarted = await executePlan(scope, plan, { task: '新任务 A', reset: true }, exec);
+  assert.equal(restarted.status, 'need-lead');
+  assert.equal(runs.length, 2, 'n1 ran a second time after reset');
+
+  // Resume with leadResult finishes n2
+  const done = await executePlan(scope, plan, { task: '新任务 A', leadResult: '选方案 A' }, exec);
+  assert.equal(done.status, 'done');
+  assert.equal(runs.length, 3);
+  assert.ok(runs[2].includes('选方案 A'));
+});
+
+test('session-ref continues upstream session on repeated runs', async () => {
+  const calls = [];
+  let seq = 0;
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const assigned = spec.childId || ('child-' + (++seq));
+        calls.push({ label: spec.label, childId: spec.childId || null, assigned });
+        return Promise.resolve({
+          childId: assigned,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '持续会话任务',
+    nodes: [
+      { id: 'u1', kind: 'agent', label: '上游', role: '准备', keepSession: true },
+      { id: 'd1', kind: 'agent', label: '下游', role: '继续' },
+    ],
+    edges: [
+      { from: 'lead', to: 'u1', type: 'prompt' },
+      { from: 'u1', to: 'd1', type: 'session-ref' },
+    ],
+  };
+  const exec = { agent: { id: 's-sess' }, signal: new AbortController().signal };
+
+  const run1 = await executePlan(scope, plan, {}, exec);
+  assert.equal(run1.status, 'done');
+  assert.equal(calls[1].childId, calls[0].assigned, 'first run continues upstream session');
+
+  const run2 = await executePlan(scope, plan, {}, exec);
+  assert.equal(run2.status, 'done');
+  assert.equal(calls[2].childId, calls[0].assigned, 'upstream resumes via keepSession');
+  assert.equal(calls[3].childId, calls[0].assigned, 'second run still continues upstream session');
+});
+
+test('failed subagent is reported in failed list and warns downstream prompt', async () => {
+  const prompts = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        prompts.push(spec.prompt[0].text);
+        if (spec.label.endsWith('#bad')) {
+          return Promise.reject(new Error('model not found'));
+        }
+        return Promise.resolve({
+          childId: 'kid-ok',
+          result: Promise.resolve({ output: [{ type: 'text', text: 'handled' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '容错测试',
+    nodes: [
+      { id: 'bad', kind: 'agent', label: '出错节点', role: '会失败' },
+      { id: 'next', kind: 'agent', label: '下游节点', role: '收尾' },
+    ],
+    edges: [
+      { from: 'lead', to: 'bad', type: 'prompt' },
+      { from: 'bad', to: 'next', type: 'prompt' },
+    ],
+  };
+  const exec = { agent: { id: 's-fail' }, signal: new AbortController().signal };
+  const result = await executePlan(scope, plan, {}, exec);
+
+  assert.equal(result.status, 'done');
+  assert.equal(result.failed.length, 1);
+  assert.equal(result.failed[0].id, 'bad');
+  assert.equal(result.failed[0].reason, 'activation-failed');
+  assert.ok(prompts[1].includes('该上游节点执行失败'), 'downstream prompt warns about upstream failure');
+});
+
+test('inspectPlan returns empty snapshot for unknown session', () => {
+  const snap = inspectPlan('non-existent-session');
+  assert.equal(snap.hasCanvas, false);
+  assert.equal(snap.enabled, false);
+  assert.deepEqual(snap.nodes, []);
 });
