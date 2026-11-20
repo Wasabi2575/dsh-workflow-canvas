@@ -28,7 +28,12 @@ Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or r
 
 Fill `role` for every node. A node with an empty role still runs, but it invents its own task and may wander.
 
-`standard` is the usual tool set (filesystem, shells, jobs, subagents, workflow, web, office). `minimal` is deliberately small: filesystem read/write/edit off, privileged shells, no subagent or workflow tools.
+Capability (`preset`) is a two-state switch:
+
+| value | means | useful for |
+|---|---|---|
+| `standard` | all tools — filesystem read/write/edit, shells, jobs, schedule, skills, subagents, workflow, web, present, office | steps that actually do work |
+| `minimal` | read-only thinking — file read/write/edit disabled, no subagents, no workflow, no web; only image reading, persistent shells and compaction | steps that should only reason: review, classify, estimate, summarise |
 
 ## Links
 
