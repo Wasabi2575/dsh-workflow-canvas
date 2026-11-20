@@ -68,6 +68,11 @@ function saveStore() {
   }
 }
 
+/** The entry Lead is a task container, never a runnable node. */
+function withoutEntry(nodes) {
+  return (nodes || []).filter((n) => n.id !== 'lead');
+}
+
 function parsePayload(rawInput) {
   const text = String(rawInput || '').trim();
   if (!text) return { enabled: false };
@@ -410,10 +415,14 @@ async function runPlan(scope, args, exec) {
   if (!payload) return { error: '当前会话还没有画布数据。请在右侧 Workflow 画布点「启用」。' };
   if (!payload.enabled) return { error: '画布当前是「已禁用」状态。请在画布上点「启用」后再运行。' };
   if (payload.error) return { error: String(payload.error) };
-  const plan = payload.plan;
+  let plan = payload.plan;
   if (!plan || !Array.isArray(plan.nodes) || !plan.nodes.length) {
     return { error: '画布没有可执行的节点。' };
   }
+
+  // Backstop: no matter how a plan arrived (sync, generate, patch, a stale store),
+  // the entry Lead is never executed.
+  plan = { ...plan, nodes: withoutEntry(plan.nodes) };
 
   const order = orderNodes(plan);
   if (!order) return { error: '存在环，无法执行有向无环图。' };
@@ -674,7 +683,7 @@ export function apply(ctx) {
                   enabled: previous ? previous.enabled : true,
                   plan: {
                     task: String((args && args.task) || ''),
-                    nodes: canvas.nodes,
+                    nodes: withoutEntry(canvas.nodes),
                     edges: canvas.edges,
                   },
                 });
@@ -728,7 +737,7 @@ export function apply(ctx) {
               const payload = sid ? canvasBySession.get(sid) : undefined;
               if (!payload || !payload.plan) return { error: '当前会话还没有画布数据，先用「启用」同步一次。' };
               const plan = payload.plan;
-              const nodes = Array.isArray(plan.nodes) ? plan.nodes.slice() : [];
+              const nodes = withoutEntry(plan.nodes).slice();
               const byId = new Map(nodes.map((n) => [n.id, n]));
               const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'structured', 'fallbackModel', 'fallbackProvider'];
               const touched = [];
