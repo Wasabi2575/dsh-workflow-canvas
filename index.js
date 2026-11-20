@@ -134,7 +134,7 @@ function briefFor(plan, node, results, failedMap) {
   head.push('【职责】' + (node.role || node.label));
   if (ups.length) head.push('【上游】' + ups.map((u) => u.from.label).join('、') + ' 已交付结果给你（见下文）。');
   head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
-  head.push('【要求】只完成你这一步；输出要能被下游直接使用，不要重复上游已完成的工作。');
+  head.push('【要求】只完成你这一步；最终回复只输出简洁、可直接被下游或 Lead 消费的交付报告（结论、改动清单、关键接口/路径），不要包含思考独白、过程叙述或对其他并行节点的评价。若因环境或权限受限未能生成预期产物，必须在开头显式标注「【未完全交付】」并列出缺失项，不得把仅写脚本汇报为已完成。');
   let text = head.join('\n') + '\n';
   for (const u of ups) {
     const value = results[u.from.id];
@@ -174,6 +174,13 @@ function textOf(result) {
 function failed(result) {
   const reason = result && result.stopReason;
   return reason !== undefined && reason !== 'completed';
+}
+
+function isEmptyOutput(result) {
+  if (result && result.structured !== undefined) return false;
+  const blocks = (result && result.output) || [];
+  const text = blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
+  return text.trim().length === 0;
 }
 
 async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap) {
@@ -225,7 +232,12 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
         const message = String((error && error.message) || error);
         return { ok: false, text: '运行失败：' + message, reason: 'run-failed' };
       }
-      return { ok: !failed(result), text: textOf(result), reason: result && result.stopReason };
+      return {
+        ok: !failed(result),
+        text: textOf(result),
+        reason: result && result.stopReason,
+        empty: isEmptyOutput(result),
+      };
     } finally {
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
@@ -280,22 +292,22 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
 
   if (continueFrom) {
     const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap);
-    if (continued.ok) return { ok: true, text: continued.text + '\n（已在上游会话中继续）' };
+    if (continued.ok) return { ok: true, empty: Boolean(continued.empty), text: continued.text + '\n（已在上游会话中继续）' };
   }
 
   const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap);
-  if (first.ok) return { ok: true, text: first.text };
+  if (first.ok) return { ok: true, empty: Boolean(first.empty), text: first.text };
   if (!node.fallbackModel && !node.fallbackProvider) {
     const reason = first.reason || 'unknown';
-    return { ok: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）' };
+    return { ok: false, empty: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）' };
   }
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
   }, undefined, sid, failedMap);
-  if (retry.ok) return { ok: true, text: retry.text + '\n（已用备用模型重试成功）' };
+  if (retry.ok) return { ok: true, empty: Boolean(retry.empty), text: retry.text + '\n（已用备用模型重试成功）' };
   const reason = retry.reason || 'unknown';
-  return { ok: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
+  return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
 }
 
 /** Ids reachable from the entry Lead; every other node is skipped at run time. */
@@ -312,8 +324,39 @@ function reachableFrom(plan) {
 }
 
 /**
- * Turn a model-authored sketch into a canvas document: assign ids, add the entry
- * Lead, and lay the graph out in columns by depth so it is readable on arrival.
+ * Detect structural warnings on a canvas plan:
+ *   1. Unreachable nodes (will be skipped at run time).
+ *   2. Reachable non-Lead agent nodes with zero outgoing edges when the graph
+ *      already has a downstream Lead node (likely forgot to wire into the Lead).
+ */
+function analyzeCanvasWarnings(nodes, edges) {
+  const list = withoutEntry(nodes);
+  const linkList = Array.isArray(edges) ? edges : [];
+  const warnings = [];
+  if (!list.length) return warnings;
+
+  const reachable = reachableFrom({ edges: linkList });
+  const orphans = list.filter((n) => !reachable.has(n.id));
+  if (orphans.length) {
+    warnings.push('以下节点未从入口 Lead 连通，运行时会被跳过：'
+      + orphans.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+  }
+
+  const hasDownstreamLead = list.some((n) => n.kind === 'lead' && reachable.has(n.id));
+  if (hasDownstreamLead) {
+    const hasOut = new Set(linkList.map((e) => e.from));
+    const deadEnds = list.filter((n) => n.kind !== 'lead' && reachable.has(n.id) && !hasOut.has(n.id));
+    if (deadEnds.length) {
+      warnings.push('以下子代理节点没有出边，产出未显式连入下游或终审 Lead：'
+        + deadEnds.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Turn a model-authored sketch into a canvas document: assign ids, ensure one
+ * connected entry Lead, and lay the graph out in columns by depth.
  */
 function normalizeCanvas(args) {
   const rawNodes = Array.isArray(args && args.nodes) ? args.nodes : [];
@@ -322,19 +365,28 @@ function normalizeCanvas(args) {
 
   const nodes = [];
   const idByRef = new Map();
+  const usedIds = new Set();
   let counter = 0;
+  let hasExplicitLead = false;
   for (const raw of rawNodes) {
     if (!raw || typeof raw !== 'object') continue;
     counter += 1;
     const kind = raw.kind === 'lead' ? 'lead' : 'agent';
-    const wantsEntry = raw.entry === true && kind === 'lead';
-    const id = wantsEntry
+    const wantsEntry = !hasExplicitLead && (raw.id === 'lead' || (raw.entry === true && kind === 'lead'));
+    let id = wantsEntry
       ? 'lead'
       : (typeof raw.id === 'string' && raw.id && raw.id !== 'lead' ? raw.id : 'n' + counter);
+    if (usedIds.has(id)) {
+      let suffix = 2;
+      while (usedIds.has(id + '_' + suffix)) suffix += 1;
+      id = id + '_' + suffix;
+    }
+    usedIds.add(id);
+    if (id === 'lead') hasExplicitLead = true;
     const label = String(raw.label || (kind === 'lead' ? 'Lead 步骤 ' + counter : 'Node ' + counter));
     nodes.push({
       id,
-      kind,
+      kind: id === 'lead' ? 'lead' : kind,
       label,
       role: String(raw.role || ''),
       task: String(raw.task || ''),
@@ -349,22 +401,11 @@ function normalizeCanvas(args) {
       x: 0,
       y: 0,
     });
-    if (raw.ref) idByRef.set(String(raw.ref), id);
+    if (raw.ref && !idByRef.has(String(raw.ref))) idByRef.set(String(raw.ref), id);
+    if (raw.id && !idByRef.has(String(raw.id))) idByRef.set(String(raw.id), id);
     idByRef.set(id, id);
   }
   if (!nodes.length) return { error: '节点都无效' };
-
-  const entry = nodes.find((n) => n.id === 'lead');
-  if (!entry) {
-    nodes.unshift({
-      id: 'lead', kind: 'lead', label: 'Lead（本对话）', role: '',
-      task: String(args.task || ''), provider: '', model: '', reasoning: '',
-      preset: '', structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
-      x: 0, y: 0,
-    });
-  } else if (!entry.task) {
-    entry.task = String(args.task || '');
-  }
 
   const ids = new Set(nodes.map((n) => n.id));
   const edges = [];
@@ -372,10 +413,53 @@ function normalizeCanvas(args) {
     if (!raw || typeof raw !== 'object') continue;
     const from = idByRef.get(String(raw.from)) || String(raw.from);
     const to = idByRef.get(String(raw.to)) || String(raw.to);
-    if (!ids.has(from) || !ids.has(to) || from === to) continue;
+    if ((from !== 'lead' && !ids.has(from)) || !ids.has(to) || from === to || to === 'lead') continue;
     const type = ['prompt', 'structured', 'session-ref'].includes(raw.type) ? raw.type : 'prompt';
     edges.push({ id: 'e' + edges.length, from, to, type });
   }
+
+  let entry = nodes.find((n) => n.id === 'lead');
+  if (!entry) {
+    // If the caller hand-authored a root Lead node (no incoming edges, has outgoing edges)
+    // and didn't wire from id='lead', promote it to entry Lead instead of duplicating it.
+    const hasLeadEdge = edges.some((e) => e.from === 'lead');
+    const inSet = new Set(edges.map((e) => e.to));
+    const outSet = new Set(edges.map((e) => e.from));
+    const rootLead = !hasLeadEdge
+      ? nodes.find((n) => n.kind === 'lead' && !inSet.has(n.id) && outSet.has(n.id))
+      : null;
+    if (rootLead) {
+      const oldId = rootLead.id;
+      rootLead.id = 'lead';
+      rootLead.task = rootLead.task || String(args.task || '') || rootLead.role;
+      rootLead.role = '';
+      for (const e of edges) {
+        if (e.from === oldId) e.from = 'lead';
+      }
+      entry = rootLead;
+    } else {
+      entry = {
+        id: 'lead', kind: 'lead', label: 'Lead（本对话）', role: '',
+        task: String(args.task || ''), provider: '', model: '', reasoning: '',
+        preset: '', structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
+        x: 0, y: 0,
+      };
+      nodes.unshift(entry);
+    }
+  } else if (!entry.task) {
+    entry.task = String(args.task || '') || entry.role;
+  }
+
+  // If entry Lead still has no outgoing edges, auto-wire it to all root nodes so
+  // a freshly generated canvas is never dead/unreachable on arrival.
+  if (!edges.some((e) => e.from === 'lead')) {
+    const hasIn = new Set(edges.map((e) => e.to));
+    const roots = nodes.filter((n) => n.id !== 'lead' && !hasIn.has(n.id));
+    for (const root of roots) {
+      edges.push({ id: 'e' + edges.length, from: 'lead', to: root.id, type: 'prompt' });
+    }
+  }
+
   const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
   for (const node of nodes) {
     if (structuredSources.has(node.id)) node.structured = true;
@@ -398,10 +482,15 @@ function normalizeCanvas(args) {
     const row = perColumn.get(level) || 0;
     perColumn.set(level, row + 1);
     node.x = 60 + level * 300;
-    node.y = 80 + row * 230;
+    node.y = 80 + row * 260;
   }
 
-  return { nodes, edges, task: String(args.task || '') };
+  return {
+    nodes,
+    edges,
+    task: String(entry.task || args.task || ''),
+    warnings: analyzeCanvasWarnings(nodes, edges),
+  };
 }
 
 /**
@@ -464,11 +553,14 @@ function applyPatch(plan, args) {
   }
   const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
   for (const node of keptNodes) {
-    if (structuredSources.has(node.id)) node.structured = true;
+    node.structured = structuredSources.has(node.id);
   }
+  const taskPatched = typeof (args && args.task) === 'string';
+  const nextTask = taskPatched ? args.task : String(plan.task || '');
   return {
-    plan: { ...plan, nodes: keptNodes, edges },
+    plan: { ...plan, task: nextTask, nodes: keptNodes, edges },
     touched,
+    taskPatched,
     removed: Array.from(removed),
     removeEdges: rawRemoveEdges
       .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
@@ -514,38 +606,42 @@ function inspectPlan(sid) {
       task: '',
       nodes: [],
       edges: [],
+      warnings: [],
       paused: false,
     };
   }
   const plan = payload.plan || {};
   const nodes = withoutEntry(plan.nodes).map((n) => ({
-    id: n.id,
+    id: String(n.id || ''),
     kind: n.kind === 'lead' ? 'lead' : 'agent',
-    label: n.label || n.id,
-    role: n.role || '',
-    provider: n.provider || '',
-    model: n.model || '',
-    reasoning: n.reasoning || '',
+    label: String(n.label || n.id || ''),
+    role: String(n.role || ''),
+    provider: String(n.provider || ''),
+    model: String(n.model || ''),
+    reasoning: String(n.reasoning || ''),
     preset: n.preset === 'minimal' ? 'minimal' : 'standard',
     keepSession: Boolean(n.keepSession),
     structured: Boolean(n.structured),
-    fallbackModel: n.fallbackModel || '',
-    fallbackProvider: n.fallbackProvider || '',
+    fallbackModel: String(n.fallbackModel || ''),
+    fallbackProvider: String(n.fallbackProvider || ''),
   }));
   const edges = Array.isArray(plan.edges) ? plan.edges.map((e) => ({
-    from: e.from,
-    to: e.to,
-    type: e.type || 'prompt',
+    from: String(e.from || ''),
+    to: String(e.to || ''),
+    type: String(e.type || 'prompt'),
   })) : [];
-  return {
+  const out = {
     hasCanvas: true,
     enabled: Boolean(payload.enabled),
     task: String(plan.task || ''),
     nodes,
     edges,
+    warnings: analyzeCanvasWarnings(nodes, edges),
     paused: Boolean(sid && runBySession.has(sid)),
-    error: payload.error ? String(payload.error) : undefined,
   };
+  // Never attach `error: undefined`: DSH's lossless JSON validator rejects keys with undefined values.
+  if (payload.error) out.error = String(payload.error);
+  return out;
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -590,9 +686,10 @@ async function executePlan(scope, plan, args, exec) {
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   if (!state || state.sig !== sig) {
-    state = { sig, done: new Set(), results: {}, labels: {}, failed: {} };
+    state = { sig, done: new Set(), results: {}, labels: {}, failed: {}, emptyOutputs: {} };
     runBySession.set(sid, state);
   }
+  if (!state.emptyOutputs) state.emptyOutputs = {};
 
   const byId = new Map(runnable.map((n) => [n.id, n]));
   const labelOf = new Map(order.map((n) => [n.id, n.label || n.id]));
@@ -603,8 +700,33 @@ async function executePlan(scope, plan, args, exec) {
 
   let leadResult = typeof opts.leadResult === 'string' ? opts.leadResult : undefined;
   const MAX_PARALLEL = 4;
+  // Event-driven concurrency pool: as soon as any node finishes, newly unblocked
+  // downstream agents start immediately instead of waiting for slower siblings.
+  const inFlight = new Map();
+
+  const isAborted = () => Boolean(exec && exec.signal && exec.signal.aborted);
+
+  const launchReadyAgents = () => {
+    if (isAborted() || inFlight.size >= MAX_PARALLEL) return;
+    const candidates = runnable.filter((n) => n.kind !== 'lead'
+      && !state.done.has(n.id)
+      && !inFlight.has(n.id)
+      && depsOf(n).every((id) => state.done.has(id)));
+    for (const node of candidates) {
+      if (isAborted() || inFlight.size >= MAX_PARALLEL) break;
+      const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed)
+        .then(
+          (outcome) => ({ node, outcome }),
+          (err) => ({ node, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
+        );
+      inFlight.set(node.id, promise);
+    }
+  };
 
   for (;;) {
+    if (isAborted()) {
+      return { error: '工作流执行已取消。' };
+    }
     const remaining = runnable.filter((n) => !state.done.has(n.id));
     if (!remaining.length) {
       runBySession.delete(sid);
@@ -614,30 +736,32 @@ async function executePlan(scope, plan, args, exec) {
         results: state.results,
         labels: state.labels,
         failed: Object.values(state.failed),
+        emptyOutputs: Object.values(state.emptyOutputs),
         skipped,
       };
     }
 
-    const ready = remaining.filter((n) => depsOf(n).every((id) => state.done.has(id)));
-    if (!ready.length) return { error: '有节点的依赖无法满足（存在环或悬空依赖）。' };
+    launchReadyAgents();
 
-    const agentReady = ready.filter((n) => n.kind !== 'lead');
-    if (agentReady.length) {
-      const batch = agentReady.slice(0, MAX_PARALLEL);
-      const outcomes = await Promise.all(
-        batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed)),
-      );
-      batch.forEach((node, i) => {
-        const outcome = outcomes[i];
-        state.results[node.id] = outcome.text;
-        state.labels[node.id] = node.label;
-        if (!outcome.ok) {
-          state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
-        }
-        state.done.add(node.id);
-      });
+    if (inFlight.size > 0) {
+      const { node, outcome } = await Promise.race(inFlight.values());
+      inFlight.delete(node.id);
+      if (isAborted()) {
+        return { error: '工作流执行已取消。' };
+      }
+      state.results[node.id] = outcome.text;
+      state.labels[node.id] = node.label;
+      if (!outcome.ok) {
+        state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
+      } else if (outcome.empty) {
+        state.emptyOutputs[node.id] = { id: node.id, label: node.label };
+      }
+      state.done.add(node.id);
       continue;
     }
+
+    const ready = remaining.filter((n) => depsOf(n).every((id) => state.done.has(id)));
+    if (!ready.length) return { error: '有节点的依赖无法满足（存在环或悬空依赖）。' };
 
     const leadNode = ready.find((n) => n.kind === 'lead');
     if (!leadNode) return { error: '没有可执行的节点。' };
@@ -652,6 +776,7 @@ async function executePlan(scope, plan, args, exec) {
         results: state.results,
         labels: state.labels,
         failed: Object.values(state.failed),
+        emptyOutputs: Object.values(state.emptyOutputs),
         sessions: depsOf(leadNode)
           .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
           .map((id) => ({
@@ -756,19 +881,20 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_generate',
-          description: 'Build a workflow canvas for this session from a node/edge sketch. It is written to the workspace and the open canvas picks it up. Load the `workflow-canvas` skill first for node fields and link semantics.',
+          description: 'Build a workflow canvas for this session from a node/edge sketch. Entry Lead (id="lead") is created automatically with the top-level task — do NOT add a separate entry Lead node; wire first-wave nodes from "lead". Only downstream non-entry Lead nodes pause for need-lead. Load the `workflow-canvas` skill first for node fields and link semantics.',
           parameters: {
             type: 'object',
             properties: {
-              task: { type: 'string', description: 'Overall task written into the entry Lead node.' },
+              task: { type: 'string', description: 'Overall task written into the auto-created entry Lead node (id="lead").' },
               nodes: {
                 type: 'array',
-                description: 'Nodes in any order. Give each an id or ref so edges can point at it.',
+                description: 'Nodes in any order (do not include an entry Lead — wire from "lead" instead). Give each an id or ref so edges can point at it.',
                 items: {
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
                     ref: { type: 'string', description: 'Temporary handle for edges; the tool assigns the real id.' },
+                    entry: { type: 'boolean', description: 'Optional: set true only if customizing the entry Lead node itself.' },
                     kind: { type: 'string', enum: ['agent', 'lead'] },
                     label: { type: 'string' },
                     role: { type: 'string' },
@@ -805,6 +931,7 @@ export function apply(ctx) {
               properties: {
                 canvas: { type: 'object' },
                 delivered: { type: 'boolean' },
+                warnings: { type: 'array', items: { type: 'string' } },
                 error: { type: 'string' },
               },
             },
@@ -814,12 +941,16 @@ export function apply(ctx) {
               const canvas = v.canvas || {};
               const nodes = Array.isArray(canvas.nodes) ? canvas.nodes : [];
               const edges = Array.isArray(canvas.edges) ? canvas.edges : [];
-              const lines = nodes.map((n) => '- ' + (n.kind === 'lead' ? '〔Lead〕' : '') + n.label
+              const lines = nodes.map((n) => '- [' + n.id + '] ' + (n.kind === 'lead' ? '〔Lead〕' : '') + n.label
                 + (n.role ? '：' + n.role : ''));
+              const warnBlock = Array.isArray(v.warnings) && v.warnings.length
+                ? '\n\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
+                : '';
               return [{
                 type: 'text',
                 text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线\n'
                   + lines.join('\n')
+                  + warnBlock
                   + (v.delivered
                     ? '\n\n画布已经自动同步到右侧画布，直接看即可（若没出现，点画布上的「⊡ 全览」）。'
                     : '\n\n**下一步**：点画布右上角「⋯ → ⇩ 导入」，它会把这段画布数据装进当前画布。')
@@ -832,16 +963,18 @@ export function apply(ctx) {
             try {
               const result = normalizeCanvas(args || {});
               if (result.error) return { error: result.error };
-              const canvas = { nodes: result.nodes, edges: result.edges };
+              const warnings = Array.isArray(result.warnings) ? result.warnings : [];
               const agent = exec && exec.agent;
               const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+              const previous = sid ? canvasBySession.get(sid) : undefined;
+              const nextEnabled = previous ? Boolean(previous.enabled) : true;
+              const canvas = { nodes: result.nodes, edges: result.edges, enabled: nextEnabled };
               const delivered = sid ? publishCanvas(scope, sid, canvas) : false;
               if (sid) {
-                const previous = canvasBySession.get(sid);
                 canvasBySession.set(sid, {
-                  enabled: previous ? previous.enabled : true,
+                  enabled: nextEnabled,
                   plan: {
-                    task: String((args && args.task) || ''),
+                    task: String(result.task || (args && args.task) || ''),
                     nodes: withoutEntry(canvas.nodes),
                     edges: canvas.edges,
                   },
@@ -849,7 +982,7 @@ export function apply(ctx) {
                 runBySession.delete(sid);
                 saveStore();
               }
-              return { canvas, delivered };
+              return { canvas, delivered, warnings };
             } catch (error) {
               return { error: String((error && error.message) || error) };
             }
@@ -868,6 +1001,7 @@ export function apply(ctx) {
           parameters: {
             type: 'object',
             properties: {
+              task: { type: 'string', description: 'Optional: update the overall task in the entry Lead node.' },
               nodes: { type: 'array', description: 'Nodes to update or add. Existing ids are merged field by field.', items: { type: 'object' } },
               removeNodes: { type: 'array', description: 'Node ids to delete.', items: { type: 'string' } },
               edges: { type: 'array', description: 'Links to add.', items: { type: 'object' } },
@@ -880,13 +1014,17 @@ export function apply(ctx) {
               properties: {
                 delivered: { type: 'boolean' },
                 summary: { type: 'string' },
+                warnings: { type: 'array', items: { type: 'string' } },
                 error: { type: 'string' },
               },
             },
             render: (_a, value) => {
               const v = value || {};
               if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
-              return [{ type: 'text', text: v.summary + (v.delivered ? '（画布已就地更新）' : '（画布不可达，未应用）') }];
+              const warnBlock = Array.isArray(v.warnings) && v.warnings.length
+                ? '\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
+                : '';
+              return [{ type: 'text', text: v.summary + (v.delivered ? '（画布已就地更新）' : '（画布不可达，未应用）') + warnBlock }];
             },
           },
           execute: (args, exec) => {
@@ -900,15 +1038,20 @@ export function apply(ctx) {
               canvasBySession.set(sid, { enabled: payload.enabled, plan: nextPlan });
               runBySession.delete(sid);
               saveStore();
-              const delivered = publishCanvas(scope, sid, {
+              const patchDoc = {
                 mode: 'merge',
                 nodes: nextPlan.nodes,
                 edges: nextPlan.edges,
                 removeNodes: patched.removed,
                 removeEdges: patched.removeEdges,
-              });
-              const summary = '已更新 ' + patched.touched.length + ' 个节点、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条';
-              return { delivered, summary };
+              };
+              if (patched.taskPatched) patchDoc.task = nextPlan.task;
+              const delivered = publishCanvas(scope, sid, patchDoc);
+              const warnings = analyzeCanvasWarnings(nextPlan.nodes, nextPlan.edges);
+              const summary = '已更新 ' + patched.touched.length + ' 个节点'
+                + (patched.taskPatched ? '、已更新总任务' : '')
+                + '、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条';
+              return { delivered, summary, warnings };
             } catch (error) {
               return { error: String((error && error.message) || error) };
             }
@@ -938,6 +1081,7 @@ export function apply(ctx) {
                 task: { type: 'string' },
                 nodes: { type: 'array' },
                 edges: { type: 'array' },
+                warnings: { type: 'array', items: { type: 'string' } },
                 paused: { type: 'boolean' },
                 error: { type: 'string' },
               },
@@ -952,6 +1096,9 @@ export function apply(ctx) {
                 '总任务：' + (v.task || '（未填写，运行时可通过 task 参数指定）'),
               ];
               if (v.error) head.push('校验错误：' + v.error);
+              const warnBlock = Array.isArray(v.warnings) && v.warnings.length
+                ? '\n\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
+                : '';
               const nodeLines = (v.nodes || []).map((n) => {
                 const flags = [];
                 if (n.kind === 'lead') flags.push('Lead');
@@ -968,6 +1115,7 @@ export function apply(ctx) {
               return [{
                 type: 'text',
                 text: head.join('\n')
+                  + warnBlock
                   + '\n\n节点（' + nodeLines.length + '）：\n' + (nodeLines.join('\n') || '（无）')
                   + '\n\n连线（' + edgeLines.length + '）：\n' + (edgeLines.join('\n') || '（无）'),
               }];
@@ -1007,6 +1155,7 @@ export function apply(ctx) {
                 results: { type: 'object' },
                 labels: { type: 'object' },
                 failed: { type: 'array' },
+                emptyOutputs: { type: 'array' },
                 sessions: { type: 'array' },
                 skipped: { type: 'array' },
                 hint: { type: 'string' },
@@ -1026,6 +1175,10 @@ export function apply(ctx) {
               const failedList = Array.isArray(v.failed) && v.failed.length
                 ? '\n\n⚠ 失败节点：' + v.failed.map((f) => (f.label || f.id) + '（' + (f.reason || 'unknown') + '）').join('、')
                 : '';
+              const emptyList = Array.isArray(v.emptyOutputs) && v.emptyOutputs.length
+                ? '\n\n⚠ 未返回交付文本的节点（请核查其实际产物，切勿直接当作已完成）：'
+                  + v.emptyOutputs.map((e) => e.label || e.id).join('、')
+                : '';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
                 const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
@@ -1038,6 +1191,7 @@ export function apply(ctx) {
                   text: '需要你（Lead）完成「' + n.label + '」：' + n.role
                     + '\n需要用到：' + ((n.needs && n.needs.length) ? n.needs.join('、') : '（无上游）')
                     + failedList
+                    + emptyList
                     + '\n\n已完成节点的结果：\n' + body
                     + handover
                     + '\n\n' + (v.hint || ''),
@@ -1047,7 +1201,7 @@ export function apply(ctx) {
                 const skip = Array.isArray(v.skipped) && v.skipped.length
                   ? '\n\n已跳过（未连线）：' + v.skipped.join('、')
                   : '';
-                return [{ type: 'text', text: '画布执行完成。' + failedList + '\n\n' + body + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + failedList + emptyList + '\n\n' + body + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },
@@ -1069,6 +1223,7 @@ export {
   downstreamLabels,
   briefFor,
   withoutEntry,
+  analyzeCanvasWarnings,
   normalizeCanvas,
   applyPatch,
   inspectPlan,
