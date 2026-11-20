@@ -1188,7 +1188,7 @@ window.__ModuleLoader__.load({
 
       // The Host writes generated canvases where the workspace Remote can read
       // them; polling that file is the only Host -> canvas channel available.
-      const AUTO_CANVAS = false;
+      const AUTO_CANVAS = true;
       useEffect(() => {
         if (!AUTO_CANVAS) return undefined;
         let remote;
@@ -1208,7 +1208,10 @@ window.__ModuleLoader__.load({
             if (!text || text === lastText) return;
             lastText = text;
             const doc = JSON.parse(text);
-            if (applyCanvasDoc(doc && doc.canvas)) flash('已从对话生成画布');
+            const canvas = doc && doc.canvas;
+            const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
+              && canvas.nodes.every((n) => n && typeof n.id === 'string');
+            if (valid && applyCanvasDoc(canvas)) flash('已从对话生成画布');
           } catch (_e) { /* file absent or not readable yet */ }
         };
         const timer = setInterval(tick, 1500);
