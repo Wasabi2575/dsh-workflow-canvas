@@ -130,13 +130,30 @@ function briefFor(plan, node, results) {
   let text = head.join('\n') + '\n';
   for (const u of ups) {
     const value = results[u.from.label];
-    text += '\n## 来自【' + u.from.label + '】(' + (u.edge.type || 'prompt') + ')\n'
-      + (typeof value === 'string' ? value : '（没有结果）') + '\n';
+    const type = u.edge.type || 'prompt';
+    const body = typeof value === 'string' ? value : '（没有结果）';
+    if (type === 'structured') {
+      text += '\n## 来自【' + u.from.label + '】的数据（JSON，可直接解析）\n```json\n'
+        + body + '\n```\n';
+    } else if (type === 'session-ref') {
+      text += '\n## 来自【' + u.from.label + '】的会话引用（当前按文本传递）\n'
+        + body + '\n';
+    } else {
+      text += '\n## 来自【' + u.from.label + '】\n' + body + '\n';
+    }
   }
   return text;
 }
 
 function textOf(result) {
+  // A structured node's canonical value is its parsed object, not the prose.
+  if (result && result.structured !== undefined) {
+    try {
+      return JSON.stringify(result.structured);
+    } catch (_e) {
+      /* fall through to prose */
+    }
+  }
   const blocks = (result && result.output) || [];
   const text = blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
   return text || '[' + ((result && result.stopReason) || 'no-output') + ']';
@@ -147,7 +164,7 @@ function failed(result) {
   return reason !== undefined && reason !== 'completed';
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route) {
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild) {
   const spec = {
     provider: 'spawn',
     label: node.label + '#' + node.id,
@@ -164,18 +181,40 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route) {
   if (node.reasoning) agentOptions.reasoningEffort = node.reasoning;
   if (Object.keys(agentOptions).length) spec.agentOptions = agentOptions;
   if (node.preset) spec.agentPreset = node.preset;
+  if (node.structured) {
+    spec.outputSchema = {
+      type: 'object',
+      additionalProperties: true,
+      description: 'Return the result as a JSON object so downstream steps can consume it.',
+    };
+  }
 
   const run = async (childId) => {
     const withChild = childId ? { ...spec, childId } : spec;
     const activation = await scope.subagents.startActivation(withChild);
     try {
-      if (activation && activation.childId) childByNode.set(node.id, activation.childId);
+      if (activation && activation.childId) {
+        childByNode.set(node.id, activation.childId);
+        liveChild.set(node.id, activation.childId);
+      }
       const result = await activation.result;
       return { ok: !failed(result), text: textOf(result), reason: result && result.stopReason };
     } finally {
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
   };
+
+  // A `session` edge means "continue the upstream node's conversation": run this
+  // step inside that child session instead of starting a fresh one.
+  if (forcedChild && forcedChild !== liveChild.get(node.id)) {
+    try {
+      const continued = await run(forcedChild);
+      if (continued.ok) liveChild.set(node.id, forcedChild);
+      return continued;
+    } catch (_e) {
+      /* fall through to a fresh session */
+    }
+  }
 
   // Reusing a previous child only works while that identity is still ours; a
   // stale one is dropped and the node starts fresh instead of failing.
@@ -198,6 +237,16 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route) {
 }
 
 async function spawnNode(scope, plan, node, results, parent, signal) {
+  const continueFrom = (plan.edges || [])
+    .filter((e) => e.to === node.id && e.type === 'session-ref')
+    .map((e) => liveChild.get(e.from))
+    .find((id) => typeof id === 'string');
+
+  if (continueFrom) {
+    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom);
+    if (continued.ok) return continued.text + '\n（已在上游会话中继续）';
+  }
+
   const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined);
   if (first.ok) return first.text;
   if (!node.fallbackModel && !node.fallbackProvider) {
