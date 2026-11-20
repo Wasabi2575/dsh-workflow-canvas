@@ -113,6 +113,8 @@ window.__ModuleLoader__.load({
           '8. 没连线的节点显示为虚线，运行时会被跳过。',
           '9. 右键按住划过一条连线可以切断；可在「⋯」里关掉这个手势。',
           '10. 预设名 + ☆ 保存 可以把整张图存下来，新对话里从「☰ 预设」载入。',
+          '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
+          '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
         ].join('\n'),
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
@@ -186,6 +188,8 @@ window.__ModuleLoader__.load({
           '8. Unlinked nodes are dashed and skipped at run time.',
           '9. Hold the right button and sweep across a link to cut it; turn the gesture off under ⋯.',
           '10. Name a preset and press ☆ Save to keep the canvas for other sessions.',
+          '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
+          '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
         ].join('\n'),
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
@@ -1469,19 +1473,42 @@ window.__ModuleLoader__.load({
 
       /** Load a canvas document produced by the model. */
       const applyCanvasDoc = (doc) => {
-        if (!doc || !Array.isArray(doc.nodes) || !doc.nodes.length) return false;
+        if (!doc || !Array.isArray(doc.nodes)) return false;
+        const merge = doc.mode === 'merge';
+        if (!merge && !doc.nodes.length) return false;
         pushSnapshot();
-        setNodes(doc.nodes.map((n, i) => ({
-          ...n,
-          x: typeof n.x === 'number' ? n.x : 60 + i * 300,
-          y: typeof n.y === 'number' ? n.y : 80,
-        })));
-        setEdges(Array.isArray(doc.edges) ? doc.edges.map((e, i) => ({
-          id: e.id || 'e' + i,
-          from: e.from,
-          to: e.to,
-          type: e.type || 'prompt',
-        })) : []);
+        setNodes((existing) => {
+          const byId = new Map(existing.map((n) => [n.id, n]));
+          const incoming = doc.nodes.map((n, i) => {
+            const prev = byId.get(n.id) || {};
+            return {
+              ...prev,
+              ...n,
+              // keep the position the user placed, unless the document sets one
+              x: typeof n.x === 'number' ? n.x : (typeof prev.x === 'number' ? prev.x : 60 + i * 300),
+              y: typeof n.y === 'number' ? n.y : (typeof prev.y === 'number' ? prev.y : 80),
+            };
+          });
+          if (!merge) return incoming;
+          const touched = new Set(incoming.map((n) => n.id));
+          const removed = new Set(doc.removeNodes || []);
+          const kept = existing.filter((n) => !touched.has(n.id) && !removed.has(n.id));
+          return kept.concat(incoming);
+        });
+        setEdges((existing) => {
+          const incoming = (Array.isArray(doc.edges) ? doc.edges : []).map((e, i) => ({
+            id: e.id || 'e' + i + '-' + Math.random().toString(36).slice(2, 6),
+            from: e.from,
+            to: e.to,
+            type: e.type || 'prompt',
+          }));
+          if (!merge) return incoming;
+false
+false
+0
+false
+          return kept.concat(added);
+        });
         setSelectedIds([]);
         setStatusById({});
         const lead = doc.nodes.find((n) => n.id === 'lead') || doc.nodes[0];

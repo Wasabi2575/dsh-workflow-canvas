@@ -436,6 +436,7 @@ async function runPlan(scope, args, exec) {
   }
 
   const byId = new Map(runnable.map((n) => [n.id, n]));
+  const labelOf = new Map(order.map((n) => [n.id, n.label || n.id]));
   const depsOf = (node) => (plan.edges || [])
     .filter((e) => e.to === node.id && e.from !== 'lead')
     .map((e) => e.from)
@@ -481,6 +482,12 @@ async function runPlan(scope, args, exec) {
         },
         results: state.results,
         labels: state.labels,
+        sessions: depsOf(leadNode)
+          .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
+          .map((id) => ({
+            label: labelOf.get(id) || id,
+            childId: liveChild.get(String(sid || '') + '::' + id) || null,
+          })),
         hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续。',
       };
     }
@@ -615,6 +622,100 @@ export function apply(ctx) {
     ctx.inject(['tools', 'subagents'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
+          name: 'canvas_patch',
+          description: 'Edit the current canvas in place: update the given nodes by id, add new ones, remove some, and add or remove links. Everything else, including node positions, is left alone.',
+          parameters: {
+            type: 'object',
+            properties: {
+              nodes: { type: 'array', description: 'Nodes to update or add. Existing ids are merged field by field.', items: { type: 'object' } },
+              removeNodes: { type: 'array', description: 'Node ids to delete.', items: { type: 'string' } },
+              edges: { type: 'array', description: 'Links to add.', items: { type: 'object' } },
+              removeEdges: { type: 'array', description: 'Links to delete, matched by from/to.', items: { type: 'object' } },
+            },
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                delivered: { type: 'boolean' },
+                summary: { type: 'string' },
+                error: { type: 'string' },
+              },
+            },
+            render: (_a, value) => {
+              const v = value || {};
+              if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
+              return [{ type: 'text', text: v.summary + (v.delivered ? '（画布已就地更新）' : '（画布不可达，未应用）') }];
+            },
+          },
+          execute: (args, exec) => {
+            try {
+              const agent = exec && exec.agent;
+              const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+              const payload = sid ? canvasBySession.get(sid) : undefined;
+              if (!payload || !payload.plan) return { error: '当前会话还没有画布数据，先用「启用」同步一次。' };
+              const plan = payload.plan;
+              const nodes = Array.isArray(plan.nodes) ? plan.nodes.slice() : [];
+              const byId = new Map(nodes.map((n) => [n.id, n]));
+              const touched = [];
+              for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
+                if (!patch || typeof patch.id !== 'string') continue;
+                const existing = byId.get(patch.id);
+                if (existing) { Object.assign(existing, patch); touched.push(patch.id); }
+                else {
+                  const created = {
+                    id: patch.id,
+                    kind: patch.kind === 'lead' ? 'lead' : 'agent',
+                    label: patch.label || patch.id,
+                    role: patch.role || '',
+                    provider: patch.provider || '',
+                    model: patch.model || '',
+                    reasoning: patch.reasoning || '',
+                    preset: patch.preset === 'minimal' ? 'minimal' : 'standard',
+                    structured: Boolean(patch.structured),
+                    keepSession: Boolean(patch.keepSession),
+                    fallbackModel: patch.fallbackModel || '',
+                    fallbackProvider: patch.fallbackProvider || '',
+                  };
+                  nodes.push(created);
+                  byId.set(created.id, created);
+                  touched.push(created.id);
+                }
+              }
+              const removed = new Set(Array.isArray(args && args.removeNodes) ? args.removeNodes : []);
+              const keptNodes = nodes.filter((n) => !removed.has(n.id));
+              let edges = Array.isArray(plan.edges) ? plan.edges.slice() : [];
+              const dropEdges = new Set((Array.isArray(args && args.removeEdges) ? args.removeEdges : [])
+                .map((e) => String(e.from) + '>' + String(e.to)));
+              edges = edges.filter((e) => !dropEdges.has(e.from + '>' + e.to)
+                && !removed.has(e.from) && !removed.has(e.to));
+              for (const edge of Array.isArray(args && args.edges) ? args.edges : []) {
+                if (!edge || !byId.has(edge.from) || !byId.has(edge.to)) continue;
+                if (removed.has(edge.from) || removed.has(edge.to)) continue;
+                const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
+                if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type)) continue;
+                edges.push({ from: edge.from, to: edge.to, type });
+              }
+              const nextPlan = { ...plan, nodes: keptNodes, edges };
+              canvasBySession.set(sid, { enabled: payload.enabled, plan: nextPlan });
+              runBySession.delete(sid);
+              saveStore();
+              const delivered = publishCanvas(scope, sid, { mode: 'merge', nodes: keptNodes, edges, removeNodes: Array.from(removed) });
+              const summary = '已更新 ' + touched.length + ' 个节点、删除 ' + removed.size + ' 个、连线 ' + edges.length + ' 条';
+              return { delivered, summary };
+            } catch (error) {
+              return { error: String((error && error.message) || error) };
+            }
+          },
+        }), 'workflow-canvas: patch tool');
+      } catch (_e) {
+        /* tool registry unavailable */
+      }
+    });
+
+    ctx.inject(['tools', 'subagents'], (scope) => {
+      try {
+        scope.effect(() => scope.tools.register({
           name: 'canvas_workflow',
           description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult.',
           parameters: {
@@ -632,6 +733,7 @@ export function apply(ctx) {
                 node: { type: 'object' },
                 results: { type: 'object' },
                 labels: { type: 'object' },
+                sessions: { type: 'array' },
                 skipped: { type: 'array' },
                 hint: { type: 'string' },
                 error: { type: 'string' },
@@ -649,11 +751,17 @@ export function apply(ctx) {
               const body = blocks.length ? blocks.join('\n\n') : '（暂无上游结果）';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
+                const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
+                const handover = handed.length
+                  ? '\n\n可用会话（session 连线）：' + handed.map((s) => s.label + ' → ' + s.childId).join('；')
+                    + '\n需要追问时，直接给对应子代理发消息即可，它们仍在上游会话里。'
+                  : '';
                 return [{
                   type: 'text',
                   text: '需要你（Lead）完成「' + n.label + '」：' + n.role
                     + '\n需要用到：' + ((n.needs && n.needs.length) ? n.needs.join('、') : '（无上游）')
                     + '\n\n已完成节点的结果：\n' + body
+                    + handover
                     + '\n\n' + (v.hint || ''),
                 }];
               }
