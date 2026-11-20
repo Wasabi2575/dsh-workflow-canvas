@@ -1,4 +1,5 @@
 # DSH Workflow Canvas（可视化工作流画布）
+- [English README](README.md)
 
 在 DSH 侧边栏里编排子代理工作流：把每一步画成一个节点、用三种连线标出数据怎么流转，
 启用后直接在对话里运行。子代理节点会被真实启动，Lead 节点会暂停运行、由对话本体执行。
@@ -7,8 +8,6 @@
 节点间的连线一眼就能看懂数据流向：灰线传文本、蓝线传 JSON、紫线让下游接着上游的会话跑。
 
 ![工作流画布](docs/images/canvas-demo-zh.png)
-
-- [English README](README.md)
 
 ## 安装
 
