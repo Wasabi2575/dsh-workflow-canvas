@@ -1691,6 +1691,8 @@ window.__ModuleLoader__.load({
           scope.effect(() => scope.sidebarRightTabs.register({
             id: TAB_ID,
             kind: KIND,
+            // Keep the tab (and its canvas state) alive while the pane is closed.
+            keepMounted: true,
             title: () => 'Workflow',
             guide: [{
               id: 'workflow-canvas',
