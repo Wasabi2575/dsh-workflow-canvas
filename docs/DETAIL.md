@@ -24,10 +24,10 @@ are performed by the conversation itself.
   selected node moves the whole selection.
 - Right-drag across links cuts them on release; the swept path and links about to
   be cut highlight in red (toggle under `⋯`).
-- Shortcuts: `Shift+A` opens a Blender-style Add Node menu at the cursor,
+- Shortcuts: `Shift+A` opens the Add Node menu at the cursor,
   `Ctrl+D` duplicates selected nodes, `Delete` removes selected nodes, `Ctrl+Z`
-  undoes, and `Esc` closes popups. `⋯` also provides `⊞ Auto layout` and
-  `⇧ Copy JSON`.
+  undoes, and `Esc` closes popups. `⋯` also provides `⊞ Auto layout`,
+  `⇧ Copy JSON`, and `Visual effects` (`Minimal` / `Standard` / `Vivid`).
 - Click any subagent node's status pill (e.g. `Done ↗`) to jump straight to its
   live subagent chat pane.
 

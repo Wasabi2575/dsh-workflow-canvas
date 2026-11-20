@@ -31,14 +31,58 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 224;
+    const NODE_H = 234;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 168;
+    const SOCKET_BAND_TOP = 176;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
     /** World origin offset: keeps negative node coordinates inside the scroll area. */
     const WORLD_PAD = 2000;
+
+    const FX_KEY = STORAGE_PREFIX + 'fx';
+    const FX_LEVELS = ['minimal', 'standard', 'vivid'];
+    const STYLE_ID = 'dsh-workflow-canvas-styles';
+
+    /** Inject scoped CSS keyframes once; never touches host selectors. */
+    function ensureStyles() {
+      try {
+        if (typeof document === 'undefined' || !document.head) return;
+        if (document.getElementById(STYLE_ID)) return;
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = [
+          '@keyframes dsh-wc-pulse-ring {',
+          '  0%, 100% { box-shadow: 0 0 0 1px rgba(47,129,247,0.45), 0 0 10px rgba(47,129,247,0.16); }',
+          '  50% { box-shadow: 0 0 0 2px rgba(47,129,247,0.8), 0 0 18px rgba(47,129,247,0.34); }',
+          '}',
+          '@keyframes dsh-wc-pulse-vivid {',
+          '  0%, 100% { box-shadow: 0 0 0 2px rgba(47,129,247,0.55), 0 0 14px rgba(47,129,247,0.28); }',
+          '  50% { box-shadow: 0 0 0 3px rgba(47,129,247,0.92), 0 0 28px rgba(47,129,247,0.52); }',
+          '}',
+          '@keyframes dsh-wc-dash {',
+          '  from { stroke-dashoffset: 28; }',
+          '  to { stroke-dashoffset: 0; }',
+          '}',
+          '@keyframes dsh-wc-shimmer {',
+          '  0% { background-position: 200% 0; }',
+          '  100% { background-position: -200% 0; }',
+          '}',
+          '@keyframes dsh-wc-dot {',
+          '  0%, 100% { opacity: 1; transform: scale(1); }',
+          '  50% { opacity: 0.42; transform: scale(0.82); }',
+          '}',
+          '.dsh-wc-node { transition: box-shadow 180ms ease, border-color 180ms ease, opacity 180ms ease; }',
+          '.dsh-wc-node:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.24); }',
+          '.dsh-wc-running-std { animation: dsh-wc-pulse-ring 2.1s ease-in-out infinite; }',
+          '.dsh-wc-running-vivid { animation: dsh-wc-pulse-vivid 1.65s ease-in-out infinite; }',
+          '.dsh-wc-topbar-vivid { background-size: 220% 100% !important; animation: dsh-wc-shimmer 1.8s linear infinite; }',
+          '.dsh-wc-edge-flow { stroke-dasharray: 8 6; animation: dsh-wc-dash 0.8s linear infinite; }',
+          '.dsh-wc-dot-live { display: inline-block; animation: dsh-wc-dot 1.5s ease-in-out infinite; }',
+        ].join('\n');
+        document.head.appendChild(style);
+      } catch (_e) { /* non-DOM or restricted host */ }
+    }
 
     // One socket per channel type: a link can only join the same type.
     const SOCKET_TYPES = [
@@ -78,7 +122,7 @@ window.__ModuleLoader__.load({
         scopeMinimal: 'minimal（只读思考）', scopeStandard: 'standard（全部工具）',
         fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
-        stOrphan: '未连线', stLead: '由对话执行',
+        stOrphan: '未连线', stLead: '由对话执行', stLeadReady: '待拍板',
         presetEmpty: '还没有保存过预设', del: '删除这个预设',
         needName: '请先给预设起个名字', duplicate: '已存在，请换一个名字',
         savedPreset: '已保存预设', saveFailed: '保存失败（存储不可用）',
@@ -89,7 +133,7 @@ window.__ModuleLoader__.load({
         tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
         tipZoom: '滚轮缩放（以光标为中心）',
-        tipResetZoom: '回到 100% 并把画面中心拉到 Lead 节点',
+        tipResetZoom: '点击回到 100% 并聚焦 Lead；左右拖拽可连续缩放',
         tipLocate: '自适应缩放并居中，让所有节点完整显示在视野内',
         locate: '⊡ 全览',
         importBtn: '⇩ 导入',
@@ -116,7 +160,7 @@ window.__ModuleLoader__.load({
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
           '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点右下角状态可直达它的对话记录。',
-          '14. 快捷键：Shift+A 在光标处新建节点（Blender 风格），Ctrl+D 复制选中节点，Delete 批量删除，Ctrl+Z 撤销，Esc 关闭弹窗。',
+          '14. 快捷键：Shift+A 在光标处新建节点，Ctrl+D 复制选中节点，Delete 批量删除，Ctrl+Z 撤销，Esc 关闭弹窗。',
         ].join('\n'),
         openChat: '会话',
         tipOpenRun: '点击打开该子代理的对话记录',
@@ -131,6 +175,11 @@ window.__ModuleLoader__.load({
         duplicatedNodes: '已复制节点',
         deletedNodes: '已删除节点（可用 ↶ 撤销）',
         addMenuTitle: '新建节点 (Shift+A)',
+        fxLabel: '视觉效果',
+        fxMinimal: '极简',
+        fxStandard: '标准',
+        fxVivid: '炫酷',
+        tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
@@ -168,7 +217,7 @@ window.__ModuleLoader__.load({
         scopeMinimal: 'minimal (read-only thinking)', scopeStandard: 'standard (all tools)',
         fallbackModel: 'Fallback',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
-        stOrphan: 'Unlinked', stLead: 'Runs in chat',
+        stOrphan: 'Unlinked', stLead: 'Runs in chat', stLeadReady: 'Ready',
         presetEmpty: 'No presets saved yet', del: 'Delete this preset',
         needName: 'Name the preset first', duplicate: 'already exists, pick another name',
         savedPreset: 'Saved preset', saveFailed: 'Save failed (storage unavailable)',
@@ -179,7 +228,7 @@ window.__ModuleLoader__.load({
         tipLead: 'Lead steps run in the chat; the canvas does not track them',
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
         tipZoom: 'Wheel zooms around the cursor',
-        tipResetZoom: 'Reset to 100% and centre the view on the Lead node',
+        tipResetZoom: 'Click to reset to 100% on Lead; drag left/right to scrub zoom',
         tipLocate: 'Fit all nodes into the visible canvas',
         locate: '⊡ Fit',
         importBtn: '⇩ Import',
@@ -206,7 +255,7 @@ window.__ModuleLoader__.load({
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
           '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge to open its chat.',
-          '14. Shortcuts: Shift+A adds a node at cursor (Blender style), Ctrl+D duplicates, Delete removes selected, Ctrl+Z undoes, Esc closes popups.',
+          '14. Shortcuts: Shift+A adds a node at cursor, Ctrl+D duplicates, Delete removes selected, Ctrl+Z undoes, Esc closes popups.',
         ].join('\n'),
         openChat: 'Chat',
         tipOpenRun: 'Click to open this subagent conversation',
@@ -221,6 +270,11 @@ window.__ModuleLoader__.load({
         duplicatedNodes: 'Duplicated nodes',
         deletedNodes: 'Deleted nodes (use Undo to restore)',
         addMenuTitle: 'Add node (Shift+A)',
+        fxLabel: 'Visual effects',
+        fxMinimal: 'Minimal',
+        fxStandard: 'Standard',
+        fxVivid: 'Vivid',
+        tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
@@ -277,6 +331,10 @@ window.__ModuleLoader__.load({
         padding: '5px 10px', borderRadius: '6px', border: '1px solid ' + C.accent,
         background: C.raised, color: C.accent, fontSize: '12px', fontWeight: 600,
         cursor: 'pointer', whiteSpace: 'nowrap',
+      },
+      toolSep: {
+        width: '1px', height: '16px', background: C.border, opacity: 0.65,
+        flex: '0 0 auto', margin: '0 2px',
       },
       toggleOn: {
         padding: '5px 12px', borderRadius: '6px', border: '1px solid ' + C.accent,
@@ -373,28 +431,38 @@ window.__ModuleLoader__.load({
       presetEmpty: { padding: '6px', fontSize: '10px', color: C.dim },
       syncNote: { fontSize: '10px', color: C.dim, maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       canvas: { position: 'relative', flex: '1 1 auto', overflow: 'hidden', minHeight: '0', userSelect: 'none' },
-      content: { position: 'relative', width: CONTENT_W, height: CONTENT_H },
+      content: { position: 'absolute', left: 0, top: 0, width: CONTENT_W, height: CONTENT_H },
 
       node: {
         position: 'absolute', width: NODE_W, height: NODE_H, boxSizing: 'border-box',
         borderRadius: '10px', border: '1px solid ' + C.border,
         background: C.raised, color: C.text, cursor: 'grab',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.22)',
       },
-      nodeSel: { border: '2px solid ' + C.accent },
+      nodeSel: { border: '2px solid ' + C.accent, boxShadow: '0 4px 18px rgba(47,129,247,0.22)' },
       leadNode: {},
       orphanNode: { border: '1px dashed ' + C.dim, opacity: 0.65 },
+      nodeHeader: {
+        position: 'absolute', left: 0, right: 0, top: '4px', height: '26px',
+        background: 'rgba(128,128,128,0.07)',
+        borderBottom: '1px solid rgba(128,128,128,0.18)',
+        pointerEvents: 'none', zIndex: 1,
+      },
+      bandDivider: {
+        position: 'absolute', left: '10px', right: '10px', top: (SOCKET_BAND_TOP - 3) + 'px',
+        height: '1px', background: 'rgba(128,128,128,0.18)', pointerEvents: 'none', zIndex: 1,
+      },
 
       title: {
-        position: 'absolute', left: '10px', right: '10px', top: '10px', height: '18px',
-        fontWeight: 600, fontSize: '13px', lineHeight: '18px',
+        position: 'absolute', left: '10px', right: '10px', top: '8px', height: '18px',
+        fontWeight: 600, fontSize: '12px', lineHeight: '18px',
         border: 'none', background: 'transparent', color: C.text, padding: 0, margin: 0,
-        outline: 'none', boxSizing: 'border-box', userSelect: 'text',
+        outline: 'none', boxSizing: 'border-box', userSelect: 'text', zIndex: 2,
       },
       titleReadonly: {
-        position: 'absolute', left: '10px', right: '10px', top: '10px', height: '18px',
-        fontWeight: 600, fontSize: '13px', lineHeight: '18px',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        position: 'absolute', left: '10px', right: '10px', top: '8px', height: '18px',
+        fontWeight: 600, fontSize: '12px', lineHeight: '18px',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 2,
       },
       topBar: {
         position: 'absolute', left: 0, right: 0, top: 0, height: '4px',
@@ -402,22 +470,24 @@ window.__ModuleLoader__.load({
       },
       statusChip: {
         position: 'absolute', right: '12px', bottom: '4px', fontSize: '10px', lineHeight: '14px',
+        padding: '1px 5px', borderRadius: '999px',
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: '3px',
       },
       statusBtn: {
         position: 'absolute', right: '12px', bottom: '3px', fontSize: '10px', lineHeight: '14px',
-        padding: '1px 5px', borderRadius: '4px', border: '1px solid ' + C.border,
+        padding: '1px 6px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.text, cursor: 'pointer', pointerEvents: 'auto',
-        zIndex: 7, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '2px',
-        outline: 'none',
+        zIndex: 7, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '3px',
+        outline: 'none', fontWeight: 500,
       },
 
-      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '28px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '50px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldScope: { position: 'absolute', left: '10px', right: '10px', top: '72px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '94px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '116px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '138px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '35px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '57px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldScope: { position: 'absolute', left: '10px', right: '10px', top: '79px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '101px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '123px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '145px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       optRow: {
         position: 'absolute', left: '10px', right: '10px', top: '114px', height: '18px',
@@ -466,9 +536,9 @@ window.__ModuleLoader__.load({
         border: '1px solid ' + C.border, borderRadius: '5px', padding: '5px 6px',
         outline: 'none', userSelect: 'text',
       },
-      leadLabel: { position: 'absolute', left: '10px', right: '10px', top: '26px', height: '16px', display: 'flex', alignItems: 'center' },
+      leadLabel: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '16px', display: 'flex', alignItems: 'center' },
       task: {
-        position: 'absolute', left: '10px', right: '10px', top: '44px', height: '118px',
+        position: 'absolute', left: '10px', right: '10px', top: '51px', height: '116px',
         padding: '4px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', resize: 'none', outline: 'none',
         lineHeight: '14px', boxSizing: 'border-box', userSelect: 'text',
@@ -800,7 +870,7 @@ window.__ModuleLoader__.load({
       }
       const posById = new Map();
       const COL_PITCH = 300;
-      const ROW_PITCH = 250;
+      const ROW_PITCH = 262;
       const MID_Y = 320;
       for (const [col, colNodes] of columns.entries()) {
         const ordered = colNodes.slice().sort((a, b) => (a.y || 0) - (b.y || 0));
@@ -819,6 +889,93 @@ window.__ModuleLoader__.load({
     /** Starter templates shipped with the plugin so new users can try one click away. */
     function builtinTemplates(lang) {
       const en = lang === 'en';
+      const sweNodes = [
+        {
+          id: 'lead', kind: 'lead', label: 'Lead', y: 0,
+          task: en
+            ? 'Add a rate-limiting middleware to this service: scan codebase patterns and API constraints in parallel, synthesize a structured change spec, pause for my sign-off, implement core code and tests/docs in parallel, run an independent review, and hand off for final ship check.'
+            : '给现有项目新增「请求限流中间件」：先并行摸清代码库结构与接口约束，收敛结构化变更方案，我拍板后并行完成核心实现与单测文档，最后独立审查并交我终审交付。',
+          provider: '', model: '', role: '',
+        },
+        {
+          id: 'swe_risk', kind: 'agent', y: 0,
+          label: en ? 'Constraints & Risks' : '约束与风险',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Read-only audit of public APIs, error semantics, config conventions and test gaps; list invariants that must not break.'
+            : '只读排查相关接口契约、错误码约定、配置方式与测试覆盖缺口，列出绝不能破坏的边界与不变量（不改文件）。',
+        },
+        {
+          id: 'swe_scan', kind: 'agent', y: 100,
+          label: en ? 'Codebase Scan' : '代码库摸底',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: true,
+          role: en
+            ? 'Read-only scan to locate entry points, middleware chain, key symbols and local conventions; output an impacted file map.'
+            : '只读定位相关模块入口、中间件链路、关键符号和代码风格约定，输出受影响文件清单（不改文件，保留会话供实现复用）。',
+        },
+        {
+          id: 'swe_spec', kind: 'agent', y: 0,
+          label: en ? 'Change Spec' : '变更方案',
+          provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
+          role: en
+            ? 'Pure reasoning: merge both scans into a structured JSON spec { filesToChange, publicApi, edgeCases, testPlan, nonGoals }.'
+            : '纯推理收敛两份摸底结果，输出结构化 JSON 方案（含 filesToChange、publicApi、edgeCases、testPlan 与 nonGoals）。',
+        },
+        {
+          id: 'swe_plan_gate', kind: 'lead', y: 0,
+          label: en ? 'Lead Sign-Off' : 'Lead 拍板',
+          provider: '', model: '',
+          role: en
+            ? 'Review the structured spec, lock down scope and non-goals, and split file ownership cleanly for parallel implementation.'
+            : '评审结构化变更方案，敲定实现边界与不做的事，明确源码与测试/文档的改动范围后放行。',
+        },
+        {
+          id: 'swe_tests', kind: 'agent', y: 0,
+          label: en ? 'Tests & Docs' : '单测与文档',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Edit test files and docs only (never touch source code): write unit/edge-case tests and usage notes matching the signed-off spec.'
+            : '仅修改测试文件与使用文档（绝不改业务源码）：按拍板方案补齐边界单测用例与配置说明，确保无写冲突。',
+        },
+        {
+          id: 'swe_impl', kind: 'agent', y: 100,
+          label: en ? 'Core Implement' : '核心实现',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: true,
+          role: en
+            ? 'Continue inside the Codebase Scan session: edit source files only to implement the approved spec, run checks, and summarize changed files.'
+            : '延续「代码库摸底」热会话直接动手（免重复扫库）：仅修改业务源码落实拍板方案，自测并汇报改动清单。',
+        },
+        {
+          id: 'swe_review', kind: 'agent', y: 0,
+          label: en ? 'Code Review' : '独立审查',
+          provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false,
+          role: en
+            ? 'Fresh-context review (do not edit code): run the full test suite, inspect git diff for regressions and edge cases, and output a structured JSON verdict.'
+            : '全新上下文独立审查（不改代码）：运行完整测试套件并审查 diff，排查回归风险与边界遗漏，输出结构化审查结论。',
+        },
+        {
+          id: 'swe_ship_gate', kind: 'lead', y: 0,
+          label: en ? 'Lead Ship Gate' : 'Lead 终审',
+          provider: '', model: '',
+          role: en
+            ? 'Decide ship vs fix from the review verdict; if minor fixes are needed, message the handed-over Core Implement session directly.'
+            : '依据结构化审查结论拍板是否交付；若有小问题，直接通过交接的「核心实现」紫线会话下达就地修复。',
+        },
+      ];
+      const sweEdges = [
+        { id: 's1', from: 'lead', to: 'swe_risk', type: 'prompt' },
+        { id: 's2', from: 'lead', to: 'swe_scan', type: 'prompt' },
+        { id: 's3', from: 'swe_risk', to: 'swe_spec', type: 'prompt' },
+        { id: 's4', from: 'swe_scan', to: 'swe_spec', type: 'prompt' },
+        { id: 's5', from: 'swe_spec', to: 'swe_plan_gate', type: 'structured' },
+        { id: 's6', from: 'swe_plan_gate', to: 'swe_tests', type: 'prompt' },
+        { id: 's7', from: 'swe_plan_gate', to: 'swe_impl', type: 'prompt' },
+        { id: 's8', from: 'swe_scan', to: 'swe_impl', type: 'session-ref' },
+        { id: 's9', from: 'swe_tests', to: 'swe_review', type: 'prompt' },
+        { id: 's10', from: 'swe_impl', to: 'swe_review', type: 'prompt' },
+        { id: 's11', from: 'swe_review', to: 'swe_ship_gate', type: 'structured' },
+        { id: 's12', from: 'swe_impl', to: 'swe_ship_gate', type: 'session-ref' },
+      ];
       const prdNodes = [
         { id: 'lead', kind: 'lead', label: 'Lead', task: en ? 'Turn this PRD into an implementation plan: run three parallel researches (competitors, feasibility, cost), synthesize a structured plan, pause for my decision, then build code, docs and a test checklist in parallel before my final review.' : '把这份 PRD 变成可实施方案：先并行做三项调研（竞品、技术可行性、成本），合成一份结构化方案，我拍板后并行产出代码与文档、并按方案生成测试清单，最后我终审。', provider: '', model: '', role: '' },
         { id: 'n_comp', kind: 'agent', label: en ? 'Competitors' : '竞品调研', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Research how similar products solve this and list key trade-offs.' : '调研同类产品的做法，列出优缺点与差异化机会。' },
@@ -861,6 +1018,12 @@ window.__ModuleLoader__.load({
         { id: 'a5', from: 'n_pick', to: 'n_exec', type: 'prompt' },
       ];
       return [
+        {
+          id: 'tpl-swe',
+          name: en ? 'SWE Delivery: Scan → Sign-Off → Build → Review' : '软件工程：摸底 → 拍板 → 并行实现 → 独立审查',
+          nodes: layoutGraph(sweNodes, sweEdges),
+          edges: sweEdges,
+        },
         {
           id: 'tpl-prd',
           name: en ? 'PRD Research → Decide → Build → Review' : 'PRD 调研 → 拍板 → 并行产出 → 终审',
@@ -935,6 +1098,53 @@ window.__ModuleLoader__.load({
       try {
         window.localStorage.setItem(STORAGE_PREFIX + 'cut', on ? 'on' : 'off');
       } catch (_e) { /* ignore */ }
+    }
+
+    function loadEffectLevel() {
+      try {
+        const saved = window.localStorage.getItem(FX_KEY);
+        if (FX_LEVELS.includes(saved)) return saved;
+        if (typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+          && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          return 'minimal';
+        }
+      } catch (_e) { /* ignore */ }
+      return 'standard';
+    }
+
+    function saveEffectLevel(level) {
+      try {
+        if (FX_LEVELS.includes(level)) window.localStorage.setItem(FX_KEY, level);
+      } catch (_e) { /* ignore */ }
+    }
+
+    function nextEffectLevel(cur) {
+      const idx = FX_LEVELS.indexOf(cur);
+      return FX_LEVELS[(idx + 1) % FX_LEVELS.length];
+    }
+
+    /** Compute the next `{ k, x, y }` keeping the content point under `(mx, my)` fixed. */
+    function zoomAroundPoint(cur, mx, my, deltaY, deltaMode) {
+      if (!deltaY) return cur;
+      let dy = deltaY;
+      if (deltaMode === 1) dy *= 32;
+      else if (deltaMode === 2) dy *= 300;
+      dy = Math.max(-150, Math.min(150, dy));
+      const factor = Math.pow(1.0012, -dy);
+      const k = Math.min(3, Math.max(0.2, cur.k * factor));
+      if (k === cur.k) return cur;
+      const lx = (mx - cur.x) / cur.k;
+      const ly = (my - cur.y) / cur.k;
+      return { k, x: mx - lx * k, y: my - ly * k };
+    }
+
+    /** Compute `{ k, x, y }` when scrubbing zoom horizontally by `dx` around `(cx, cy)`. */
+    function scrubZoom(startView, cx, cy, dx) {
+      const k = Math.min(3, Math.max(0.2, startView.k * Math.pow(1.005, dx)));
+      if (k === startView.k) return startView;
+      const lx = (cx - startView.x) / startView.k;
+      const ly = (cy - startView.y) / startView.k;
+      return { k, x: cx - lx * k, y: cy - ly * k };
     }
 
     function loadPresets() {
@@ -1042,6 +1252,8 @@ window.__ModuleLoader__.load({
       const [menuOpen, setMenuOpen] = useState(false);
       const [helpOpen, setHelpOpen] = useState(false);
       const [cutMode, setCutMode] = useState(loadCutMode);
+      const [fxLevel, setFxLevel] = useState(loadEffectLevel);
+      useEffect(() => { ensureStyles(); }, []);
       const cutRef = useRef(null);
       /** Timestamp of the remote document being applied, so saving it does not bump the clock. */
       const applyStamp = useRef(null);
@@ -1283,26 +1495,60 @@ window.__ModuleLoader__.load({
         };
       }, [sessionId]);
 
+      /** Synchronously update `viewRef` and schedule React render so rapid events never read stale state. */
+      const commitView = (next) => {
+        viewRef.current = next;
+        setView(next);
+      };
+
       // Zoom with the wheel, anchored on the cursor: the content point under the
-      // pointer stays under it while the scale changes.
+      // pointer stays under it while the scale changes. Also absorbs any browser
+      // focus-induced scroll on the hidden-overflow canvas so coordinates never drift.
       useEffect(() => {
         const el = canvasElRef.current;
         if (!el) return undefined;
+        const absorbScroll = () => {
+          if (el.scrollLeft === 0 && el.scrollTop === 0) return;
+          const sx = el.scrollLeft;
+          const sy = el.scrollTop;
+          el.scrollLeft = 0;
+          el.scrollTop = 0;
+          const cur = viewRef.current;
+          commitView({ k: cur.k, x: cur.x - sx, y: cur.y - sy });
+        };
+        const findScrollableChild = (target, dy) => {
+          let node = target instanceof Element ? target : null;
+          while (node && node !== el) {
+            const overflowY = window.getComputedStyle ? window.getComputedStyle(node).overflowY : '';
+            const scrollable = (node.tagName === 'TEXTAREA' || overflowY === 'auto' || overflowY === 'scroll')
+              && node.scrollHeight > node.clientHeight + 1;
+            if (scrollable) {
+              const atTop = node.scrollTop <= 0;
+              const atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1;
+              if ((dy < 0 && !atTop) || (dy > 0 && !atBottom)) return node;
+            }
+            node = node.parentElement;
+          }
+          return null;
+        };
         const onWheel = (e) => {
+          if (!e.deltaY) return;
+          if (!e.ctrlKey && findScrollableChild(e.target, e.deltaY)) return;
           e.preventDefault();
+          absorbScroll();
           const rect = el.getBoundingClientRect();
           const mx = e.clientX - rect.left;
           const my = e.clientY - rect.top;
           const cur = viewRef.current;
-          const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-          const k = Math.min(3, Math.max(0.2, cur.k * factor));
-          if (k === cur.k) return;
-          const lx = (mx - cur.x) / cur.k;
-          const ly = (my - cur.y) / cur.k;
-          setView({ k, x: mx - lx * k, y: my - ly * k });
+          const next = zoomAroundPoint(cur, mx, my, e.deltaY, e.deltaMode);
+          if (next !== cur) commitView(next);
         };
+        el.addEventListener('scroll', absorbScroll);
         el.addEventListener('wheel', onWheel, { passive: false });
-        return () => el.removeEventListener('wheel', onWheel);
+        return () => {
+          el.removeEventListener('scroll', absorbScroll);
+          el.removeEventListener('wheel', onWheel);
+        };
       }, []);
 
       const pointTo = (e) => {
@@ -1321,13 +1567,13 @@ window.__ModuleLoader__.load({
         const k = nextK || viewRef.current.k || 1;
         const cw = el.clientWidth || 1;
         const chh = el.clientHeight || 1;
-        setView({
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
+        commitView({
           k,
           x: cw / 2 - (wx + WORLD_PAD) * k,
           y: chh / 2 - (wy + WORLD_PAD) * k,
         });
-        el.scrollLeft = 0;
-        el.scrollTop = 0;
       };
 
       /** World coordinate currently sitting in the middle of the viewport. */
@@ -1346,6 +1592,37 @@ window.__ModuleLoader__.load({
         const lead = nodes.find((n) => n.id === 'lead');
         if (!lead) return;
         centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2, nextK);
+      };
+
+      /** Horizontal drag scrubber on the percentage pill; pure click resets to 100% on Lead. */
+      const onZoomPillDown = (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const el = canvasElRef.current;
+        const cx = ((el && el.clientWidth) || 800) / 2;
+        const cy = ((el && el.clientHeight) || 600) / 2;
+        const startX = e.clientX;
+        const startView = { ...viewRef.current };
+        let moved = false;
+        const prevCursor = typeof document !== 'undefined' && document.body ? document.body.style.cursor : '';
+        const onMove = (ev) => {
+          const dx = ev.clientX - startX;
+          if (!moved && Math.abs(dx) < 3) return;
+          if (!moved) {
+            moved = true;
+            if (typeof document !== 'undefined' && document.body) document.body.style.cursor = 'ew-resize';
+          }
+          commitView(scrubZoom(startView, cx, cy, dx));
+        };
+        const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+          if (typeof document !== 'undefined' && document.body) document.body.style.cursor = prevCursor;
+          if (!moved) focusLead(1);
+        };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
       };
 
       /** Zoom and pan so every node sits comfortably inside the viewport. */
@@ -1377,13 +1654,13 @@ window.__ModuleLoader__.load({
         const k = Math.max(0.2, Math.min(1, Math.min(availW / bw, availH / bh)));
         const cx = (minX + maxX) / 2;
         const cy = (minY + maxY) / 2;
-        setView({
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
+        commitView({
           k,
           x: cw / 2 - (cx + WORLD_PAD) * k,
           y: padTop + (chh - padTop - padBottom) / 2 - (cy + WORLD_PAD) * k,
         });
-        el.scrollLeft = 0;
-        el.scrollTop = 0;
       };
 
       // The world origin is padded, so the initial viewport would otherwise show
@@ -1886,7 +2163,7 @@ window.__ModuleLoader__.load({
           const pan = panDrag.current;
           const dx = e.clientX - pan.startX;
           const dy = e.clientY - pan.startY;
-          setView((cur) => ({ ...cur, x: pan.originX + dx, y: pan.originY + dy }));
+          commitView({ k: viewRef.current.k, x: pan.originX + dx, y: pan.originY + dy });
           return;
         }
         if (nodeDrag.current) {
@@ -2344,45 +2621,135 @@ window.__ModuleLoader__.load({
         );
       };
 
+      const fxName = (level) => (level === 'minimal' ? t('fxMinimal') : (level === 'vivid' ? t('fxVivid') : t('fxStandard')));
+      const selectedSet = new Set(selectedIds);
+      const connectedIn = new Set();
+      const connectedOut = new Set();
+      for (const e of edges) {
+        const type = e.type || 'prompt';
+        connectedOut.add(e.from + '|' + type);
+        connectedIn.add(e.to + '|' + type);
+      }
+      const reachableIds = reachableFrom(nodes, edges);
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+
+      // Identify intermediate/final Lead nodes whose upstream subagents are all
+      // finished and whose downstream has not started yet ("Ready for Lead").
+      const leadReadyIds = new Set();
+      if (enabled) {
+        for (const n of nodes) {
+          if (n.kind !== 'lead' || n.id === 'lead' || !reachableIds.has(n.id)) continue;
+          const upIds = edges
+            .filter((e) => e.to === n.id && e.from !== 'lead' && nodeById.has(e.from))
+            .map((e) => e.from);
+          if (!upIds.length) continue;
+          const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
+          if (!upAgents.length) continue;
+          const allUpDone = upAgents.every((id) => statusById[id] === 'done');
+          const downIds = edges.filter((e) => e.from === n.id).map((e) => e.to);
+          const anyDownStarted = downIds.some((id) => Boolean(statusById[id]));
+          if (allUpDone && !anyDownStarted) leadReadyIds.add(n.id);
+        }
+      }
+
       const edgeEls = edges.map((edge) => {
-        const from = nodes.find((n) => n.id === edge.from);
-        const to = nodes.find((n) => n.id === edge.to);
+        const from = nodeById.get(edge.from);
+        const to = nodeById.get(edge.to);
         if (!from || !to) return null;
-        const color = (SOCKET_TYPES.find((t) => t.id === edge.type) || SOCKET_TYPES[0]).color;
+        const color = (SOCKET_TYPES.find((sock) => sock.id === edge.type) || SOCKET_TYPES[0]).color;
         const d = edgePath(from, to, edge.type);
         const highlighted = cutVictims.includes(edge.id);
-        return h('path', {
-          key: edge.id,
-          d,
-          stroke: highlighted ? '#e5534b' : color,
-          strokeWidth: highlighted ? 3 : 2,
-          fill: 'none',
-          style: { pointerEvents: 'none' },
-        });
+        const hasSel = selectedSet.size > 0;
+        const linkedToSel = hasSel && (selectedSet.has(edge.from) || selectedSet.has(edge.to));
+        const toRunning = enabled && statusById[edge.to] === 'running';
+        const fromReady = edge.from === 'lead'
+          || from.kind === 'lead'
+          || statusById[edge.from] === 'done';
+        const isFlowing = enabled && !highlighted && (
+          (toRunning && fromReady)
+          || (leadReadyIds.has(edge.to) && statusById[edge.from] === 'done')
+        );
+        const isCompletedLink = enabled && !highlighted && statusById[edge.from] === 'done'
+          && (statusById[edge.to] === 'done' || statusById[edge.to] === 'running' || leadReadyIds.has(edge.to));
+        const dimmed = hasSel && !linkedToSel && !highlighted && !isFlowing;
+        const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing ? 2.6 : 2);
+        const baseOpacity = dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78));
+        const useGlow = fxLevel === 'vivid' && !dimmed && (highlighted || isFlowing || linkedToSel || edge.type !== 'prompt');
+        const showDashFlow = isFlowing && fxLevel !== 'minimal';
+        const showBead = isFlowing && fxLevel === 'vivid';
+
+        return h('g', { key: edge.id, style: { pointerEvents: 'none' } },
+          h('path', {
+            d,
+            stroke: highlighted ? '#e5534b' : color,
+            strokeWidth: baseWidth,
+            strokeOpacity: showDashFlow ? 0.35 : baseOpacity,
+            fill: 'none',
+            filter: useGlow ? 'url(#dsh-wc-glow)' : undefined,
+          }),
+          showDashFlow && h('path', {
+            d,
+            className: 'dsh-wc-edge-flow',
+            stroke: color,
+            strokeWidth: fxLevel === 'vivid' ? 2.8 : 2.4,
+            strokeLinecap: 'round',
+            fill: 'none',
+            filter: fxLevel === 'vivid' ? 'url(#dsh-wc-glow)' : undefined,
+          }),
+          showBead && h('circle', {
+            r: 3.3,
+            fill: color,
+            filter: 'url(#dsh-wc-glow)',
+          },
+            h('animateMotion', {
+              dur: '1.25s',
+              repeatCount: 'indefinite',
+              path: d,
+            }),
+          ),
+        );
       });
 
       const renderBand = (node) => {
         const isEntry = node.id === 'lead';
         return h('div', { style: S.band },
-          SOCKET_TYPES.map((sock) => h('div', { key: sock.id, style: S.row },
-            h('span', { style: S.rowLabel }, sock.label),
-            !isEntry && h('div', {
-              style: { ...S.socket, left: -PORT / 2, borderColor: sock.color },
-              title: t('tipSocketOut'),
-              onMouseDown: (e) => onInputDown(e, node.id, sock.id),
-              onMouseUp: (e) => onInputUp(e, node.id, sock.id),
-            }),
-            h('div', {
-              style: { ...S.socket, right: -PORT / 2, borderColor: sock.color },
-              title: t('tipSocketIn'),
-              onMouseDown: (e) => onOutputDown(e, node.id, sock.id),
-              onMouseUp: (e) => onOutputUp(e, node.id, sock.id),
-            }),
-          )),
+          SOCKET_TYPES.map((sock) => {
+            const inLinked = connectedIn.has(node.id + '|' + sock.id);
+            const outLinked = connectedOut.has(node.id + '|' + sock.id);
+            return h('div', { key: sock.id, style: S.row },
+              h('span', { style: S.rowLabel }, sock.label),
+              !isEntry && h('div', {
+                style: {
+                  ...S.socket,
+                  left: -PORT / 2,
+                  borderColor: sock.color,
+                  background: inLinked ? sock.color : C.elevated,
+                  boxShadow: inLinked
+                    ? (fxLevel === 'vivid' ? '0 0 6px ' + sock.color : '0 0 0 2px ' + C.elevated)
+                    : '0 0 0 3px transparent',
+                },
+                title: t('tipSocketOut'),
+                onMouseDown: (e) => onInputDown(e, node.id, sock.id),
+                onMouseUp: (e) => onInputUp(e, node.id, sock.id),
+              }),
+              h('div', {
+                style: {
+                  ...S.socket,
+                  right: -PORT / 2,
+                  borderColor: sock.color,
+                  background: outLinked ? sock.color : C.elevated,
+                  boxShadow: outLinked
+                    ? (fxLevel === 'vivid' ? '0 0 6px ' + sock.color : '0 0 0 2px ' + C.elevated)
+                    : '0 0 0 3px transparent',
+                },
+                title: t('tipSocketIn'),
+                onMouseDown: (e) => onOutputDown(e, node.id, sock.id),
+                onMouseUp: (e) => onOutputUp(e, node.id, sock.id),
+              }),
+            );
+          }),
         );
       };
-
-      const reachableIds = reachableFrom(nodes, edges);
 
       // The canvas grows with its nodes so links past the original size are
       // still painted instead of being clipped by the SVG viewport.
@@ -2408,6 +2775,7 @@ window.__ModuleLoader__.load({
         h('div', { style: S.toolbar },
           h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
+          h('span', { style: S.toolSep }),
           h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
           h('button', {
             style: enabled && dirty ? S.btnDirty : S.btn,
@@ -2415,7 +2783,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipSync'),
           }, t('sync')),
-
+          h('span', { style: S.toolSep }),
           h('button', {
             style: S.btn,
             onClick: () => fitView(),
@@ -2423,12 +2791,14 @@ window.__ModuleLoader__.load({
             title: t('tipLocate'),
           }, t('locate')),
           h('button', {
-            style: S.btn,
-            onClick: () => focusLead(1),
+            style: { ...S.btn, cursor: 'ew-resize', minWidth: '50px', textAlign: 'center', fontVariantNumeric: 'tabular-nums' },
+            onMouseDown: onZoomPillDown,
+            onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); focusLead(1); } },
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
           syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
+          h('span', { style: S.toolSep }),
           h('button', {
             style: S.btn,
             onClick: toggleLang,
@@ -2462,6 +2832,17 @@ window.__ModuleLoader__.load({
                 onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                 onClick: () => { setMenuOpen(false); autoLayout(); },
               }, t('autoLayoutBtn')),
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => {
+                  const next = nextEffectLevel(fxLevel);
+                  setFxLevel(next);
+                  saveEffectLevel(next);
+                  flash(t('fxLabel') + t('sep') + fxName(next));
+                },
+              }, t('fxLabel') + t('sep') + fxName(fxLevel)),
               h('div', {
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
@@ -2547,12 +2928,31 @@ window.__ModuleLoader__.load({
           onMouseMove: (e) => { lastMouseRef.current = { clientX: e.clientX, clientY: e.clientY }; },
         },
           h('button', {
-            style: enabled ? S.floatOn : S.floatOff,
+            style: enabled
+              ? {
+                  ...S.floatOn,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  lineHeight: '14px',
+                  boxShadow: fxLevel === 'vivid'
+                    ? '0 0 14px rgba(47,129,247,0.35), 0 4px 14px rgba(0,0,0,0.35)'
+                    : S.floatOn.boxShadow,
+                }
+              : { ...S.floatOff, display: 'inline-flex', alignItems: 'center', gap: '6px', lineHeight: '14px' },
             type: 'button',
             onMouseDown: (e) => e.stopPropagation(),
             onClick: toggleEnabled,
             title: t('tipToggle'),
-          }, enabled ? t('enabled') : t('disabled')),
+          },
+            h('span', {
+              className: enabled && fxLevel === 'vivid' ? 'dsh-wc-dot-live' : undefined,
+              style: enabled
+                ? { width: '7px', height: '7px', borderRadius: '50%', background: C.accent, flex: '0 0 auto' }
+                : { width: '7px', height: '7px', borderRadius: '50%', border: '1.5px solid ' + C.dim, boxSizing: 'border-box', flex: '0 0 auto' },
+            }),
+            h('span', null, (enabled ? t('enabled') : t('disabled')).replace(/^[●○]\s*/, '')),
+          ),
           addMenu && h('div', {
             style: { ...S.addMenu, left: addMenu.sx + 'px', top: addMenu.sy + 'px' },
             onMouseDown: (e) => e.stopPropagation(),
@@ -2573,7 +2973,10 @@ window.__ModuleLoader__.load({
           ),
           h('div', {
             ref: canvasElRef,
-            style: { ...S.canvas, cursor: panning ? 'grabbing' : (spaceHeld ? 'grab' : undefined) },
+            style: {
+              ...S.canvas,
+              cursor: panning ? 'grabbing' : (spaceHeld ? 'grab' : undefined),
+            },
             onMouseDown: onCanvasDown,
           },
           h('div', {
@@ -2585,6 +2988,15 @@ window.__ModuleLoader__.load({
             },
           },
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
+              fxLevel === 'vivid' && h('defs', null,
+                h('filter', { id: 'dsh-wc-glow', x: '-30%', y: '-30%', width: '160%', height: '160%' },
+                  h('feGaussianBlur', { stdDeviation: '2.2', result: 'blur' }),
+                  h('feMerge', null,
+                    h('feMergeNode', { in: 'blur' }),
+                    h('feMergeNode', { in: 'SourceGraphic' }),
+                  ),
+                ),
+              ),
               h('g', null, edgeEls),
               cutPath.length > 1 && h('polyline', {
                 points: cutPath.map((pt) => (pt.x + WORLD_PAD) + ',' + (pt.y + WORLD_PAD)).join(' '),
@@ -2624,51 +3036,105 @@ window.__ModuleLoader__.load({
                 }),
               );
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
+              const isSelected = selectedSet.has(node.id);
+              const nodeStatus = enabled ? statusById[node.id] : undefined;
+              const isLeadReady = leadReadyIds.has(node.id);
+              const isRunning = !isLeadKind && nodeStatus === 'running';
+              const isDone = !isLeadKind && nodeStatus === 'done';
+              const isFailed = !isLeadKind && nodeStatus === 'failed';
+              const isPulsing = (isRunning || isLeadReady) && fxLevel !== 'minimal';
+              const nodeClass = 'dsh-wc-node'
+                + (isPulsing ? (fxLevel === 'vivid' ? ' dsh-wc-running-vivid' : ' dsh-wc-running-std') : '');
+              const stateStyle = isSelected
+                ? S.nodeSel
+                : isRunning || isLeadReady
+                  ? { border: '1.5px solid #2f81f7' }
+                  : isFailed
+                    ? { border: '1.5px solid rgba(229,83,75,0.8)', boxShadow: '0 0 12px rgba(229,83,75,0.18)' }
+                    : isDone
+                      ? { border: '1px solid rgba(63,185,80,0.55)' }
+                      : null;
+              const topBarBg = (isRunning || isLeadReady) && fxLevel === 'vivid'
+                ? (isLeadKind
+                  ? 'linear-gradient(90deg, #2f81f7 0%, #79c0ff 50%, #2f81f7 100%)'
+                  : 'linear-gradient(90deg, #2f81f7 0%, #58d580 50%, #2f81f7 100%)')
+                : (isFailed ? '#e5534b' : (isLeadKind ? '#2f81f7' : '#3fb950'));
               return h('div', {
                 key: node.id,
                 'data-node': node.id,
-                style: selectedIds.includes(node.id)
-                  ? { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
-                  : { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
+                className: nodeClass,
+                style: {
+                  ...S.node,
+                  left: node.x + WORLD_PAD,
+                  top: node.y + WORLD_PAD,
+                  ...(isLeadKind ? S.leadNode : null),
+                  ...(isOrphan ? S.orphanNode : null),
+                  ...(stateStyle || null),
+                },
                 title: isOrphan ? t('orphanTip') : undefined,
                 onMouseDown: (e) => onNodeDown(e, node.id),
               },
                 h('div', {
+                  className: (isRunning || isLeadReady) && fxLevel === 'vivid' ? 'dsh-wc-topbar-vivid' : undefined,
                   style: {
                     ...S.topBar,
-                    background: isLeadKind ? '#2f81f7' : '#3fb950',
+                    background: topBarBg,
                   },
                 }),
+                h('div', { style: S.nodeHeader }),
+                h('div', { style: S.bandDivider }),
                 (() => {
-                  const nodeStatus = statusById[node.id];
                   const latestRun = !isLeadKind ? runsById[node.id] : null;
-                  const statusColor = isLeadKind ? C.dim
-                    : nodeStatus === 'running' ? '#2f81f7'
-                      : nodeStatus === 'failed' ? '#e5534b'
-                        : nodeStatus === 'done' ? '#3fb950' : C.dim;
+                  const statusColor = isLeadReady ? '#2f81f7'
+                    : isLeadKind ? C.dim
+                      : nodeStatus === 'running' ? '#2f81f7'
+                        : nodeStatus === 'failed' ? '#e5534b'
+                          : nodeStatus === 'done' ? '#3fb950' : C.dim;
+                  const statusTint = isLeadReady || nodeStatus === 'running'
+                    ? 'rgba(47,129,247,0.14)'
+                    : nodeStatus === 'failed'
+                      ? 'rgba(229,83,75,0.14)'
+                      : nodeStatus === 'done'
+                        ? 'rgba(63,185,80,0.14)'
+                        : 'transparent';
                   const statusLabel = isOrphan ? t('stOrphan')
-                    : isLeadKind ? t('stLead')
-                      : nodeStatus === 'running' ? t('stRunning')
-                        : nodeStatus === 'failed' ? t('stFailed')
-                          : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                    : isLeadReady ? t('stLeadReady')
+                      : isLeadKind ? t('stLead')
+                        : nodeStatus === 'running' ? t('stRunning')
+                          : nodeStatus === 'failed' ? t('stFailed')
+                            : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                  const glyph = nodeStatus === 'running'
+                    ? h('span', {
+                        className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
+                        style: { width: '6px', height: '6px', borderRadius: '50%', background: statusColor, flex: '0 0 auto' },
+                      })
+                    : isLeadReady ? h('span', { className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined }, '⏸')
+                      : nodeStatus === 'done' ? '✓'
+                        : nodeStatus === 'failed' ? '✕' : null;
                   if (latestRun) {
                     const label = enabled ? statusLabel : t('openChat');
                     const color = enabled ? statusColor : C.accent;
+                    const bg = enabled && statusTint !== 'transparent' ? statusTint : C.elevated;
                     return h('button', {
                       type: 'button',
-                      style: { ...S.statusBtn, color, borderColor: color === C.dim ? C.border : color },
+                      style: { ...S.statusBtn, color, background: bg, borderColor: color === C.dim ? C.border : color },
                       title: t('tipOpenRun'),
                       onMouseDown: (e) => e.stopPropagation(),
                       onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-                      onMouseLeave: (e) => { e.currentTarget.style.background = C.elevated; },
+                      onMouseLeave: (e) => { e.currentTarget.style.background = bg; },
                       onClick: (e) => { e.stopPropagation(); openNodeSession(node); },
-                    }, label, ' ↗');
+                    }, enabled ? glyph : null, label, ' ↗');
                   }
                   if (!enabled) return null;
                   return h('div', {
-                    style: { ...S.statusChip, color: statusColor },
-                    title: isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus')),
-                  }, statusLabel);
+                    style: {
+                      ...S.statusChip,
+                      color: statusColor,
+                      background: statusTint,
+                      border: statusTint !== 'transparent' ? ('1px solid ' + statusColor) : 'none',
+                    },
+                    title: isLeadReady ? t('tipLeadReady') : (isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus'))),
+                  }, glyph, statusLabel);
                 })(),
                 isEntry
                   ? h('div', { style: S.titleReadonly }, t('leadThis'))
@@ -2794,7 +3260,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, nextEffectLevel, zoomAroundPoint, scrubZoom, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });
