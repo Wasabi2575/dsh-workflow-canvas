@@ -1,6 +1,6 @@
 ---
 name: workflow-canvas
-description: Draw, edit and run a DSH workflow canvas: nodes, typed links, Lead steps, presets.
+description: Workflow canvas (画布 / 工作流 / 编排): inspect, draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.
 ---
 
 # Workflow canvas
