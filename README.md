@@ -1,9 +1,13 @@
 # DSH Workflow Canvas
 
-A Blender-style node canvas for orchestrating DSH agents, docked in the right
-sidebar. Draw a graph, enable it, and ask the agent to run it — subagent nodes are
-spawned for real, Lead nodes pause the run and are performed by the conversation
+Orchestrate subagent workflows from the DSH sidebar. Draw each step as a node, wire
+the data flow with three link types, enable it, and run it from chat — subagent nodes
+are spawned for real, Lead nodes pause the run and are performed by the conversation
 itself.
+
+Describe a workflow in one sentence and the agent sketches the whole canvas for you;
+tweak it in place afterwards with `canvas_patch`. Links make the flow obvious at a
+glance — grey carries text, blue carries JSON, purple continues the upstream session.
 
 ![workflow canvas](docs/images/canvas-demo.png)
 
