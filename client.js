@@ -444,7 +444,9 @@ window.__ModuleLoader__.load({
       socket: {
         position: 'absolute', top: (ROW_H - PORT) / 2, width: PORT, height: PORT,
         borderRadius: '50%', background: C.raised, border: '2px solid ' + C.border,
-        boxSizing: 'border-box', cursor: 'crosshair',
+        boxSizing: 'border-box', cursor: 'crosshair', zIndex: 6,
+        /* a little extra grab area without changing the drawn dot */
+        padding: 0, margin: -3, boxShadow: '0 0 0 3px transparent',
       },
       nodeDelete: {
         position: 'absolute', right: '-8px', top: '-8px', width: '18px', height: '18px',
@@ -854,7 +856,8 @@ window.__ModuleLoader__.load({
       const [cutMode, setCutMode] = useState(loadCutMode);
       const cutRef = useRef(null);
       const [cutPath, setCutPath] = useState([]);
-      const [cutVictim, setCutVictim] = useState(null);
+      const [cutVictims, setCutVictims] = useState([]);
+      const cutHits = useRef(new Set());
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -1358,7 +1361,9 @@ window.__ModuleLoader__.load({
           try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
           const start = pointTo(e);
           cutRef.current = start;
+          cutHits.current = new Set();
           setCutPath([start]);
+          setCutVictims([]);
           setDragging(true);
           return;
         }
@@ -1391,34 +1396,25 @@ window.__ModuleLoader__.load({
           const threshold = 12 / (viewRef.current.k || 1);
           const from = cutRef.current;
           const steps = Math.max(1, Math.ceil(Math.hypot(p.x - from.x, p.y - from.y) / 6));
-          let victim = null;
-          for (let step = 1; step <= steps && !victim; step += 1) {
+          for (let step = 1; step <= steps; step += 1) {
             const t = step / steps;
-            const spot = { x: from.x + (p.x - from.x) * t, y: from.y + (p.y - from.y) * t };
-            const canvasSpot = { x: spot.x + WORLD_PAD, y: spot.y + WORLD_PAD };
+            const canvasSpot = {
+              x: from.x + (p.x - from.x) * t + WORLD_PAD,
+              y: from.y + (p.y - from.y) * t + WORLD_PAD,
+            };
             for (const edge of edges) {
+              if (cutHits.current.has(edge.id)) continue;
               const source = nodes.find((n) => n.id === edge.from);
               const target = nodes.find((n) => n.id === edge.to);
               if (!source || !target) continue;
               if (distanceToEdge(canvasSpot, source, target, edge.type) <= threshold) {
-                victim = edge;
-                break;
+                cutHits.current.add(edge.id);
               }
             }
           }
-          setCutVictim(victim ? victim.id : null);
-          setCutPath((path) => path.concat([{ x: p.x, y: p.y }]).slice(-40));
+          setCutPath((path) => path.concat([{ x: p.x, y: p.y }]).slice(-60));
+          setCutVictims(Array.from(cutHits.current));
           cutRef.current = p;
-          if (victim) {
-            pushSnapshot();
-            setEdges((es) => es.filter((x) => x.id !== victim.id));
-            flash(t('linkCut'));
-            cutRef.current = null;
-            setCutPath([]);
-            setCutVictim(null);
-            setDragging(false);
-          }
-          void from;
         } else if (marquee) {
           const p = pointTo(e);
           const next = { x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y };
@@ -1432,8 +1428,18 @@ window.__ModuleLoader__.load({
       };
 
       const onCanvasUp = () => {
-        if (cutRef.current) { cutRef.current = null; setDragging(false); }
-        if (cutPath.length) { setCutPath([]); setCutVictim(null); }
+        if (cutRef.current) {
+          cutRef.current = null;
+          setDragging(false);
+          const victims = Array.from(cutHits.current);
+          if (victims.length) {
+            pushSnapshot();
+            setEdges((es) => es.filter((x) => !cutHits.current.has(x.id)));
+            flash(t('linkCut') + ' ×' + victims.length);
+          }
+          cutHits.current = new Set();
+        }
+        if (cutPath.length) { setCutPath([]); setCutVictims([]); }
         if (marquee) {
           setSelectedIds(hitTest(marquee));
           setMarquee(null);
@@ -1771,7 +1777,7 @@ window.__ModuleLoader__.load({
         if (!from || !to) return null;
         const color = (SOCKET_TYPES.find((t) => t.id === edge.type) || SOCKET_TYPES[0]).color;
         const d = edgePath(from, to, edge.type);
-        const highlighted = cutVictim === edge.id;
+        const highlighted = cutVictims.includes(edge.id);
         return h('path', {
           key: edge.id,
           d,
