@@ -77,12 +77,12 @@ Drag from a right socket to a left socket, or from a left socket to a right one
 
 | Control / Shortcut | Action |
 |---|---|
-| `Shift+A` | Open a Blender-style Add Node menu at the cursor (`1` / `2` to drop immediately) |
+| `Shift+A` | Open the Add Node menu at the cursor (`1` / `2` to drop immediately) |
 | Middle-drag / `Space` + left-drag | Pan the canvas (works even when starting over a node) |
 | Wheel / `⊡ Fit` / `100%` | Cursor-anchored zoom / fit all nodes in view / reset to 100% on Lead |
 | Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (preserving settings), or batch delete |
 | `Ctrl+Z` / `Esc` | Undo structural edits / close open popups and menus |
-| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout` & `⇧ Copy JSON` |
+| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout`, `⇧ Copy JSON`, and `Visual effects` (Minimal / Standard / Vivid) |
 
 ## Running
 
