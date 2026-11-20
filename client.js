@@ -1390,14 +1390,20 @@ window.__ModuleLoader__.load({
           const p = pointTo(e);
           const threshold = 12 / (viewRef.current.k || 1);
           const from = cutRef.current;
+          const steps = Math.max(1, Math.ceil(Math.hypot(p.x - from.x, p.y - from.y) / 6));
           let victim = null;
-          for (const edge of edges) {
-            const source = nodes.find((n) => n.id === edge.from);
-            const target = nodes.find((n) => n.id === edge.to);
-            if (!source || !target) continue;
-            if (distanceToEdge(p, source, target, edge.type) <= threshold) {
-              victim = edge;
-              break;
+          for (let step = 1; step <= steps && !victim; step += 1) {
+            const t = step / steps;
+            const spot = { x: from.x + (p.x - from.x) * t, y: from.y + (p.y - from.y) * t };
+            const canvasSpot = { x: spot.x + WORLD_PAD, y: spot.y + WORLD_PAD };
+            for (const edge of edges) {
+              const source = nodes.find((n) => n.id === edge.from);
+              const target = nodes.find((n) => n.id === edge.to);
+              if (!source || !target) continue;
+              if (distanceToEdge(canvasSpot, source, target, edge.type) <= threshold) {
+                victim = edge;
+                break;
+              }
             }
           }
           setCutVictim(victim ? victim.id : null);
@@ -2137,7 +2143,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY },
+      __test: { topoOrder, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });
