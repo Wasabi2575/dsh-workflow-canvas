@@ -13,6 +13,14 @@ glance — grey carries text, blue carries JSON, purple continues the upstream s
 
 - [中文说明](README.zh.md)
 
+## How this differs from other canvas plugins
+
+DSH has more than one "workflow canvas". This one orchestrates **subagents** from
+the sidebar, performs Lead steps in the conversation itself, and lets the agent
+sketch a whole canvas from one sentence. For tool-call / condition / output
+pipelines compiled to `ctx.workflows`, see
+[`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
+
 ## Nodes
 
 - **Subagent node** (green top bar) — spawns a child agent. Each node sets its own

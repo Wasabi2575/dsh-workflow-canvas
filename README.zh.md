@@ -10,6 +10,12 @@
 
 - [English README](README.md)
 
+## 与其它画布插件的区别
+
+DSH 生态里不止一个「工作流画布」。本项目在侧边栏里编排**子代理**，Lead 步骤由对话本体执行，
+还支持一句话让 agent 自动搭图。若要的是「工具调用 / 条件分支 / 输出模板」编译成 `ctx.workflows`
+的那类管线，请看 [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas)。
+
 ## 节点
 
 - **子代理节点**（顶部绿条）—— 真正 spawn 一个子代理。每个节点可单独设置模型、推理强度、能力范围（`standard` / `minimal`）、备用模型、记忆和分工。
