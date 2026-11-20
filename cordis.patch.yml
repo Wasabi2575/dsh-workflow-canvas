@@ -1,4 +1,4 @@
 - insert:
     - id: dsh-workflow-canvas
-      name: '@local/dsh-workflow-canvas'
+      name: 'dsh-workflow-canvas'
       config: {}
