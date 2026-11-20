@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     const useState = React.useState;
     const useRef = React.useRef;
     const useEffect = React.useEffect;
+    const Component = React.Component;
 
     const TAB_ID = '@local/dsh-workflow-canvas';
     const KIND = 'workflow';
@@ -583,6 +584,40 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /**
+     * Keeps a rendering failure visible: without this the whole tab renders as
+     * an empty box and the reason is lost.
+     */
+    class CanvasBoundary extends Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+
+      componentDidCatch(error, info) {
+        try {
+          console.error('[workflow-canvas] render failed', error, info);
+        } catch (_e) { /* ignore */ }
+      }
+
+      render() {
+        const error = this.state.error;
+        if (!error) return this.props.children;
+        const message = String((error && error.message) || error);
+        const stack = String((error && error.stack) || '').slice(0, 900);
+        return h('div', {
+          style: {
+            padding: '12px', fontFamily: 'ui-monospace, monospace', fontSize: '11px',
+            color: '#e5534b', whiteSpace: 'pre-wrap', overflow: 'auto', height: '100%',
+          },
+        }, '画布渲染出错：\n' + message + '\n\n' + stack);
+      }
+    }
+
     function WorkflowCanvas(props) {
       const sessionId = props && props.sessionId;
       const stored = useRef(loadDoc(sessionId));
@@ -844,6 +879,23 @@ window.__ModuleLoader__.load({
         if (!lead) return;
         centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2);
       };
+
+      // The world origin is padded, so the initial viewport would otherwise show
+      // empty space. Centre on the entry Lead the first time the pane mounts.
+      const didCenter = useRef(false);
+      useEffect(() => {
+        if (didCenter.current) return;
+        const lead = nodesRef.current.find((n) => n.id === 'lead');
+        if (!lead) return;
+        didCenter.current = true;
+        const raf = typeof requestAnimationFrame === 'function'
+          ? requestAnimationFrame(() => centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2))
+          : setTimeout(() => centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2), 0);
+        return () => {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(raf);
+          else clearTimeout(raf);
+        };
+      }, []);
 
       // Snapshot before every structural change so a mis-click can be undone.
       const pushSnapshot = () => {
@@ -1125,20 +1177,31 @@ window.__ModuleLoader__.load({
         })) : []);
         setSelectedIds([]);
         setStatusById({});
+        const lead = doc.nodes.find((n) => n.id === 'lead') || doc.nodes[0];
+        if (lead) {
+          const lx = typeof lead.x === 'number' ? lead.x : 60;
+          const ly = typeof lead.y === 'number' ? lead.y : 80;
+          setTimeout(() => centerOn(lx + NODE_W / 2, ly + NODE_H / 2), 0);
+        }
         return true;
       };
 
       // The Host writes generated canvases where the workspace Remote can read
       // them; polling that file is the only Host -> canvas channel available.
+      const AUTO_CANVAS = false;
       useEffect(() => {
-        const remote = hostCtx && hostCtx.remote;
-        if (!remote || !remote.workspaceFiles || !sessionId) return undefined;
+        if (!AUTO_CANVAS) return undefined;
+        let remote;
+        try { remote = hostCtx && hostCtx.remote; } catch (_e) { remote = undefined; }
+        let wf;
+        try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
+        if (!wf || typeof wf.read !== 'function' || !sessionId) return undefined;
         const path = '.dsh/canvas/' + sessionId + '.json';
         let alive = true;
         let lastText = '';
         const tick = async () => {
           try {
-            const res = await remote.workspaceFiles.read(sessionId, path, {}, new AbortController().signal);
+            const res = await wf.read(sessionId, path, {}, new AbortController().signal);
             if (!alive) return;
             const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
             const text = payload && (typeof payload.text === 'string' ? payload.text : '');
@@ -1572,7 +1635,7 @@ window.__ModuleLoader__.load({
           scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
             name: 'sidebar.right.pane.tab',
             key: TAB_ID,
-          }, WorkflowCanvas)), 'workflow-canvas: tab body');
+          }, (props) => h(CanvasBoundary, null, h(WorkflowCanvas, props)))), 'workflow-canvas: tab body');
         });
       },
       __test: { topoOrder, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY },
