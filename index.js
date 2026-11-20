@@ -260,6 +260,108 @@ async function spawnNode(scope, plan, node, results, parent, signal) {
   return retry.text + '\n（重试仍失败：' + (retry.reason || 'unknown') + '）';
 }
 
+/** Ids reachable from the entry Lead; every other node is skipped at run time. */
+function reachableFrom(plan) {
+  const set = new Set(['lead']);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const e of plan.edges || []) {
+      if (set.has(e.from) && !set.has(e.to)) { set.add(e.to); grew = true; }
+    }
+  }
+  return set;
+}
+
+/**
+ * Turn a model-authored sketch into a canvas document: assign ids, add the entry
+ * Lead, and lay the graph out in columns by depth so it is readable on arrival.
+ */
+function normalizeCanvas(args) {
+  const rawNodes = Array.isArray(args && args.nodes) ? args.nodes : [];
+  const rawEdges = Array.isArray(args && args.edges) ? args.edges : [];
+  if (!rawNodes.length) return { error: '至少需要一个节点' };
+
+  const nodes = [];
+  const idByRef = new Map();
+  let counter = 0;
+  for (const raw of rawNodes) {
+    if (!raw || typeof raw !== 'object') continue;
+    counter += 1;
+    const kind = raw.kind === 'lead' ? 'lead' : 'agent';
+    const wantsEntry = raw.entry === true && kind === 'lead';
+    const id = wantsEntry
+      ? 'lead'
+      : (typeof raw.id === 'string' && raw.id && raw.id !== 'lead' ? raw.id : 'n' + counter);
+    const label = String(raw.label || (kind === 'lead' ? 'Lead 步骤 ' + counter : 'Node ' + counter));
+    nodes.push({
+      id,
+      kind,
+      label,
+      role: String(raw.role || ''),
+      task: String(raw.task || ''),
+      provider: String(raw.provider || ''),
+      model: String(raw.model || ''),
+      reasoning: String(raw.reasoning || ''),
+      preset: String(raw.preset || ''),
+      structured: Boolean(raw.structured),
+      keepSession: Boolean(raw.keepSession),
+      fallbackModel: String(raw.fallbackModel || ''),
+      fallbackProvider: String(raw.fallbackProvider || ''),
+      x: 0,
+      y: 0,
+    });
+    if (raw.ref) idByRef.set(String(raw.ref), id);
+    idByRef.set(id, id);
+  }
+  if (!nodes.length) return { error: '节点都无效' };
+
+  const entry = nodes.find((n) => n.id === 'lead');
+  if (!entry) {
+    nodes.unshift({
+      id: 'lead', kind: 'lead', label: 'Lead（本对话）', role: '',
+      task: String(args.task || ''), provider: '', model: '', reasoning: '',
+      preset: '', structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
+      x: 0, y: 0,
+    });
+  } else if (!entry.task) {
+    entry.task = String(args.task || '');
+  }
+
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = [];
+  for (const raw of rawEdges) {
+    if (!raw || typeof raw !== 'object') continue;
+    const from = idByRef.get(String(raw.from)) || String(raw.from);
+    const to = idByRef.get(String(raw.to)) || String(raw.to);
+    if (!ids.has(from) || !ids.has(to) || from === to) continue;
+    const type = ['prompt', 'structured', 'session-ref'].includes(raw.type) ? raw.type : 'prompt';
+    edges.push({ id: 'e' + edges.length, from, to, type });
+  }
+
+  // Layout: depth of the longest path from the entry, then stack per column.
+  const depth = new Map(nodes.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
+  for (let pass = 0; pass < nodes.length; pass += 1) {
+    let changed = false;
+    for (const e of edges) {
+      if (e.to === 'lead') continue;
+      const next = Math.min(nodes.length, depth.get(e.from) + 1);
+      if (next > depth.get(e.to)) { depth.set(e.to, next); changed = true; }
+    }
+    if (!changed) break;
+  }
+  const perColumn = new Map();
+  for (const node of nodes) {
+    const level = depth.get(node.id) || 0;
+    const row = perColumn.get(level) || 0;
+    perColumn.set(level, row + 1);
+    node.x = 60 + level * 300;
+    node.y = 80 + row * 230;
+  }
+
+  return { nodes, edges, task: String(args.task || '') };
+}
+
 async function runPlan(scope, args, exec) {
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
@@ -372,6 +474,92 @@ export function apply(ctx) {
         }), 'workflow-canvas: sync command');
       } catch (_e) {
         /* command registry unavailable */
+      }
+    });
+
+    ctx.inject(['tools', 'subagents'], (scope) => {
+      try {
+        scope.effect(() => scope.tools.register({
+          name: 'canvas_generate',
+          description: 'Build a workflow canvas for this session from a node/edge sketch. Returns a canvas document that the user imports with the canvas "Import" button (the canvas cannot receive data from the Host directly).',
+          parameters: {
+            type: 'object',
+            properties: {
+              task: { type: 'string', description: 'Overall task written into the entry Lead node.' },
+              nodes: {
+                type: 'array',
+                description: 'Nodes in any order. Give each an id or ref so edges can point at it.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    ref: { type: 'string', description: 'Temporary handle for edges; the tool assigns the real id.' },
+                    kind: { type: 'string', enum: ['agent', 'lead'] },
+                    label: { type: 'string' },
+                    role: { type: 'string' },
+                    task: { type: 'string' },
+                    provider: { type: 'string' },
+                    model: { type: 'string' },
+                    reasoning: { type: 'string' },
+                    preset: { type: 'string' },
+                    structured: { type: 'boolean' },
+                    keepSession: { type: 'boolean' },
+                    fallbackModel: { type: 'string' },
+                  },
+                },
+              },
+              edges: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    from: { type: 'string' },
+                    to: { type: 'string' },
+                    type: { type: 'string', enum: ['prompt', 'structured', 'session-ref'] },
+                  },
+                  required: ['from', 'to'],
+                },
+              },
+            },
+            required: ['nodes'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                canvas: { type: 'object' },
+                error: { type: 'string' },
+              },
+            },
+            render: (_args, value) => {
+              const v = value || {};
+              if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
+              const canvas = v.canvas || {};
+              const nodes = Array.isArray(canvas.nodes) ? canvas.nodes : [];
+              const edges = Array.isArray(canvas.edges) ? canvas.edges : [];
+              const lines = nodes.map((n) => '- ' + (n.kind === 'lead' ? '〔Lead〕' : '') + n.label
+                + (n.role ? '：' + n.role : ''));
+              return [{
+                type: 'text',
+                text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线\n'
+                  + lines.join('\n')
+                  + '\n\n**下一步**：点画布工具栏的「⇩ 导入」，它会把这段画布数据装进当前画布。\n```json canvas\n'
+                  + JSON.stringify(canvas) + '\n```',
+              }];
+            },
+          },
+          execute: (args) => {
+            try {
+              const result = normalizeCanvas(args || {});
+              if (result.error) return { error: result.error };
+              return { canvas: { nodes: result.nodes, edges: result.edges } };
+            } catch (error) {
+              return { error: String((error && error.message) || error) };
+            }
+          },
+        }), 'workflow-canvas: generate tool');
+      } catch (_e) {
+        /* tool registry unavailable */
       }
     });
 

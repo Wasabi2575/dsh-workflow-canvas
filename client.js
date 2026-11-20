@@ -56,6 +56,11 @@ window.__ModuleLoader__.load({
         tipResetZoom: '回到 100% 并把画面中心拉到 Lead 节点',
         tipLocate: '把画面中心拉到 Lead（本对话）节点',
         locate: '◎ 定位',
+        importBtn: '⇩ 导入',
+        tipImport: '从剪贴板导入模型生成的画布（先复制聊天里的画布 JSON）',
+        importOk: '已导入画布，共 ',
+        importNone: '剪贴板里没有可识别的画布数据',
+        importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
@@ -87,6 +92,11 @@ window.__ModuleLoader__.load({
         tipResetZoom: 'Reset to 100% and centre the view on the Lead node',
         tipLocate: 'Centre the view on the Lead (this conversation) node',
         locate: '◎ Locate',
+        importBtn: '⇩ Import',
+        tipImport: 'Import a model-generated canvas from the clipboard (copy the canvas JSON from chat first)',
+        importOk: 'Canvas imported, ',
+        importNone: 'No canvas data found in the clipboard',
+        importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
@@ -1098,6 +1108,41 @@ window.__ModuleLoader__.load({
         flash(t('savedPreset') + ': ' + name);
       };
 
+      const importFromClipboard = () => {
+        const finish = (text) => {
+          if (!text) { flash(t('importNone')); return; }
+          let doc;
+          try {
+            const start = text.indexOf('{');
+            const end = text.lastIndexOf('}');
+            doc = JSON.parse(text.slice(start, end + 1));
+          } catch (_e) { flash(t('importBad')); return; }
+          if (!doc || !Array.isArray(doc.nodes) || !doc.nodes.length) { flash(t('importBad')); return; }
+          pushSnapshot();
+          setNodes(doc.nodes.map((n, i) => ({
+            ...n,
+            x: typeof n.x === 'number' ? n.x : 60 + i * 300,
+            y: typeof n.y === 'number' ? n.y : 80,
+          })));
+          setEdges(Array.isArray(doc.edges) ? doc.edges.map((e, i) => ({
+            id: e.id || 'e' + i,
+            from: e.from,
+            to: e.to,
+            type: e.type || 'prompt',
+          })) : []);
+          setSelectedIds([]);
+          setStatusById({});
+          flash(t('importOk') + doc.nodes.length);
+        };
+        try {
+          if (navigator.clipboard && navigator.clipboard.readText) {
+            navigator.clipboard.readText().then(finish, () => flash(t('importNone')));
+            return;
+          }
+        } catch (_e) { /* fall through */ }
+        flash(t('importNone'));
+      };
+
       const applyPreset = (name) => {
         const preset = presets[name];
         if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash(t('invalidPreset')); return; }
@@ -1249,6 +1294,12 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipSync'),
           }, t('sync')),
+          h('button', {
+            style: S.btn,
+            onClick: importFromClipboard,
+            type: 'button',
+            title: t('tipImport'),
+          }, t('importBtn')),
           h('button', {
             style: S.btn,
             onClick: focusLead,
