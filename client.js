@@ -8,6 +8,9 @@ window.__ModuleLoader__.load({
     const useEffect = React.useEffect;
     const Component = React.Component;
 
+    /** Set once the `remote.workspaceFiles` service resolves; see apply(). */
+    let workspaceFilesService = null;
+
     const TAB_ID = '@local/dsh-workflow-canvas';
     const KIND = 'workflow';
     const STORAGE_PREFIX = 'dsh-workflow-canvas:v1:';
@@ -1195,8 +1198,10 @@ window.__ModuleLoader__.load({
         if (!AUTO_CANVAS) return undefined;
         let remote;
         try { remote = hostCtx && hostCtx.remote; } catch (_e) { remote = undefined; }
-        let wf;
-        try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
+        let wf = workspaceFilesService;
+        if (!wf) {
+          try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
+        }
         if (!wf || typeof wf.read !== 'function') { setSyncNote('自动同步不可用'); return undefined; }
         if (!sessionId) { setSyncNote('无会话 id'); return undefined; }
         // The Host names the file after the agent id (session-<uuid>); the
@@ -1643,6 +1648,15 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'sessions', 'remote', 'remote.session', 'sidebarRight'],
       apply(ctx) {
         hostCtx = ctx;
+        try {
+          ctx.inject(['remote.workspaceFiles'], (scope) => {
+            try {
+              workspaceFilesService = scope['remote.workspaceFiles']
+                || (scope.remote && scope.remote.workspaceFiles)
+                || null;
+            } catch (_e) { /* service differs across versions */ }
+          });
+        } catch (_e) { /* namespace not offered by this host */ }
         ctx.inject(['sidebarRightTabs'], (scope) => {
           scope.effect(() => scope.sidebarRightTabs.register({
             id: TAB_ID,
