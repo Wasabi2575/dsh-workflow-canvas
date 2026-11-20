@@ -19,6 +19,8 @@ window.__ModuleLoader__.load({
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
+    /** World origin offset: keeps negative node coordinates inside the scroll area. */
+    const WORLD_PAD = 2000;
 
     // One socket per channel type: a link can only join the same type.
     const SOCKET_TYPES = [
@@ -321,8 +323,8 @@ window.__ModuleLoader__.load({
     function edgePath(from, to, type) {
       const idx = Math.max(0, SOCKET_TYPES.findIndex((t) => t.id === type));
       const y = socketCenterY(idx);
-      const x1 = from.x + NODE_W, y1 = from.y + y;
-      const x2 = to.x, y2 = to.y + y;
+      const x1 = from.x + WORLD_PAD + NODE_W, y1 = from.y + WORLD_PAD + y;
+      const x2 = to.x + WORLD_PAD, y2 = to.y + WORLD_PAD + y;
       const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
       return 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2;
     }
@@ -787,7 +789,10 @@ window.__ModuleLoader__.load({
       const pointTo = (e) => {
         const rect = contentRef.current.getBoundingClientRect();
         const k = viewRef.current.k || 1;
-        return { x: (e.clientX - rect.left) / k, y: (e.clientY - rect.top) / k };
+        return {
+          x: (e.clientX - rect.left) / k - WORLD_PAD,
+          y: (e.clientY - rect.top) / k - WORLD_PAD,
+        };
       };
 
       // Snapshot before every structural change so a mis-click can be undone.
@@ -1148,8 +1153,8 @@ window.__ModuleLoader__.load({
 
       // The canvas grows with its nodes so links past the original size are
       // still painted instead of being clipped by the SVG viewport.
-      const contentW = Math.max(CONTENT_W, ...nodes.map((n) => n.x + NODE_W + 400));
-      const contentH = Math.max(CONTENT_H, ...nodes.map((n) => n.y + NODE_H + 400));
+      const contentW = Math.max(CONTENT_W, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.x + NODE_W)) + 400);
+      const contentH = Math.max(CONTENT_H, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.y + NODE_H)) + 400);
 
       const hitTest = (m) => {
         const left = Math.min(m.x1, m.x2);
@@ -1228,7 +1233,7 @@ window.__ModuleLoader__.load({
             })(),
           ),
         ),
-        h('div', { ref: canvasElRef, style: S.canvas },
+        h('div', { ref: canvasElRef, style: S.canvas, onMouseDown: onCanvasDown },
           h('div', {
             ref: contentRef,
             style: {
@@ -1236,13 +1241,12 @@ window.__ModuleLoader__.load({
               transform: 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')',
               transformOrigin: '0 0',
             },
-            onMouseDown: onCanvasDown,
           },
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
               h('g', null, edgeEls),
               marquee && h('rect', {
-                x: Math.min(marquee.x1, marquee.x2),
-                y: Math.min(marquee.y1, marquee.y2),
+                x: Math.min(marquee.x1, marquee.x2) + WORLD_PAD,
+                y: Math.min(marquee.y1, marquee.y2) + WORLD_PAD,
                 width: Math.abs(marquee.x2 - marquee.x1),
                 height: Math.abs(marquee.y2 - marquee.y1),
                 fill: 'rgba(47,129,247,0.12)',
@@ -1252,7 +1256,7 @@ window.__ModuleLoader__.load({
               }),
               pending && (() => {
                 const color = (SOCKET_TYPES.find((t) => t.id === pending.type) || SOCKET_TYPES[0]).color;
-                const d = 'M ' + pending.sx + ' ' + pending.sy + ' L ' + pending.x + ' ' + pending.y;
+                const d = 'M ' + (pending.sx + WORLD_PAD) + ' ' + (pending.sy + WORLD_PAD) + ' L ' + (pending.x + WORLD_PAD) + ' ' + (pending.y + WORLD_PAD);
                 return h('path', { d, stroke: color, strokeWidth: 2, strokeDasharray: '4 4', fill: 'none' });
               })(),
             ),
@@ -1275,7 +1279,7 @@ window.__ModuleLoader__.load({
                 key: node.id,
                 style: selectedIds.includes(node.id)
                   ? { ...S.node, left: node.x, top: node.y, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
-                  : { ...S.node, left: node.x, top: node.y, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
+                  : { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
                 title: isOrphan ? '未连线：运行时会被跳过' : undefined,
                 onMouseDown: (e) => onNodeDown(e, node.id),
               },
