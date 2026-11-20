@@ -31,9 +31,9 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 204;
+    const NODE_H = 252;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 140;
+    const SOCKET_BAND_TOP = 196;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
@@ -74,7 +74,9 @@ window.__ModuleLoader__.load({
         model: '模型', reason: '推理', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
         memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
-        sep: ': ', on: '开', off: '关', allTools: '默认',
+        sep: ': ', on: '开', off: '关', allTools: '默认（全部工具）', none: '无',
+        scopeMinimal: 'minimal（只读、少工具）', scopeStandard: 'standard（标准工具集）',
+        fallbackModel: '备用模型',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
         presetEmpty: '还没有保存过预设', del: '删除这个预设',
@@ -126,7 +128,9 @@ window.__ModuleLoader__.load({
         model: 'Model', reason: 'Reasoning', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
         memory: 'Memory', scope: 'Scope', retry: 'Retry', jsonOut: 'JSON out',
-        sep: ': ', on: 'on', off: 'off', allTools: 'default',
+        sep: ': ', on: 'on', off: 'off', allTools: 'default (all tools)', none: 'none',
+        scopeMinimal: 'minimal (read-only)', scopeStandard: 'standard (usual tools)',
+        fallbackModel: 'Fallback',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
         stOrphan: 'Unlinked', stLead: 'Runs in chat',
         presetEmpty: 'No presets saved yet', del: 'Delete this preset',
@@ -270,9 +274,12 @@ window.__ModuleLoader__.load({
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
       },
 
-      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '30px', height: '26px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '58px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '86px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '30px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '56px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldScope: { position: 'absolute', left: '10px', right: '10px', top: '82px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '108px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '134px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '160px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       optRow: {
         position: 'absolute', left: '10px', right: '10px', top: '114px', height: '18px',
@@ -280,6 +287,16 @@ window.__ModuleLoader__.load({
         overflow: 'hidden',
       },
 
+      toggleSwitch: {
+        flex: '0 0 auto', width: '46px', padding: '3px 6px', borderRadius: '5px',
+        border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
+        fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
+      },
+      toggleSwitchOn: {
+        flex: '0 0 auto', width: '46px', padding: '3px 6px', borderRadius: '5px',
+        border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
+        fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
+      },
       optChip: {
         flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
         border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
@@ -1371,6 +1388,57 @@ window.__ModuleLoader__.load({
         return (found && (found.name || found.id)) || node.reasoning;
       };
 
+      /** A dropdown row built from plain options: { value, label }. */
+      const selectControl = (node, key, current, options, onPick) => {
+        const isOpen = openModelFor === key + node.id;
+        const rows = options.map((option) => h('div', {
+          key: option.value || 'none',
+          style: option.value === current ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+          onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+          onClick: () => { onPick(option.value); setOpenModelFor(null); },
+        }, option.label));
+        const shown = options.find((option) => option.value === current);
+        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+          h('button', {
+            style: S.selectBtn,
+            type: 'button',
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: () => setOpenModelFor(isOpen ? null : key + node.id),
+          },
+            h('span', { style: S.selectText }, shown ? shown.label : current),
+            h('span', { style: S.caret }, '▾'),
+          ),
+          isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
+        );
+      };
+
+      const scopeControl = (node) => selectControl(node, 'p:', node.preset || '', [
+        { value: '', label: t('allTools') },
+        { value: 'minimal', label: t('scopeMinimal') },
+        { value: 'standard', label: t('scopeStandard') },
+      ], (value) => updateNode(node.id, { preset: value }));
+
+      const fallbackControl = (node) => selectControl(
+        node, 'f:', node.fallbackModel,
+        [{ value: '', label: t('none') }].concat(models.map((m) => ({
+          value: m.model,
+          label: (m.modelName || m.model) + (m.providerName ? ' · ' + m.providerName : ''),
+        }))),
+        (value) => {
+          const hit = models.find((m) => m.model === value);
+          updateNode(node.id, { fallbackModel: hit ? hit.model : '', fallbackProvider: hit ? hit.provider : '' });
+        },
+      );
+
+      const memoryToggle = (node) => h('button', {
+        style: node.keepSession ? S.toggleSwitchOn : S.toggleSwitch,
+        type: 'button',
+        title: t('tipMemory'),
+        onMouseDown: (e) => e.stopPropagation(),
+        onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
+      }, node.keepSession ? t('on') : t('off'));
+
       const reasoningControl = (node) => {
         const key = 'r:' + node.id;
         const isOpen = openModelFor === key;
@@ -1673,39 +1741,19 @@ window.__ModuleLoader__.load({
                         h('span', { style: S.fieldLabel }, t('reason')),
                         reasoningControl(node),
                       ),
+                      h('div', { style: S.fieldScope },
+                        h('span', { style: S.fieldLabel }, t('scope')),
+                        scopeControl(node),
+                      ),
+                      h('div', { style: S.fieldFallback },
+                        h('span', { style: S.fieldLabel }, t('fallbackModel')),
+                        fallbackControl(node),
+                      ),
+                      h('div', { style: S.fieldMemory },
+                        h('span', { style: S.fieldLabel }, t('memory')),
+                        memoryToggle(node),
+                      ),
                     ),
-                !isEntry && !isLeadKind && h('div', { style: S.optRow },
-  h('button', {
-                      style: node.keepSession ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                      type: 'button',
-                      title: t('tipMemory'),
-                      onMouseDown: (e) => e.stopPropagation(),
-                      onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-                    }, t('memory') + t('sep') + (node.keepSession ? t('on') : t('off'))),
-  h('button', {
-                      style: node.preset ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                      type: 'button',
-                      title: t('tipPreset'),
-                      onMouseDown: (e) => e.stopPropagation(),
-                      onClick: () => {
-                        const cycle = ['', 'minimal', 'standard'];
-                        const next = cycle[(cycle.indexOf(node.preset || '') + 1) % cycle.length];
-                        updateNode(node.id, { preset: next });
-                      },
-                    }, t('scope') + t('sep') + (node.preset || t('allTools'))),
-  h('button', {
-                      style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                      type: 'button',
-                      title: node.fallbackModel ? t('tipFallback') + ': ' + node.fallbackModel : t('tipFallback'),
-                      onMouseDown: (e) => e.stopPropagation(),
-                      onClick: () => {
-                        if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
-                        const first = models[0];
-                        if (!first) { flash(t('modelsMissing')); return; }
-                        updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
-                      },
-                    }, t('retry') + t('sep') + (node.fallbackModel ? t('on') : t('off'))),
-                ),
                 selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
                   title: t('delNodeTip'),
