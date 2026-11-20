@@ -288,14 +288,14 @@ window.__ModuleLoader__.load({
       },
 
       toggleSwitch: {
-        flex: '1 1 auto', width: '100%', height: '22px', boxSizing: 'border-box', padding: '0 6px', borderRadius: '5px',
-        border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
-        fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
+        flex: '1 1 auto', width: '100%', height: '18px', boxSizing: 'border-box', padding: '0 5px', borderRadius: '4px',
+        border: '1px solid ' + C.border, background: C.base, color: C.text,
+        fontSize: '10px', cursor: 'pointer', outline: 'none', textAlign: 'center', lineHeight: '14px',
       },
       toggleSwitchOn: {
-        flex: '1 1 auto', width: '100%', height: '22px', boxSizing: 'border-box', padding: '0 6px', borderRadius: '5px',
-        border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
-        fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
+        flex: '1 1 auto', width: '100%', height: '18px', boxSizing: 'border-box', padding: '0 5px', borderRadius: '4px',
+        border: '1px solid ' + C.accent, background: C.base, color: C.accent,
+        fontSize: '10px', cursor: 'pointer', outline: 'none', textAlign: 'center', lineHeight: '14px',
       },
       optChip: {
         flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
@@ -309,11 +309,22 @@ window.__ModuleLoader__.load({
         fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
         outline: 'none',
       },
-      fieldLabel: { flex: '0 0 32px', width: '32px', fontSize: '10px', color: C.dim },
+      fieldLabel: { flex: '0 0 30px', width: '30px', fontSize: '9px', color: C.dim },
 
       input: {
         flex: '1 1 auto', minWidth: '0', padding: '3px 6px', borderRadius: '5px',
         border: '1px solid ' + C.border, background: C.base, color: C.text, fontSize: '12px',
+        outline: 'none', userSelect: 'text',
+      },
+      rolePopover: {
+        position: 'absolute', left: '100%', top: '0', marginLeft: '8px', width: '230px',
+        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
+        boxShadow: '0 10px 26px rgba(0,0,0,0.45)', padding: '8px', zIndex: 70,
+      },
+      roleArea: {
+        width: '100%', height: '96px', boxSizing: 'border-box', resize: 'none',
+        background: C.base, color: C.text, fontSize: '11px', lineHeight: '15px',
+        border: '1px solid ' + C.border, borderRadius: '5px', padding: '5px 6px',
         outline: 'none', userSelect: 'text',
       },
       leadLabel: { position: 'absolute', left: '10px', right: '10px', top: '26px', height: '16px', display: 'flex', alignItems: 'center' },
@@ -325,11 +336,11 @@ window.__ModuleLoader__.load({
       },
 
       selectBtn: {
-        flex: '1 1 auto', minWidth: '0', width: '100%', height: '22px', boxSizing: 'border-box',
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '0 6px', borderRadius: '5px', border: '1px solid ' + C.border,
-        background: C.base, color: C.text, fontSize: '11px', cursor: 'pointer', textAlign: 'left',
-        lineHeight: '16px',
+        flex: '1 1 auto', minWidth: '0', width: '100%', height: '18px', boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', gap: '4px',
+        padding: '0 5px', borderRadius: '4px', border: '1px solid ' + C.border,
+        background: C.base, color: C.text, fontSize: '10px', cursor: 'pointer', textAlign: 'left',
+        lineHeight: '14px',
       },
       reasonChip: {
         flex: '0 0 auto', maxWidth: '44px', padding: '3px 4px', borderRadius: '5px',
@@ -348,6 +359,9 @@ window.__ModuleLoader__.load({
       menuRow: {
         padding: '6px 8px', borderRadius: '4px', fontSize: '12px', cursor: 'pointer',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      },
+      menuRow: {
+        padding: '3px 7px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
       },
       menuHead: { padding: '6px 8px 2px', fontSize: '10px', color: C.dim, textTransform: 'uppercase', letterSpacing: '0.04em' },
 
@@ -713,6 +727,7 @@ window.__ModuleLoader__.load({
       const [marquee, setMarquee] = useState(null);
       const [dragging, setDragging] = useState(false);
       const [syncNote, setSyncNote] = useState('');
+      const [roleEditFor, setRoleEditFor] = useState(null);
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -1187,6 +1202,7 @@ window.__ModuleLoader__.load({
 
       const onCanvasDown = (e) => {
         if (e.button !== 0) return;
+        if (roleEditFor) setRoleEditFor(null);
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
         const p = pointTo(e);
@@ -1799,7 +1815,31 @@ window.__ModuleLoader__.load({
                         h('span', { style: S.fieldLabel }, t('memory')),
                         memoryToggle(node),
                       ),
-                      roleInput(S.fieldRole),
+                      h('div', { style: S.fieldRole },
+                        h('span', { style: S.fieldLabel }, t('role')),
+                        h('button', {
+                          style: S.selectBtn,
+                          type: 'button',
+                          title: t('rolePhAgent'),
+                          onMouseDown: (e) => e.stopPropagation(),
+                          onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                        },
+                          h('span', { style: S.selectText }, node.role || t('rolePhAgent')),
+                          h('span', { style: S.caret }, '✎'),
+                        ),
+                      ),
+                      roleEditFor === node.id && h('div', {
+                        style: S.rolePopover,
+                        onMouseDown: (e) => e.stopPropagation(),
+                      },
+                        h('textarea', {
+                          style: S.roleArea,
+                          value: node.role || '',
+                          placeholder: t('rolePhAgent'),
+                          autoFocus: true,
+                          onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                        }),
+                      ),
                     ),
                 selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
