@@ -1,5 +1,5 @@
 # DSH Workflow Canvas
-
+- [中文说明](README.zh.md)
 Orchestrate subagent workflows from the DSH sidebar. Draw each step as a node, wire
 the data flow with three link types, enable it, and run it from chat — subagent nodes
 are spawned for real, Lead nodes pause the run and are performed by the conversation
@@ -10,8 +10,6 @@ tweak it in place afterwards with `canvas_patch`. Links make the flow obvious at
 glance — grey carries text, blue carries JSON, purple continues the upstream session.
 
 ![workflow canvas](docs/images/canvas-demo.png)
-
-- [中文说明](README.zh.md)
 
 ## Installation
 
