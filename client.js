@@ -1196,15 +1196,28 @@ window.__ModuleLoader__.load({
         let wf;
         try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
         if (!wf || typeof wf.read !== 'function' || !sessionId) return undefined;
-        const path = '.dsh/canvas/' + sessionId + '.json';
+        // The Host names the file after the agent id (session-<uuid>); the
+        // pane prop may carry either form, so try both.
+        const bare = String(sessionId).replace(/^session-/, '');
+        const paths = [
+          '.dsh/canvas/' + String(sessionId) + '.json',
+          '.dsh/canvas/session-' + bare + '.json',
+          '.dsh/canvas/' + bare + '.json',
+        ].filter((v, i, all) => all.indexOf(v) === i);
         let alive = true;
         let lastText = '';
         const tick = async () => {
           try {
-            const res = await wf.read(sessionId, path, {}, new AbortController().signal);
-            if (!alive) return;
-            const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
-            const text = payload && (typeof payload.text === 'string' ? payload.text : '');
+            let text = '';
+            for (const path of paths) {
+              try {
+                const res = await wf.read(sessionId, path, {}, new AbortController().signal);
+                if (!alive) return;
+                const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
+                const read = payload && (typeof payload.text === 'string' ? payload.text : '');
+                if (read) { text = read; break; }
+              } catch (_e) { /* try the next name */ }
+            }
             if (!text || text === lastText) return;
             lastText = text;
             const doc = JSON.parse(text);
