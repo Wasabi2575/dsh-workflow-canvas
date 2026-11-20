@@ -5,7 +5,7 @@ sidebar. Draw a graph, enable it, and ask the agent to run it — subagent nodes
 spawned for real, Lead nodes pause the run and are performed by the conversation
 itself.
 
-![node types](docs/images/node-types.svg)
+![workflow canvas](docs/images/canvas-demo.png)
 
 ## 中文简介
 
