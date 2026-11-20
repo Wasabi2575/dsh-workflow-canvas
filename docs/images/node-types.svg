@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="300" viewBox="0 0 920 300" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14161a"/>
+      <stop offset="1" stop-color="#0e1013"/>
+    </linearGradient>
+    <style>
+      .card { fill:#22252b; stroke:#3a3f47; stroke-width:1; rx:10; }
+      .title { fill:#e6e8eb; font-size:13px; font-weight:600; }
+      .label { fill:#8b9099; font-size:9px; }
+      .field { fill:#171a1f; stroke:#3a3f47; stroke-width:1; rx:4; }
+      .value { fill:#c9ced6; font-size:10px; }
+      .portlabel { fill:#8b9099; font-size:9px; }
+      .link { fill:none; stroke-width:2; }
+    </style>
+  </defs>
+
+  <rect width="920" height="300" fill="url(#bg)"/>
+
+  <!-- Lead node -->
+  <g transform="translate(40, 60)">
+    <rect class="card" width="216" height="176"/>
+    <path d="M0 10a10 10 0 0 1 10-10h196a10 10 0 0 1 10 10v2H0z" fill="#2f81f7"/>
+    <text class="title" x="12" y="32">Lead · 本对话</text>
+    <text class="label" x="12" y="54">任务</text>
+    <rect class="field" x="12" y="60" width="192" height="70"/>
+    <text class="value" x="18" y="76">把反馈分类，给出建议，</text>
+    <text class="value" x="18" y="92">最后我复核</text>
+
+    <text class="portlabel" x="96" y="150">prompt</text>
+    <text class="portlabel" x="96" y="166">structured</text>
+    <circle cx="206" cy="146" r="6" fill="#22252b" stroke="#8a8f98" stroke-width="2"/>
+    <circle cx="206" cy="162" r="6" fill="#22252b" stroke="#2f81f7" stroke-width="2"/>
+  </g>
+
+  <!-- link -->
+  <path class="link" stroke="#8a8f98" d="M246 206 C 296 206, 306 206, 356 206"/>
+  <path class="link" stroke="#2f81f7" d="M246 222 C 296 222, 306 222, 356 222"/>
+
+  <!-- Subagent node -->
+  <g transform="translate(356, 60)">
+    <rect class="card" width="216" height="176"/>
+    <path d="M0 10a10 10 0 0 1 10-10h196a10 10 0 0 1 10 10v2H0z" fill="#3fb950"/>
+    <text class="title" x="12" y="32">分类</text>
+
+    <text class="label" x="12" y="52">模型</text>
+    <rect class="field" x="42" y="42" width="162" height="18"/>
+    <text class="value" x="48" y="55">DeepSeek-V4-Flash ▾</text>
+
+    <text class="label" x="12" y="74">推理</text>
+    <rect class="field" x="42" y="64" width="162" height="18"/>
+    <text class="value" x="48" y="77">默认 ▾</text>
+
+    <text class="label" x="12" y="96">能力</text>
+    <rect class="field" x="42" y="86" width="162" height="18"/>
+    <text class="value" x="48" y="99">standard ▾</text>
+
+    <text class="label" x="12" y="118">备用</text>
+    <rect class="field" x="42" y="108" width="162" height="18"/>
+    <text class="value" x="48" y="121">无 ▾</text>
+
+    <text class="label" x="12" y="140">记忆</text>
+    <rect class="field" x="42" y="130" width="162" height="18"/>
+    <text class="value" x="48" y="143">关</text>
+
+    <text class="portlabel" x="96" y="150">prompt</text>
+    <text class="portlabel" x="96" y="166">structured</text>
+    <circle cx="0" cy="146" r="6" fill="#22252b" stroke="#8a8f98" stroke-width="2"/>
+    <circle cx="0" cy="162" r="6" fill="#22252b" stroke="#2f81f7" stroke-width="2"/>
+    <circle cx="206" cy="146" r="6" fill="#22252b" stroke="#8a8f98" stroke-width="2"/>
+    <circle cx="206" cy="162" r="6" fill="#22252b" stroke="#a371f7" stroke-width="2"/>
+  </g>
+
+  <!-- legend -->
+  <g transform="translate(620, 96)">
+    <rect class="card" width="260" height="120"/>
+    <text class="title" x="14" y="24" font-size="12">节点与连线</text>
+    <rect x="14" y="38" width="10" height="4" fill="#2f81f7"/>
+    <text class="value" x="32" y="45">Lead：对话本体执行，不新开子代理</text>
+    <rect x="14" y="60" width="10" height="4" fill="#3fb950"/>
+    <text class="value" x="32" y="67">Subagent：真正 spawn 子代理</text>
+    <circle cx="19" cy="88" r="5" fill="#22252b" stroke="#8a8f98" stroke-width="2"/>
+    <text class="value" x="32" y="92">prompt 灰 / structured 蓝 / session 紫</text>
+    <text class="label" x="14" y="110">端口同色才能相连</text>
+  </g>
+</svg>

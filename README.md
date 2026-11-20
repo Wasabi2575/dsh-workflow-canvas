@@ -5,7 +5,7 @@ sidebar. Draw a graph, enable it, and ask the agent to run it — subagent nodes
 spawned for real, Lead nodes pause the run and are performed by the conversation
 itself.
 
-![node types](docs/images/node-types.png)
+![node types](docs/images/node-types.svg)
 
 ## 中文简介
 
@@ -102,3 +102,7 @@ tools, call the `skill` tool with name `workflow-canvas` first.
 
 Add that to the workspace `AGENTS.md` once per project and the agent will load
 the guide without being asked.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
