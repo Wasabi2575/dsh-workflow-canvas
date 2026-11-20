@@ -434,11 +434,8 @@ window.__ModuleLoader__.load({
         boxShadow: '0 8px 24px rgba(0,0,0,0.4)', zIndex: 50, padding: '4px',
       },
       menuRow: {
-        padding: '6px 8px', borderRadius: '4px', fontSize: '12px', cursor: 'pointer',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      },
-      menuRow: {
         padding: '3px 7px', borderRadius: '4px', fontSize: '10px', cursor: 'pointer',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       },
       menuHead: { padding: '6px 8px 2px', fontSize: '10px', color: C.dim, textTransform: 'uppercase', letterSpacing: '0.04em' },
 
