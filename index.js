@@ -125,7 +125,7 @@ function downstreamLabels(plan, node) {
     .filter(Boolean);
 }
 
-function briefFor(plan, node, results) {
+function briefFor(plan, node, results, failedMap) {
   const ups = upstreamOf(plan, node);
   const downs = downstreamLabels(plan, node);
   const head = [];
@@ -140,14 +140,18 @@ function briefFor(plan, node, results) {
     const value = results[u.from.id];
     const type = u.edge.type || 'prompt';
     const body = typeof value === 'string' ? value : '（没有结果）';
+    const failInfo = failedMap && failedMap[u.from.id];
+    const warn = failInfo
+      ? '【警告：该上游节点执行失败（' + (failInfo.reason || 'unknown') + '），请勿将其报错当作正常结论，必要时说明受阻情况】\n'
+      : '';
     if (type === 'structured') {
-      text += '\n## 来自【' + u.from.label + '】的数据（JSON，可直接解析）\n```json\n'
+      text += '\n## 来自【' + u.from.label + '】的数据（JSON，可直接解析）\n' + warn + '```json\n'
         + body + '\n```\n';
     } else if (type === 'session-ref') {
-      text += '\n## 来自【' + u.from.label + '】的会话引用（当前按文本传递）\n'
+      text += '\n## 来自【' + u.from.label + '】的会话引用（当前按文本传递）\n' + warn
         + body + '\n';
     } else {
-      text += '\n## 来自【' + u.from.label + '】\n' + body + '\n';
+      text += '\n## 来自【' + u.from.label + '】\n' + warn + body + '\n';
     }
   }
   return text;
@@ -172,12 +176,12 @@ function failed(result) {
   return reason !== undefined && reason !== 'completed';
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid) {
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap) {
   const childKey = (id) => String(sid || '') + '::' + id;
   const spec = {
     provider: 'spawn',
     label: node.label + '#' + node.id,
-    prompt: [{ type: 'text', text: briefFor(plan, node, results) }],
+    prompt: [{ type: 'text', text: briefFor(plan, node, results, failedMap) }],
     parent,
     signal,
     delivery: 'caller',
@@ -190,7 +194,9 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   if (node.reasoning) agentOptions.reasoningEffort = node.reasoning;
   if (Object.keys(agentOptions).length) spec.agentOptions = agentOptions;
   if (node.preset) spec.agentPreset = node.preset;
-  if (node.structured) {
+  const wantsStructured = Boolean(node.structured)
+    || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
+  if (wantsStructured) {
     spec.outputSchema = {
       type: 'object',
       additionalProperties: true,
@@ -227,14 +233,16 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
 
   // A `session` edge means "continue the upstream node's conversation": run this
   // step inside that child session instead of starting a fresh one.
-  if (forcedChild && forcedChild !== liveChild.get(childKey(node.id))) {
-    try {
-      const continued = await run(forcedChild);
-      if (continued.ok) liveChild.set(childKey(node.id), forcedChild);
+  if (forcedChild) {
+    const continued = await run(forcedChild);
+    if (continued.ok) {
+      liveChild.set(childKey(node.id), forcedChild);
       return continued;
-    } catch (_e) {
-      /* fall through to a fresh session */
     }
+    if (continued.reason !== 'activation-failed') {
+      return continued;
+    }
+    /* activation refused (e.g. cold session gone): fall through to a fresh session */
   }
 
   // Memory: prefer the session created in this process, then the one persisted
@@ -263,28 +271,31 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   return started;
 }
 
-async function spawnNode(scope, plan, node, results, parent, signal, sid) {
+async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap) {
   const continueFrom = (plan.edges || [])
     .filter((e) => e.to === node.id && e.type === 'session-ref')
-    .map((e) => liveChild.get(String(sid || '') + '::' + e.from))
+    .map((e) => liveChild.get(String(sid || '') + '::' + e.from)
+      || childByNode.get(String(sid || '') + '::' + e.from))
     .find((id) => typeof id === 'string');
 
   if (continueFrom) {
-    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid);
-    if (continued.ok) return continued.text + '\n（已在上游会话中继续）';
+    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap);
+    if (continued.ok) return { ok: true, text: continued.text + '\n（已在上游会话中继续）' };
   }
 
-  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid);
-  if (first.ok) return first.text;
+  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap);
+  if (first.ok) return { ok: true, text: first.text };
   if (!node.fallbackModel && !node.fallbackProvider) {
-    return first.text + '\n（失败原因：' + (first.reason || 'unknown') + '，未配置备用模型）';
+    const reason = first.reason || 'unknown';
+    return { ok: false, reason, text: first.text + '\n（失败原因：' + reason + '，未配置备用模型）' };
   }
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
-  }, undefined, sid);
-  if (retry.ok) return retry.text + '\n（已用备用模型重试成功）';
-  return retry.text + '\n（重试仍失败：' + (retry.reason || 'unknown') + '）';
+  }, undefined, sid, failedMap);
+  if (retry.ok) return { ok: true, text: retry.text + '\n（已用备用模型重试成功）' };
+  const reason = retry.reason || 'unknown';
+  return { ok: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
 }
 
 /** Ids reachable from the entry Lead; every other node is skipped at run time. */
@@ -365,6 +376,10 @@ function normalizeCanvas(args) {
     const type = ['prompt', 'structured', 'session-ref'].includes(raw.type) ? raw.type : 'prompt';
     edges.push({ id: 'e' + edges.length, from, to, type });
   }
+  const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
+  for (const node of nodes) {
+    if (structuredSources.has(node.id)) node.structured = true;
+  }
 
   // Layout: depth of the longest path from the entry, then stack per column.
   const depth = new Map(nodes.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
@@ -387,6 +402,78 @@ function normalizeCanvas(args) {
   }
 
   return { nodes, edges, task: String(args.task || '') };
+}
+
+/**
+ * Apply an in-place patch to an existing plan: update/add/remove nodes and
+ * edges without losing untouched nodes. Preserves `'lead'` as a valid edge
+ * source so newly added branches can wire directly from the entry Lead.
+ */
+function applyPatch(plan, args) {
+  const nodes = withoutEntry(plan.nodes).map((n) => ({ ...n }));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'structured', 'fallbackModel', 'fallbackProvider'];
+  const touched = [];
+  for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
+    // 'lead' is the reserved entry node and is never edited here.
+    if (!patch || typeof patch.id !== 'string' || patch.id === 'lead') continue;
+    const existing = byId.get(patch.id);
+    if (existing) {
+      for (const key of ALLOWED) {
+        if (patch[key] !== undefined) existing[key] = patch[key];
+      }
+      touched.push(patch.id);
+    } else {
+      const created = {
+        id: patch.id,
+        kind: patch.kind === 'lead' ? 'lead' : 'agent',
+        label: patch.label || patch.id,
+        role: '', provider: '', model: '', reasoning: '', preset: 'standard',
+        structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
+      };
+      for (const key of ALLOWED) {
+        if (patch[key] !== undefined) created[key] = patch[key];
+      }
+      created.preset = created.preset === 'minimal' ? 'minimal' : 'standard';
+      nodes.push(created);
+      byId.set(created.id, created);
+      touched.push(created.id);
+    }
+  }
+  const removed = new Set(Array.isArray(args && args.removeNodes) ? args.removeNodes : []);
+  removed.delete('lead');
+  const keptNodes = nodes.filter((n) => !removed.has(n.id));
+  const keptIds = new Set(keptNodes.map((n) => n.id));
+  const rawRemoveEdges = Array.isArray(args && args.removeEdges) ? args.removeEdges : [];
+  const matchesRemovedEdge = (edge) => rawRemoveEdges.some((r) => r
+    && String(r.from) === edge.from
+    && String(r.to) === edge.to
+    && (!r.type || r.type === edge.type));
+  let edges = (Array.isArray(plan.edges) ? plan.edges : [])
+    .filter((e) => !matchesRemovedEdge(e) && !removed.has(e.from) && !removed.has(e.to))
+    .map((e) => ({ ...e }));
+  for (const edge of Array.isArray(args && args.edges) ? args.edges : []) {
+    if (!edge || typeof edge.from !== 'string' || typeof edge.to !== 'string') continue;
+    if (edge.from === edge.to || edge.to === 'lead') continue;
+    const validFrom = edge.from === 'lead' || keptIds.has(edge.from);
+    const validTo = keptIds.has(edge.to);
+    if (!validFrom || !validTo) continue;
+    const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
+    if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type)) continue;
+    edges.push({ from: edge.from, to: edge.to, type });
+  }
+  const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
+  for (const node of keptNodes) {
+    if (structuredSources.has(node.id)) node.structured = true;
+  }
+  return {
+    plan: { ...plan, nodes: keptNodes, edges },
+    touched,
+    removed: Array.from(removed),
+    removeEdges: rawRemoveEdges
+      .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
+      .map((r) => (r.type ? { from: r.from, to: r.to, type: r.type } : { from: r.from, to: r.to })),
+  };
 }
 
 /**
@@ -418,17 +505,67 @@ async function runPlan(scope, args, exec) {
   return executePlan(scope, payload.plan, args, exec);
 }
 
+function inspectPlan(sid) {
+  const payload = sid ? canvasBySession.get(sid) : undefined;
+  if (!payload) {
+    return {
+      hasCanvas: false,
+      enabled: false,
+      task: '',
+      nodes: [],
+      edges: [],
+      paused: false,
+    };
+  }
+  const plan = payload.plan || {};
+  const nodes = withoutEntry(plan.nodes).map((n) => ({
+    id: n.id,
+    kind: n.kind === 'lead' ? 'lead' : 'agent',
+    label: n.label || n.id,
+    role: n.role || '',
+    provider: n.provider || '',
+    model: n.model || '',
+    reasoning: n.reasoning || '',
+    preset: n.preset === 'minimal' ? 'minimal' : 'standard',
+    keepSession: Boolean(n.keepSession),
+    structured: Boolean(n.structured),
+    fallbackModel: n.fallbackModel || '',
+    fallbackProvider: n.fallbackProvider || '',
+  }));
+  const edges = Array.isArray(plan.edges) ? plan.edges.map((e) => ({
+    from: e.from,
+    to: e.to,
+    type: e.type || 'prompt',
+  })) : [];
+  return {
+    hasCanvas: true,
+    enabled: Boolean(payload.enabled),
+    task: String(plan.task || ''),
+    nodes,
+    edges,
+    paused: Boolean(sid && runBySession.has(sid)),
+    error: payload.error ? String(payload.error) : undefined,
+  };
+}
+
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
 async function executePlan(scope, plan, args, exec) {
+  const opts = args || {};
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
   if (!plan || !Array.isArray(plan.nodes) || !plan.nodes.length) {
     return { error: '画布没有可执行的节点。' };
   }
 
+  const overrideTask = typeof opts.task === 'string' ? opts.task.trim() : '';
+  const effectiveTask = overrideTask || String(plan.task || '').trim();
+  if (!effectiveTask) {
+    return { error: '请先在入口 Lead 节点填写「本次任务」，或在调用 canvas_workflow 时传入 task。' };
+  }
+
   // Backstop: no matter how a plan arrived (sync, generate, patch, a stale store),
   // the entry Lead is never executed.
-  plan = { ...plan, nodes: withoutEntry(plan.nodes) };
+  plan = { ...plan, task: effectiveTask, nodes: withoutEntry(plan.nodes) };
 
   const order = orderNodes(plan);
   if (!order) return { error: '存在环，无法执行有向无环图。' };
@@ -446,10 +583,14 @@ async function executePlan(scope, plan, args, exec) {
   const skipped = order.filter((n) => !reachable.has(n.id)).map((n) => n.label || n.id);
   if (!runnable.length) return { error: '没有从入口 Lead 连通的节点，无法执行。' };
 
+  if (opts.reset === true && sid) {
+    runBySession.delete(sid);
+  }
+
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   if (!state || state.sig !== sig) {
-    state = { sig, done: new Set(), results: {}, labels: {} };
+    state = { sig, done: new Set(), results: {}, labels: {}, failed: {} };
     runBySession.set(sid, state);
   }
 
@@ -460,7 +601,7 @@ async function executePlan(scope, plan, args, exec) {
     .map((e) => e.from)
     .filter((id) => byId.has(id));
 
-  let leadResult = typeof args.leadResult === 'string' ? args.leadResult : undefined;
+  let leadResult = typeof opts.leadResult === 'string' ? opts.leadResult : undefined;
   const MAX_PARALLEL = 4;
 
   for (;;) {
@@ -468,7 +609,13 @@ async function executePlan(scope, plan, args, exec) {
     if (!remaining.length) {
       runBySession.delete(sid);
       saveStore();
-      return { status: 'done', results: state.results, labels: state.labels, skipped };
+      return {
+        status: 'done',
+        results: state.results,
+        labels: state.labels,
+        failed: Object.values(state.failed),
+        skipped,
+      };
     }
 
     const ready = remaining.filter((n) => depsOf(n).every((id) => state.done.has(id)));
@@ -477,12 +624,16 @@ async function executePlan(scope, plan, args, exec) {
     const agentReady = ready.filter((n) => n.kind !== 'lead');
     if (agentReady.length) {
       const batch = agentReady.slice(0, MAX_PARALLEL);
-      const texts = await Promise.all(
-        batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal, sid)),
+      const outcomes = await Promise.all(
+        batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed)),
       );
       batch.forEach((node, i) => {
-        state.results[node.id] = texts[i];
+        const outcome = outcomes[i];
+        state.results[node.id] = outcome.text;
         state.labels[node.id] = node.label;
+        if (!outcome.ok) {
+          state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
+        }
         state.done.add(node.id);
       });
       continue;
@@ -500,6 +651,7 @@ async function executePlan(scope, plan, args, exec) {
         },
         results: state.results,
         labels: state.labels,
+        failed: Object.values(state.failed),
         sessions: depsOf(leadNode)
           .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
           .map((id) => ({
@@ -508,7 +660,7 @@ async function executePlan(scope, plan, args, exec) {
               || childByNode.get(String(sid || '') + '::' + id)
               || null,
           })),
-        hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续。',
+        hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
       };
     }
     state.results[leadNode.id] = leadResult;
@@ -520,7 +672,7 @@ async function executePlan(scope, plan, args, exec) {
 
 /** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
 const SKILL_NAME = 'workflow-canvas';
-const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排): draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_generate, canvas_patch or canvas_workflow.';
+const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排): inspect, draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.';
 function skillPath() {
   try {
     return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));
@@ -628,6 +780,7 @@ export function apply(ctx) {
                     structured: { type: 'boolean' },
                     keepSession: { type: 'boolean' },
                     fallbackModel: { type: 'string' },
+                    fallbackProvider: { type: 'string' },
                   },
                 },
               },
@@ -668,8 +821,8 @@ export function apply(ctx) {
                 text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线\n'
                   + lines.join('\n')
                   + (v.delivered
-                    ? '\n\n画布已经自动同步到右侧画布，直接看即可（若没出现，点画布上的「◎ 定位」）。'
-                    : '\n\n**下一步**：点画布工具栏的「⇩ 导入」，它会把这段画布数据装进当前画布。')
+                    ? '\n\n画布已经自动同步到右侧画布，直接看即可（若没出现，点画布上的「⊡ 全览」）。'
+                    : '\n\n**下一步**：点画布右上角「⋯ → ⇩ 导入」，它会把这段画布数据装进当前画布。')
                   + '\n```json canvas\n'
                   + JSON.stringify(canvas) + '\n```',
               }];
@@ -742,57 +895,19 @@ export function apply(ctx) {
               const sid = agent && agent.id !== undefined ? String(agent.id) : '';
               const payload = sid ? canvasBySession.get(sid) : undefined;
               if (!payload || !payload.plan) return { error: '当前会话还没有画布数据，先用「启用」同步一次。' };
-              const plan = payload.plan;
-              const nodes = withoutEntry(plan.nodes).slice();
-              const byId = new Map(nodes.map((n) => [n.id, n]));
-              const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'structured', 'fallbackModel', 'fallbackProvider'];
-              const touched = [];
-              for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
-                // 'lead' is the reserved entry node and is never edited here.
-                if (!patch || typeof patch.id !== 'string' || patch.id === 'lead') continue;
-                const existing = byId.get(patch.id);
-                if (existing) {
-                  for (const key of ALLOWED) {
-                    if (patch[key] !== undefined) existing[key] = patch[key];
-                  }
-                  touched.push(patch.id);
-                } else {
-                  const created = {
-                    id: patch.id,
-                    kind: patch.kind === 'lead' ? 'lead' : 'agent',
-                    label: patch.label || patch.id,
-                    role: '', provider: '', model: '', reasoning: '', preset: 'standard',
-                    structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
-                  };
-                  for (const key of ALLOWED) {
-                    if (patch[key] !== undefined) created[key] = patch[key];
-                  }
-                  created.preset = created.preset === 'minimal' ? 'minimal' : 'standard';
-                  nodes.push(created);
-                  byId.set(created.id, created);
-                  touched.push(created.id);
-                }
-              }
-              const removed = new Set(Array.isArray(args && args.removeNodes) ? args.removeNodes : []);
-              const keptNodes = nodes.filter((n) => !removed.has(n.id));
-              let edges = Array.isArray(plan.edges) ? plan.edges.slice() : [];
-              const dropEdges = new Set((Array.isArray(args && args.removeEdges) ? args.removeEdges : [])
-                .map((e) => String(e.from) + '>' + String(e.to)));
-              edges = edges.filter((e) => !dropEdges.has(e.from + '>' + e.to)
-                && !removed.has(e.from) && !removed.has(e.to));
-              for (const edge of Array.isArray(args && args.edges) ? args.edges : []) {
-                if (!edge || !byId.has(edge.from) || !byId.has(edge.to)) continue;
-                if (removed.has(edge.from) || removed.has(edge.to)) continue;
-                const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
-                if (edges.some((e) => e.from === edge.from && e.to === edge.to && e.type === type)) continue;
-                edges.push({ from: edge.from, to: edge.to, type });
-              }
-              const nextPlan = { ...plan, nodes: keptNodes, edges };
+              const patched = applyPatch(payload.plan, args);
+              const nextPlan = patched.plan;
               canvasBySession.set(sid, { enabled: payload.enabled, plan: nextPlan });
               runBySession.delete(sid);
               saveStore();
-              const delivered = publishCanvas(scope, sid, { mode: 'merge', nodes: keptNodes, edges, removeNodes: Array.from(removed) });
-              const summary = '已更新 ' + touched.length + ' 个节点、删除 ' + removed.size + ' 个、连线 ' + edges.length + ' 条';
+              const delivered = publishCanvas(scope, sid, {
+                mode: 'merge',
+                nodes: nextPlan.nodes,
+                edges: nextPlan.edges,
+                removeNodes: patched.removed,
+                removeEdges: patched.removeEdges,
+              });
+              const summary = '已更新 ' + patched.touched.length + ' 个节点、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条';
               return { delivered, summary };
             } catch (error) {
               return { error: String((error && error.message) || error) };
@@ -804,15 +919,82 @@ export function apply(ctx) {
       }
     });
 
+    ctx.inject(['tools'], (scope) => {
+      try {
+        scope.effect(() => scope.tools.register({
+          name: 'canvas_inspect',
+          description: 'Read the current session workflow canvas (enabled status, overall task, nodes with ids/models/roles, links, and whether a run is paused at a Lead step). Call this before canvas_patch when the user edited the canvas manually or loaded a preset.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                hasCanvas: { type: 'boolean' },
+                enabled: { type: 'boolean' },
+                task: { type: 'string' },
+                nodes: { type: 'array' },
+                edges: { type: 'array' },
+                paused: { type: 'boolean' },
+                error: { type: 'string' },
+              },
+            },
+            render: (_args, value) => {
+              const v = value || {};
+              if (!v.hasCanvas) {
+                return [{ type: 'text', text: '当前会话尚未同步画布。请让用户在右侧 Workflow 画布点「启用」或「同步」，或直接用 canvas_generate 生成新画布。' }];
+              }
+              const head = [
+                '画布状态：' + (v.enabled ? '● 已启用' : '○ 已禁用') + (v.paused ? '（当前暂停在 Lead 步骤）' : ''),
+                '总任务：' + (v.task || '（未填写，运行时可通过 task 参数指定）'),
+              ];
+              if (v.error) head.push('校验错误：' + v.error);
+              const nodeLines = (v.nodes || []).map((n) => {
+                const flags = [];
+                if (n.kind === 'lead') flags.push('Lead');
+                if (n.model) flags.push(n.model);
+                if (n.reasoning) flags.push('reasoning=' + n.reasoning);
+                if (n.preset === 'minimal') flags.push('minimal');
+                if (n.keepSession) flags.push('记忆');
+                if (n.fallbackModel) flags.push('备用=' + n.fallbackModel);
+                return '- [' + n.id + '] ' + n.label
+                  + (flags.length ? ' (' + flags.join(', ') + ')' : '')
+                  + (n.role ? '：' + n.role : '');
+              });
+              const edgeLines = (v.edges || []).map((e) => '- ' + e.from + ' --(' + e.type + ')--> ' + e.to);
+              return [{
+                type: 'text',
+                text: head.join('\n')
+                  + '\n\n节点（' + nodeLines.length + '）：\n' + (nodeLines.join('\n') || '（无）')
+                  + '\n\n连线（' + edgeLines.length + '）：\n' + (edgeLines.join('\n') || '（无）'),
+              }];
+            },
+          },
+          execute: (_args, exec) => {
+            const agent = exec && exec.agent;
+            const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+            return inspectPlan(sid);
+          },
+        }), 'workflow-canvas: inspect tool');
+      } catch (_e) {
+        /* tool registry unavailable */
+      }
+    });
+
     ctx.inject(['tools', 'subagents'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_workflow',
-          description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult. Load the `workflow-canvas` skill first when you are unsure how the canvas works.',
+          description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult. Supports optional `task` to override the entry Lead task and `reset: true` to restart from scratch. Load the `workflow-canvas` skill first when unsure.',
           parameters: {
             type: 'object',
             properties: {
               leadResult: { type: 'string', description: 'Your own output for the Lead step that was just requested.' },
+              task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
+              reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
             },
             additionalProperties: false,
           },
@@ -824,6 +1006,7 @@ export function apply(ctx) {
                 node: { type: 'object' },
                 results: { type: 'object' },
                 labels: { type: 'object' },
+                failed: { type: 'array' },
                 sessions: { type: 'array' },
                 skipped: { type: 'array' },
                 hint: { type: 'string' },
@@ -840,6 +1023,9 @@ export function apply(ctx) {
                 return '## ' + (labels[id] || id) + '\n' + text;
               });
               const body = blocks.length ? blocks.join('\n\n') : '（暂无上游结果）';
+              const failedList = Array.isArray(v.failed) && v.failed.length
+                ? '\n\n⚠ 失败节点：' + v.failed.map((f) => (f.label || f.id) + '（' + (f.reason || 'unknown') + '）').join('、')
+                : '';
               if (v.status === 'need-lead') {
                 const n = v.node || {};
                 const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
@@ -851,6 +1037,7 @@ export function apply(ctx) {
                   type: 'text',
                   text: '需要你（Lead）完成「' + n.label + '」：' + n.role
                     + '\n需要用到：' + ((n.needs && n.needs.length) ? n.needs.join('、') : '（无上游）')
+                    + failedList
                     + '\n\n已完成节点的结果：\n' + body
                     + handover
                     + '\n\n' + (v.hint || ''),
@@ -860,7 +1047,7 @@ export function apply(ctx) {
                 const skip = Array.isArray(v.skipped) && v.skipped.length
                   ? '\n\n已跳过（未连线）：' + v.skipped.join('、')
                   : '';
-                return [{ type: 'text', text: '画布执行完成。\n\n' + body + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + failedList + '\n\n' + body + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },
@@ -883,6 +1070,8 @@ export {
   briefFor,
   withoutEntry,
   normalizeCanvas,
+  applyPatch,
+  inspectPlan,
   runPlan,
   executePlan,
 };

@@ -16,11 +16,12 @@ A canvas is a DAG of agents the user can see and edit.
 
 | The user asks for | Call |
 |---|---|
+| inspecting or editing a manually drawn / preset canvas | `canvas_inspect` first to read node ids, models and links |
 | a visual workflow, pipeline, or graph of agents | `canvas_generate` (replaces the canvas) |
 | a change to the existing canvas | `canvas_patch` (edits in place, keeps the layout) |
-| running the canvas | `canvas_workflow` |
+| running the canvas | `canvas_workflow` (supports `leadResult`, `task` override, `reset: true`) |
 
-Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or re-modelled nodes keep their position and untouched nodes stay as they are. Regenerating throws the layout away.
+Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or re-modelled nodes keep their position and untouched nodes stay as they are. Call `canvas_inspect` first if you do not already know the current node ids. Regenerating throws the layout away.
 
 ## Node fields
 
@@ -48,13 +49,14 @@ Links only join matching types. Nodes the entry Lead cannot reach are skipped at
 ## Running
 
 1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled.
-2. Subagent nodes run in parallel waves of up to four; the run stops at every Lead node and returns `status: "need-lead"`.
-3. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
-4. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
+2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), or `reset: true` to discard a paused run and start from scratch.
+3. Subagent nodes run in parallel waves of up to four; the run stops at every Lead node and returns `status: "need-lead"`.
+4. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
+5. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
 
 ## Failures
 
-A failing node (unknown model, provider error, a stop reason other than completed) does not abort the run. Its result carries the reason, and a node with `fallbackModel` is retried once on that model. Failed nodes show red in the canvas.
+A failing node (unknown model, provider error, a stop reason other than completed) does not abort the run. Its result carries the reason, a node with `fallbackModel` is retried once on that model, and unrecovered failures are listed in `failed: [{ id, label, reason }]` while downstream nodes are warned not to treat the error as valid output. Failed nodes show red in the canvas.
 
 ## Memory
 
