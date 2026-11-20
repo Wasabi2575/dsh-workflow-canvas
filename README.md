@@ -1,4 +1,9 @@
 # DSH Workflow Canvas
+
+[![npm version](https://img.shields.io/npm/v/dsh-workflow-canvas)](https://www.npmjs.com/package/dsh-workflow-canvas)
+[![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2-2f81f7)](https://github.com/Wasabi2575/dsh-workflow-canvas)
+[![License: MIT](https://img.shields.io/badge/License-MIT-3fb950.svg)](LICENSE)
+
 English | [中文](README.zh.md)
 
 Orchestrate subagent workflows from the DSH sidebar. Draw each step as a node, wire
@@ -21,14 +26,24 @@ Requires DeepSeek Harness **0.2.2** or newer (the package declares
   *"workflow canvas"*, and install. The dshmarket entry is still awaiting
   review; see the
   [catalog PR](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180).
-- **From npm** — install the published package `dsh-workflow-canvas`
-  (latest `0.1.2`) from the **Plugins** panel, or via the `plugin_manager` tool /
-  `dsh` CLI with `install_bundle` and `target: dsh-workflow-canvas`.
+- **From npm** — install the published package `dsh-workflow-canvas` from the
+  **Plugins** panel, or via the `plugin_manager` tool / `dsh` CLI with
+  `install_bundle` and `target: dsh-workflow-canvas`.
 - **From source** — clone the repository and install it as a local directory
   with **Plugins → Add plugin**, pointing at the checkout.
 
 After installing, enable the plugin and the `workflow` tab appears in the right
 sidebar.
+
+## Quick start (30 seconds)
+
+- **Zero-setup tryout**: open the right-sidebar `Workflow` tab → load a starter
+  template from `☰ Presets` → press **● ON** at top-left → ask in chat to run the
+  canvas.
+- **Prompts you can copy right into chat**:
+  - **Sketch from one sentence**: *"Build a parallel research workflow on the canvas: two subagents investigate competitors and technical feasibility in parallel, pause for me (Lead) to decide, then hand off to a writer subagent."*
+  - **Patch in place**: *"Inspect the current canvas, turn Memory on for the feasibility node, and add a read-only cost-estimate node wired in parallel into plan synthesis."*
+  - **Reuse a template with a new task**: *"Run the current canvas with the task: evaluate adding a local knowledge base to this project."*
 
 ## How this differs from other canvas plugins
 
@@ -57,13 +72,17 @@ pipelines compiled to `ctx.workflows`, see
 
 Drag from a right socket to a left socket, or from a left socket to a right one
 (cycles are blocked immediately). Drag a connected left socket away to detach.
-Hold the **right button** and sweep across links to cut them (toggle in `⋯`).
-Hold the **middle button** (or Space + drag) to pan, and press `⊡ Fit` to frame
-the whole graph.
 
-Shortcuts: `Shift+A` opens a Blender-style Add Node menu at the cursor, `Ctrl+D`
-duplicates selected nodes, `Delete` removes selected nodes, `Ctrl+Z` undoes, and
-`Esc` closes popups. `⋯` also offers `⊞ Auto layout` and `⇧ Copy JSON`.
+## Canvas controls & shortcuts
+
+| Control / Shortcut | Action |
+|---|---|
+| `Shift+A` | Open a Blender-style Add Node menu at the cursor (`1` / `2` to drop immediately) |
+| Middle-drag / `Space` + left-drag | Pan the canvas (works even when starting over a node) |
+| Wheel / `⊡ Fit` / `100%` | Cursor-anchored zoom / fit all nodes in view / reset to 100% on Lead |
+| Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (preserving settings), or batch delete |
+| `Ctrl+Z` / `Esc` | Undo structural edits / close open popups and menus |
+| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout` & `⇧ Copy JSON` |
 
 ## Running
 
@@ -73,8 +92,8 @@ duplicates selected nodes, `Delete` removes selected nodes, `Ctrl+Z` undoes, and
 3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat
    to run it (pass `reset: true` to restart from scratch).
 4. The run proceeds in parallel waves (up to 4 at a time) and pauses at each Lead
-   node with the results collected so far. Click a subagent's status pill to jump
-   straight to its live chat pane.
+   node with the results collected so far. Click a subagent's status pill (e.g.
+   `Done ↗`) to jump straight to its live chat pane.
 
 ## Lead handover
 
@@ -108,7 +127,9 @@ fresh.
 
 ## Limits
 
-- Presets do not travel between the Desktop app and `dsh web`, nor across machines.
+- Saved presets live in browser storage and do not auto-sync between the Desktop
+  app and `dsh web`, nor across machines (use `⋯ → ⇧ Copy JSON` and `⇩ Import`
+  to move or share them).
 - Node status is read from the subagent catalog, so Lead steps show **Runs in chat**
   instead of a tracked state.
 - Up to 4 nodes run at a time.
@@ -134,7 +155,8 @@ tool with name `workflow-canvas` first.
 ## Development
 
 Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host
-changes need a restart. See [docs/DETAIL.md](docs/DETAIL.md) for the internals.
+changes need a restart. Run `npm test` for the test suite. See
+[docs/DETAIL.md](docs/DETAIL.md) for the internals.
 
 ## License
 
