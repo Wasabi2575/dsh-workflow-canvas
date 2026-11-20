@@ -251,7 +251,7 @@ window.__ModuleLoader__.load({
         boxShadow: '0 1px 4px rgba(0,0,0,0.3)',
       },
       nodeSel: { border: '2px solid ' + C.accent },
-      leadNode: { background: 'transparent' },
+      leadNode: {},
       orphanNode: { border: '1px dashed ' + C.dim, opacity: 0.65 },
 
       title: {
