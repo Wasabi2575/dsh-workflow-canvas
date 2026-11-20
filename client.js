@@ -42,6 +42,21 @@ window.__ModuleLoader__.load({
         addAgent: '+ 子代理', addLead: '+ Lead', undo: '↶ 撤销', sync: '↥ 同步',
         enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
         presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
+        pickModel: '选择模型', defaultEffort: '默认',
+        leadThis: 'Lead（本对话）',
+        tipSocketOut: '拖出可断开 / 拖入可连接',
+        tipSocketIn: '从这里拖出连线 / 也可以把输入口拖到这里',
+        delNodeTip: '删除节点（可用 ↶ 撤销 找回）',
+        deletedNode: '节点已删除，可点「撤销」找回',
+        orphanTip: '未连线：运行时会被跳过',
+        syncOff: '自动同步不可用',
+        syncNoSession: '无会话 id',
+        syncReadFail: '读取失败: ',
+        syncApplied: '已应用生成结果',
+        syncBadFile: '文件内容无效',
+        generated: '已从对话生成画布',
+        dupName: '已存在，请换一个名字',
+        guideDesc: '画一张子代理流程图',
         model: '模型', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
         memory: '记忆', preset: '预设', fallback: '备用', structured: '结构化',
@@ -78,6 +93,21 @@ window.__ModuleLoader__.load({
         addAgent: '+ Subagent', addLead: '+ Lead', undo: '↶ Undo', sync: '↥ Sync',
         enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
         presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
+        pickModel: 'Pick a model', defaultEffort: 'default',
+        leadThis: 'Lead (this chat)',
+        tipSocketOut: 'Drag to detach / drop to connect',
+        tipSocketIn: 'Drag out to link, or drop an input here',
+        delNodeTip: 'Delete this node (undo with ↶)',
+        deletedNode: 'Node deleted, use Undo to restore it',
+        orphanTip: 'Unlinked: skipped when the canvas runs',
+        syncOff: 'Auto-sync unavailable',
+        syncNoSession: 'No session id',
+        syncReadFail: 'Read failed: ',
+        syncApplied: 'Generated canvas applied',
+        syncBadFile: 'File content is invalid',
+        generated: 'Canvas generated from chat',
+        dupName: 'already exists, pick another name',
+        guideDesc: 'Sketch a subagent workflow',
         model: 'Model', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
         memory: 'Memory', preset: 'Preset', fallback: 'Fallback', structured: 'JSON',
@@ -1000,7 +1030,7 @@ window.__ModuleLoader__.load({
         setNodes((ns) => ns.filter((n) => n.id !== id));
         setEdges((es) => es.filter((e) => e.from !== id && e.to !== id));
         setSelectedIds([]);
-        flash('节点已删除，可点「撤销」找回');
+        flash(t('deletedNode'));
       };
 
       /** Dragging any selected node moves the whole selection together. */
@@ -1154,7 +1184,7 @@ window.__ModuleLoader__.load({
         const name = presetName.trim();
         if (!name) { flash(t('needName')); return; }
         if (Object.prototype.hasOwnProperty.call(presets, name)) {
-          flash('预设名「' + name + '」已存在，请换一个名字');
+          flash('"' + name + '" ' + t('dupName'));
           return;
         }
         const next = { ...presets, [name]: { nodes, edges } };
@@ -1202,8 +1232,8 @@ window.__ModuleLoader__.load({
         if (!wf) {
           try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
         }
-        if (!wf || typeof wf.read !== 'function') { setSyncNote('自动同步不可用'); return undefined; }
-        if (!sessionId) { setSyncNote('无会话 id'); return undefined; }
+        if (!wf || typeof wf.read !== 'function') { setSyncNote(t('syncOff')); return undefined; }
+        if (!sessionId) { setSyncNote(t('syncNoSession')); return undefined; }
         // The Host names the file after the agent id (session-<uuid>); the
         // pane prop may carry either form, so try both.
         const bare = String(sessionId).replace(/^session-/, '');
@@ -1225,7 +1255,7 @@ window.__ModuleLoader__.load({
                 const read = payload && (typeof payload.text === 'string' ? payload.text : '');
                 if (read) { text = read; break; }
               } catch (err) {
-                setSyncNote('读取失败: ' + String((err && err.message) || err).slice(0, 90));
+                setSyncNote(t('syncReadFail') + String((err && err.message) || err).slice(0, 80));
               }
             }
             if (!text) return;
@@ -1235,8 +1265,8 @@ window.__ModuleLoader__.load({
             const canvas = doc && doc.canvas;
             const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas)) { setSyncNote('已应用生成结果'); flash('已从对话生成画布'); }
-            else setSyncNote('文件内容无效');
+            if (valid && applyCanvasDoc(canvas)) { setSyncNote(t('syncApplied')); flash(t('generated')); }
+            else setSyncNote(t('syncBadFile'));
           } catch (_e) { /* file absent or not readable yet */ }
         };
         const timer = setInterval(tick, 1500);
@@ -1296,7 +1326,7 @@ window.__ModuleLoader__.load({
       const modelEntry = (node) => models.find((m) => m.provider + '::' + m.model === modelValue(node));
       const modelLabel = (node) => {
         const hit = modelEntry(node);
-        return hit ? hit.modelName : (node.model || '选择模型');
+        return hit ? hit.modelName : (node.model || t('pickModel'));
       };
       // Reasoning ids are adapter-declared per model; '' means "use the model default".
       const reasoningOptions = (node) => {
@@ -1305,7 +1335,7 @@ window.__ModuleLoader__.load({
         return ['', ...(ids.length ? ids : REASONING_FALLBACK)];
       };
       const reasoningLabel = (node) => {
-        if (!node.reasoning) return '默认';
+        if (!node.reasoning) return t('defaultEffort');
         const hit = modelEntry(node);
         const found = hit && hit.efforts ? hit.efforts.find((e) => e.id === node.reasoning) : undefined;
         return (found && (found.name || found.id)) || node.reasoning;
@@ -1368,17 +1398,17 @@ window.__ModuleLoader__.load({
       const renderBand = (node) => {
         const isEntry = node.id === 'lead';
         return h('div', { style: S.band },
-          SOCKET_TYPES.map((t) => h('div', { key: t.id, style: S.row },
+          SOCKET_TYPES.map((sock) => h('div', { key: t.id, style: S.row },
             h('span', { style: S.rowLabel }, t.label),
             !isEntry && h('div', {
               style: { ...S.socket, left: -PORT / 2, borderColor: t.color },
-              title: '拖出可断开 / 拖入可连接',
+              title: t('tipSocketOut'),
               onMouseDown: (e) => onInputDown(e, node.id, t.id),
               onMouseUp: (e) => onInputUp(e, node.id, t.id),
             }),
             h('div', {
               style: { ...S.socket, right: -PORT / 2, borderColor: t.color },
-              title: '从这里拖出连线 / 也可以把输入口拖到这里',
+              title: t('tipSocketIn'),
               onMouseDown: (e) => onOutputDown(e, node.id, t.id),
               onMouseUp: (e) => onOutputUp(e, node.id, t.id),
             }),
@@ -1530,7 +1560,7 @@ window.__ModuleLoader__.load({
                 style: selectedIds.includes(node.id)
                   ? { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
                   : { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
-                title: isOrphan ? '未连线：运行时会被跳过' : undefined,
+                title: isOrphan ? t('orphanTip') : undefined,
                 onMouseDown: (e) => onNodeDown(e, node.id),
               },
                 h('div', {
@@ -1554,7 +1584,7 @@ window.__ModuleLoader__.load({
                       : statusById[node.id] === 'failed' ? t('stFailed')
                         : statusById[node.id] === 'done' ? t('stDone') : t('stPending')),
                 isEntry
-                  ? h('div', { style: S.titleReadonly }, 'Lead（本对话）')
+                  ? h('div', { style: S.titleReadonly }, t('leadThis'))
                   : h('input', {
                       style: S.title,
                       value: node.label,
@@ -1579,7 +1609,7 @@ window.__ModuleLoader__.load({
                         h('button', {
                           style: S.reasonChip,
                           type: 'button',
-                          title: '推理等级（默认 = 该模型声明的 defaultEffort）',
+                          title: t('tipModel'),
                           onMouseDown: (e) => e.stopPropagation(),
                           onClick: () => {
                             const opts = reasoningOptions(node);
@@ -1612,8 +1642,8 @@ window.__ModuleLoader__.load({
                     style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
                     title: node.fallbackModel
-                      ? '备用模型：' + node.fallbackModel + '（点击清除）'
-                      : '备用：失败时用第一个模型重试一次',
+                      ? t('fallback') + ': ' + node.fallbackModel
+                      : t('tipFallback'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => {
                       if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
@@ -1621,7 +1651,7 @@ window.__ModuleLoader__.load({
                       if (!first) { flash(t('modelsMissing')); return; }
                       updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
                     },
-                  }, '备用'),
+                  }, t('fallback')),
                   h('button', {
                     style: node.structured ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
@@ -1632,7 +1662,7 @@ window.__ModuleLoader__.load({
                 ),
                 selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
-                  title: '删除节点（可用 ↶ 撤销 找回）',
+                  title: t('delNodeTip'),
                   onMouseDown: (e) => e.stopPropagation(),
                   onClick: () => deleteNode(node.id),
                 }, '×'),
@@ -1666,7 +1696,7 @@ window.__ModuleLoader__.load({
               id: 'workflow-canvas',
               order: 100,
               title: () => 'Workflow canvas',
-              description: () => '画一张子代理流程图',
+              description: () => t('guideDesc'),
             }],
           }), 'workflow-canvas: tab type');
 
