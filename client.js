@@ -31,9 +31,9 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 204;
+    const NODE_H = 224;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 140;
+    const SOCKET_BAND_TOP = 160;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
@@ -73,7 +73,8 @@ window.__ModuleLoader__.load({
         guideDesc: '画一张子代理流程图',
         model: '模型', reason: '推理', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
-        memory: '记忆', preset: '权限', fallback: '重试', structured: 'JSON',
+        memory: '记忆', scope: '能力', retry: '失败重试', jsonOut: 'JSON 输出',
+        sep: ': ', on: '开', off: '关', allTools: '默认',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
         presetEmpty: '还没有保存过预设', del: '删除这个预设',
@@ -124,7 +125,8 @@ window.__ModuleLoader__.load({
         guideDesc: 'Sketch a subagent workflow',
         model: 'Model', reason: 'Reasoning', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
-        memory: 'Memory', preset: 'Scope', fallback: 'Retry', structured: 'JSON',
+        memory: 'Memory', scope: 'Scope', retry: 'Retry', jsonOut: 'JSON out',
+        sep: ': ', on: 'on', off: 'off', allTools: 'default',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
         stOrphan: 'Unlinked', stLead: 'Runs in chat',
         presetEmpty: 'No presets saved yet', del: 'Delete this preset',
@@ -273,7 +275,12 @@ window.__ModuleLoader__.load({
       fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '86px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       optRow: {
-        position: 'absolute', left: '10px', right: '10px', top: '112px', height: '20px',
+        position: 'absolute', left: '10px', right: '10px', top: '114px', height: '18px',
+        display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
+        overflow: 'hidden',
+      },
+      optRow2: {
+        position: 'absolute', left: '10px', right: '10px', top: '134px', height: '18px',
         display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
         overflow: 'hidden',
       },
@@ -1385,7 +1392,7 @@ window.__ModuleLoader__.load({
         }, labelOf(id)));
         return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
-            style: S.select,
+            style: S.selectBtn,
             type: 'button',
             title: t('tipModel'),
             onMouseDown: (e) => e.stopPropagation(),
@@ -1677,7 +1684,7 @@ window.__ModuleLoader__.load({
                     title: t('tipMemory'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-                  }, t('memory')),
+                  }, t('memory') + t('sep') + (node.keepSession ? t('on') : t('off'))),
                   h('button', {
                     style: node.preset ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
@@ -1688,13 +1695,13 @@ window.__ModuleLoader__.load({
                       const next = cycle[(cycle.indexOf(node.preset || '') + 1) % cycle.length];
                       updateNode(node.id, { preset: next });
                     },
-                  }, t('preset')),
+                  }, t('scope') + t('sep') + (node.preset || t('allTools'))),
+                ),
+                !isEntry && !isLeadKind && h('div', { style: S.optRow2 },
                   h('button', {
                     style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
-                    title: node.fallbackModel
-                      ? t('fallback') + ': ' + node.fallbackModel
-                      : t('tipFallback'),
+                    title: node.fallbackModel ? t('tipFallback') + ': ' + node.fallbackModel : t('tipFallback'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => {
                       if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
@@ -1702,16 +1709,15 @@ window.__ModuleLoader__.load({
                       if (!first) { flash(t('modelsMissing')); return; }
                       updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
                     },
-                  }, t('fallback')),
+                  }, t('retry') + t('sep') + (node.fallbackModel ? t('on') : t('off'))),
                   h('button', {
                     style: node.structured ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
                     title: t('tipStructured'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => updateNode(node.id, { structured: !node.structured }),
-                  }, t('structured')),
-                ),
-                selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
+                  }, t('jsonOut') + t('sep') + (node.structured ? t('on') : t('off'))),
+                ),                selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
                   title: t('delNodeTip'),
                   onMouseDown: (e) => e.stopPropagation(),
