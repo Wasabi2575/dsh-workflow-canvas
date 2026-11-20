@@ -30,6 +30,75 @@ window.__ModuleLoader__.load({
     /** Fallback effort ids when the model catalog carries no reasoning metadata. */
     const REASONING_FALLBACK = ['low', 'medium', 'high'];
 
+    const LANG_KEY = STORAGE_PREFIX + 'lang';
+    const I18N = {
+      zh: {
+        addAgent: '+ 子代理', addLead: '+ Lead', undo: '↶ 撤销', sync: '↥ 同步',
+        enabled: '● 已启用', disabled: '○ 已禁用', presetName: '预设名', save: '☆ 保存',
+        presets: '☰ 预设', unsaved: '有未同步改动', synced: '已同步',
+        model: '模型', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
+        rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
+        memory: '记忆', preset: '预设', fallback: '备用', structured: '结构化',
+        stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
+        stOrphan: '未连线', stLead: '由对话执行',
+        presetEmpty: '还没有保存过预设', del: '删除这个预设',
+        needName: '请先给预设起个名字', duplicate: '已存在，请换一个名字',
+        savedPreset: '已保存预设', saveFailed: '保存失败（存储不可用）',
+        loadedPreset: '已载入预设', invalidPreset: '预设内容无效', deletedPreset: '已删除预设',
+        syncFailed: '同步失败', upToDate: '已是最新', syncedToHost: '已同步到 Host',
+        cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作',
+        leadLocked: '入口 Lead 不能删除', modelsMissing: '模型列表未加载',
+        tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
+        tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
+        tipZoom: '滚轮缩放（以光标为中心），点击复位',
+        tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
+        tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
+        tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
+        tipMemory: '记忆：复用这个节点上一次的会话（仅同一进程内有效）',
+        tipPreset: '预设：点击循环 无 / minimal / standard',
+        tipFallback: '备用：失败时用第一个模型重试一次',
+        tipStructured: '结构化：要求该节点返回 JSON 对象，供 structured 连线使用',
+        lang: 'EN',
+      },
+      en: {
+        addAgent: '+ Subagent', addLead: '+ Lead', undo: '↶ Undo', sync: '↥ Sync',
+        enabled: '● ON', disabled: '○ OFF', presetName: 'Preset name', save: '☆ Save',
+        presets: '☰ Presets', unsaved: 'Unsaved changes', synced: 'Synced',
+        model: 'Model', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
+        rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
+        memory: 'Memory', preset: 'Preset', fallback: 'Fallback', structured: 'JSON',
+        stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
+        stOrphan: 'Unlinked', stLead: 'Runs in chat',
+        presetEmpty: 'No presets saved yet', del: 'Delete this preset',
+        needName: 'Name the preset first', duplicate: 'already exists, pick another name',
+        savedPreset: 'Saved preset', saveFailed: 'Save failed (storage unavailable)',
+        loadedPreset: 'Loaded preset', invalidPreset: 'Preset content is invalid', deletedPreset: 'Deleted preset',
+        syncFailed: 'Sync failed', upToDate: 'Already up to date', syncedToHost: 'Synced to host',
+        cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo',
+        leadLocked: 'The entry Lead cannot be deleted', modelsMissing: 'Model list is not loaded',
+        tipLead: 'Lead steps run in the chat; the canvas does not track them',
+        tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
+        tipZoom: 'Wheel zooms around the cursor; click to reset',
+        tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
+        tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
+        tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
+        tipMemory: 'Memory: reuse this node\'s previous session (same process only)',
+        tipPreset: 'Preset: cycle none / minimal / standard',
+        tipFallback: 'Fallback: retry once with the first model when this node fails',
+        tipStructured: 'JSON: require this node to return an object for structured links',
+        lang: '中',
+      },
+    };
+
+    function loadLang() {
+      try {
+        const v = window.localStorage.getItem(LANG_KEY);
+        return v === 'en' ? 'en' : 'zh';
+      } catch (_e) {
+        return 'zh';
+      }
+    }
+
     const C = {
       text: 'var(--dsw-alias-label-primary, inherit)',
       dim: 'var(--dsw-alias-label-tertiary, rgba(140,140,140,0.95))',
@@ -433,6 +502,7 @@ window.__ModuleLoader__.load({
             reasoning: n.reasoning || '',
             preset: n.preset || '',
             keepSession: Boolean(n.keepSession),
+            structured: Boolean(n.structured),
             fallbackModel: n.fallbackModel || '',
             fallbackProvider: n.fallbackProvider || '',
           })),
@@ -525,6 +595,13 @@ window.__ModuleLoader__.load({
       const [presets, setPresets] = useState(loadPresets);
       const [presetOpen, setPresetOpen] = useState(null);
       const [presetName, setPresetName] = useState('');
+      const [lang, setLang] = useState(loadLang);
+      const t = (key) => (I18N[lang] && I18N[lang][key]) || I18N.zh[key] || key;
+      const toggleLang = () => {
+        const next = lang === 'zh' ? 'en' : 'zh';
+        setLang(next);
+        try { window.localStorage.setItem(LANG_KEY, next); } catch (_e) { /* ignore */ }
+      };
       const nodesRef = useRef(nodes);
       nodesRef.current = nodes;
 
@@ -580,26 +657,26 @@ window.__ModuleLoader__.load({
       const pushPlan = (nextEnabled) => {
         try {
           const face = sessionFace(sessionId);
-          if (!face || typeof face.command !== 'function') { flash('无法同步到 Host'); return; }
+          if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return; }
           const res = buildPlan(nodes, edges);
           const payload = res.error
             ? { enabled: nextEnabled, error: res.error }
             : { enabled: nextEnabled, plan: res.plan };
           const sig = JSON.stringify(payload);
-          if (sig === lastSync.current) { flash('已是最新'); return; }
+          if (sig === lastSync.current) { flash(t('upToDate')); return; }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
           face.command(line).then((ack) => {
             if (ack && ack.ok) {
               lastSync.current = sig;
               setDirty(false);
               setStatusById({});
-              flash('已同步到 Host');
+              flash(t('syncedToHost'));
             } else {
-              flash('同步失败');
+              flash(t('syncFailed'));
             }
-          }, () => flash('同步失败'));
+          }, () => flash(t('syncFailed')));
         } catch (_e) {
-          flash('同步失败');
+          flash(t('syncFailed'));
         }
       };
 
@@ -656,7 +733,11 @@ window.__ModuleLoader__.load({
               const m = NODE_MARK.exec(String(entry.label || ''));
               if (!m || !known.has(m[1])) continue;
               const child = state.byId && state.byId[entry.id];
-              next[m[1]] = child && child.running ? 'running' : 'done';
+              const timingProj = state.projectionsBySession && state.projectionsBySession[entry.id];
+              const timing = timingProj && timingProj.values && timingProj.values.subagentTiming;
+              if (child && child.running) next[m[1]] = 'running';
+              else if (timing && timing.lastTurnCompleted === false) next[m[1]] = 'failed';
+              else next[m[1]] = 'done';
             }
             setStatusById(next);
           } catch (_e) { /* ignore */ }
@@ -716,11 +797,11 @@ window.__ModuleLoader__.load({
 
       const undo = () => {
         const prev = historyRef.current.pop();
-        if (!prev) { flash('没有可撤销的操作'); return; }
+        if (!prev) { flash(t('undoNone')); return; }
         setNodes(prev.nodes);
         setEdges(prev.edges);
         setSelectedId(null);
-        flash('已撤销');
+        flash(t('undoDone'));
       };
 
       const NODE_MARK = /#([A-Za-z0-9_]+)/;
@@ -799,7 +880,7 @@ window.__ModuleLoader__.load({
       };
 
       const deleteNode = (id) => {
-        if (id === 'lead') { flash('入口 Lead 不能删除'); return; }
+        if (id === 'lead') { flash(t('leadLocked')); return; }
         pushSnapshot();
         setNodes((ns) => ns.filter((n) => n.id !== id));
         setEdges((es) => es.filter((e) => e.from !== id && e.to !== id));
@@ -881,29 +962,29 @@ window.__ModuleLoader__.load({
 
       const savePresetNow = () => {
         const name = presetName.trim();
-        if (!name) { flash('请先给预设起个名字'); return; }
+        if (!name) { flash(t('needName')); return; }
         if (Object.prototype.hasOwnProperty.call(presets, name)) {
           flash('预设名「' + name + '」已存在，请换一个名字');
           return;
         }
         const next = { ...presets, [name]: { nodes, edges } };
-        if (!savePresets(next)) { flash('保存失败（存储不可用）'); return; }
+        if (!savePresets(next)) { flash(t('saveFailed')); return; }
         setPresets(next);
         setPresetName('');
         setPresetOpen(null);
-        flash('已保存预设：' + name);
+        flash(t('savedPreset') + ': ' + name);
       };
 
       const applyPreset = (name) => {
         const preset = presets[name];
-        if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash('预设内容无效'); return; }
+        if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash(t('invalidPreset')); return; }
         pushSnapshot();
         setNodes(preset.nodes);
         setEdges(preset.edges);
         setSelectedId(null);
         setStatusById({});
         setPresetOpen(null);
-        flash('已载入预设：' + name);
+        flash(t('loadedPreset') + ': ' + name);
       };
 
       const deletePreset = (name) => {
@@ -911,7 +992,7 @@ window.__ModuleLoader__.load({
         delete next[name];
         savePresets(next);
         setPresets(next);
-        flash('已删除预设：' + name);
+        flash(t('deletedPreset') + ': ' + name);
       };
 
       const toggleEnabled = () => {
@@ -1018,47 +1099,53 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: S.root },
         h('div', { style: S.toolbar },
-          h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, '+ 子代理'),
-          h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, '+ Lead'),
-          h('button', { style: S.btn, onClick: undo, type: 'button', title: '撤销上一步结构改动' }, '↶ 撤销'),
+          h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
+          h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
+          h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
           h('button', { style: enabled ? S.toggleOn : S.toggleOff, onClick: toggleEnabled, type: 'button' },
-            enabled ? '● 已启用' : '○ 已禁用'),
+            enabled ? t('enabled') : t('disabled')),
           h('button', {
             style: S.btn,
             onClick: () => pushPlan(enabled),
             type: 'button',
-            title: '把当前画布同步给 Host（会在对话里留一条同步记录）',
-          }, '↥ 同步'),
+            title: t('tipSync'),
+          }, t('sync')),
           h('button', {
             style: S.btn,
             onClick: () => setView({ k: 1, x: 0, y: 0 }),
             type: 'button',
-            title: '滚轮缩放（以光标为中心），点击复位',
+            title: t('tipZoom'),
           }, Math.round(view.k * 100) + '%'),
+          h('button', {
+            style: S.btn,
+            onClick: toggleLang,
+            type: 'button',
+            title: 'Switch language / 切换语言',
+          }, t('lang')),
           h('div', { style: S.presetBar },
             h('div', { style: S.presetRowTop },
               h('input', {
                 style: S.presetInput,
                 value: presetName,
-                placeholder: '预设名',
+                placeholder: t('presetName'),
                 onMouseDown: (e) => e.stopPropagation(),
                 onChange: (e) => setPresetName(e.target.value),
                 onKeyDown: (e) => { if (e.key === 'Enter') savePresetNow(); },
               }),
-              h('button', { style: S.btn, onClick: savePresetNow, type: 'button', title: '把当前画布保存为预设' }, '☆ 保存'),
+              h('button', { style: S.btn, onClick: savePresetNow, type: 'button', title: t('tipSave') }, t('save')),
               (() => {
                 const names = Object.keys(presets);
                 return h('button', {
                   style: S.btn,
                   onClick: () => setPresetOpen(presetOpen === 'menu' ? null : 'menu'),
                   type: 'button',
-                  title: '载入已保存的预设',
-                }, '☰ 预设' + (names.length ? ' (' + names.length + ')' : ''));
+                  title: t('tipPresets'),
+                }, t('presets') + (names.length ? ' (' + names.length + ')' : ''));
               })(),
             ),
             // Feedback for saving / loading / syncing sits right under the name field.
             h('span', { style: S.status },
-              status || (enabled ? (dirty ? '有未同步改动' : '已同步') : '')),
+              status || (enabled ? (dirty ? t('unsaved') : t('synced')) : '')),
             presetOpen === 'menu' && (() => {
               const names = Object.keys(presets);
               return h('div', { style: S.presetMenu, onMouseDown: (e) => e.stopPropagation() },
@@ -1070,9 +1157,9 @@ window.__ModuleLoader__.load({
                       onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                     },
                       h('span', { style: S.presetRowText, onClick: () => applyPreset(name) }, name),
-                      h('button', { style: S.presetDel, type: 'button', title: '删除这个预设', onClick: () => deletePreset(name) }, '×'),
+                      h('button', { style: S.presetDel, type: 'button', title: t('del'), onClick: () => deletePreset(name) }, '×'),
                     ))
-                  : h('div', { style: S.presetEmpty }, '还没有保存过预设'),
+                  : h('div', { style: S.presetEmpty }, t('presetEmpty')),
               );
             })(),
           ),
@@ -1101,11 +1188,11 @@ window.__ModuleLoader__.load({
               const isEntry = node.id === 'lead';
               const isLeadKind = node.kind === 'lead';
               const roleInput = (style) => h('div', { style },
-                h('span', { style: S.fieldLabel }, '分工'),
+                h('span', { style: S.fieldLabel }, t('role')),
                 h('input', {
                   style: S.input,
                   value: node.role || '',
-                  placeholder: isLeadKind ? '我自己这一步做什么' : '这个子代理做什么',
+                  placeholder: isLeadKind ? t('rolePhLead') : t('rolePhAgent'),
                   onMouseDown: (e) => e.stopPropagation(),
                   onFocus: () => setSelectedId(node.id),
                   onChange: (e) => updateNode(node.id, { role: e.target.value }),
@@ -1131,13 +1218,15 @@ window.__ModuleLoader__.load({
                     ...S.statusChip,
                     color: isLeadKind ? C.dim
                       : statusById[node.id] === 'running' ? '#2f81f7'
-                        : statusById[node.id] === 'done' ? '#3fb950' : C.dim,
+                        : statusById[node.id] === 'failed' ? '#e5534b'
+                          : statusById[node.id] === 'done' ? '#3fb950' : C.dim,
                   },
-                  title: isLeadKind ? 'Lead 步骤在对话里执行，画布不追踪其状态' : (isOrphan ? '未连线：运行时会被跳过' : '子代理节点的运行状态'),
-                }, isOrphan ? '未连线'
-                  : isLeadKind ? '由对话执行'
-                    : statusById[node.id] === 'running' ? '进行中'
-                      : statusById[node.id] === 'done' ? '已完成' : '未执行'),
+                  title: isLeadKind ? t('tipLead') : (isOrphan ? t('tipOrphan') : t('tipStatus')),
+                }, isOrphan ? t('stOrphan')
+                  : isLeadKind ? t('stLead')
+                    : statusById[node.id] === 'running' ? t('stRunning')
+                      : statusById[node.id] === 'failed' ? t('stFailed')
+                        : statusById[node.id] === 'done' ? t('stDone') : t('stPending')),
                 isEntry
                   ? h('div', { style: S.titleReadonly }, 'Lead（本对话）')
                   : h('input', {
@@ -1151,7 +1240,7 @@ window.__ModuleLoader__.load({
                   ? h('textarea', {
                       style: S.task,
                       value: node.task || '',
-                      placeholder: '本次任务：例如把这批反馈归类并给出建议',
+                      placeholder: t('taskPh'),
                       onMouseDown: (e) => e.stopPropagation(),
                       onFocus: () => setSelectedId(node.id),
                       onChange: (e) => updateNode(node.id, { task: e.target.value }),
@@ -1159,7 +1248,7 @@ window.__ModuleLoader__.load({
                   : isLeadKind
                     ? roleInput(S.fieldRoleTop)
                     : h('div', { style: S.fieldModel },
-                        h('span', { style: S.fieldLabel }, '模型'),
+                        h('span', { style: S.fieldLabel }, t('model')),
                         modelControl(node),
                         h('button', {
                           style: S.reasonChip,
@@ -1174,38 +1263,46 @@ window.__ModuleLoader__.load({
                           },
                         }, reasoningLabel(node)),
                       ),
-                !isEntry && !isLeadKind && roleInput(S.fieldRole),
                 !isEntry && !isLeadKind && h('div', { style: S.optRow },
                   h('button', {
                     style: node.keepSession ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
-                    title: '保留记忆：复用这个节点上一次的会话继续跑',
+                    title: t('tipMemory'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-                  }, node.keepSession ? '记忆开' : '记忆关'),
+                  }, t('memory')),
                   h('button', {
                     style: node.preset ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
-                    title: '预设：点击循环 无 / minimal / standard',
+                    title: t('tipPreset'),
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => {
                       const cycle = ['', 'minimal', 'standard'];
                       const next = cycle[(cycle.indexOf(node.preset || '') + 1) % cycle.length];
                       updateNode(node.id, { preset: next });
                     },
-                  }, node.preset ? '预设:' + node.preset : '预设无'),
+                  }, t('preset')),
                   h('button', {
                     style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
                     type: 'button',
-                    title: '失败时用哪个模型重试（点一下设为第一个模型，再点清除）',
+                    title: node.fallbackModel
+                      ? '备用模型：' + node.fallbackModel + '（点击清除）'
+                      : '备用：失败时用第一个模型重试一次',
                     onMouseDown: (e) => e.stopPropagation(),
                     onClick: () => {
                       if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
                       const first = models[0];
-                      if (!first) { flash('模型列表未加载'); return; }
+                      if (!first) { flash(t('modelsMissing')); return; }
                       updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
                     },
-                  }, node.fallbackModel ? '备用:' + node.fallbackModel : '备用无'),
+                  }, '备用'),
+                  h('button', {
+                    style: node.structured ? { ...S.optChip, ...S.optChipOn } : S.optChip,
+                    type: 'button',
+                    title: t('tipStructured'),
+                    onMouseDown: (e) => e.stopPropagation(),
+                    onClick: () => updateNode(node.id, { structured: !node.structured }),
+                  }, t('structured')),
                 ),
                 selectedId === node.id && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
