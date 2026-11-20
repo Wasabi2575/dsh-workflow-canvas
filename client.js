@@ -1108,6 +1108,51 @@ window.__ModuleLoader__.load({
         flash(t('savedPreset') + ': ' + name);
       };
 
+      /** Load a canvas document produced by the model. */
+      const applyCanvasDoc = (doc) => {
+        if (!doc || !Array.isArray(doc.nodes) || !doc.nodes.length) return false;
+        pushSnapshot();
+        setNodes(doc.nodes.map((n, i) => ({
+          ...n,
+          x: typeof n.x === 'number' ? n.x : 60 + i * 300,
+          y: typeof n.y === 'number' ? n.y : 80,
+        })));
+        setEdges(Array.isArray(doc.edges) ? doc.edges.map((e, i) => ({
+          id: e.id || 'e' + i,
+          from: e.from,
+          to: e.to,
+          type: e.type || 'prompt',
+        })) : []);
+        setSelectedIds([]);
+        setStatusById({});
+        return true;
+      };
+
+      // The Host writes generated canvases where the workspace Remote can read
+      // them; polling that file is the only Host -> canvas channel available.
+      useEffect(() => {
+        const remote = hostCtx && hostCtx.remote;
+        if (!remote || !remote.workspaceFiles || !sessionId) return undefined;
+        const path = '.dsh/canvas/' + sessionId + '.json';
+        let alive = true;
+        let lastText = '';
+        const tick = async () => {
+          try {
+            const res = await remote.workspaceFiles.read(sessionId, path, {}, new AbortController().signal);
+            if (!alive) return;
+            const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
+            const text = payload && (typeof payload.text === 'string' ? payload.text : '');
+            if (!text || text === lastText) return;
+            lastText = text;
+            const doc = JSON.parse(text);
+            if (applyCanvasDoc(doc && doc.canvas)) flash('已从对话生成画布');
+          } catch (_e) { /* file absent or not readable yet */ }
+        };
+        const timer = setInterval(tick, 1500);
+        tick();
+        return () => { alive = false; clearInterval(timer); };
+      }, [sessionId]);
+
       const importFromClipboard = () => {
         const finish = (text) => {
           if (!text) { flash(t('importNone')); return; }
@@ -1117,22 +1162,8 @@ window.__ModuleLoader__.load({
             const end = text.lastIndexOf('}');
             doc = JSON.parse(text.slice(start, end + 1));
           } catch (_e) { flash(t('importBad')); return; }
-          if (!doc || !Array.isArray(doc.nodes) || !doc.nodes.length) { flash(t('importBad')); return; }
-          pushSnapshot();
-          setNodes(doc.nodes.map((n, i) => ({
-            ...n,
-            x: typeof n.x === 'number' ? n.x : 60 + i * 300,
-            y: typeof n.y === 'number' ? n.y : 80,
-          })));
-          setEdges(Array.isArray(doc.edges) ? doc.edges.map((e, i) => ({
-            id: e.id || 'e' + i,
-            from: e.from,
-            to: e.to,
-            type: e.type || 'prompt',
-          })) : []);
-          setSelectedIds([]);
-          setStatusById({});
-          flash(t('importOk') + doc.nodes.length);
+          if (!applyCanvasDoc(doc.canvas || doc)) { flash(t('importBad')); return; }
+          flash(t('importOk') + (doc.canvas || doc).nodes.length);
         };
         try {
           if (navigator.clipboard && navigator.clipboard.readText) {

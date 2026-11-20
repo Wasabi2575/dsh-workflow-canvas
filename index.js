@@ -362,6 +362,25 @@ function normalizeCanvas(args) {
   return { nodes, edges, task: String(args.task || '') };
 }
 
+/**
+ * Drop a generated canvas where the browser can pick it up. `workspaceFiles`
+ * resolves a session's root from its header cwd, so the client reads the same
+ * relative path back through the Remote.
+ */
+function publishCanvas(scope, sessionId, canvas) {
+  try {
+    const live = scope && scope.sessions && scope.sessions.get(sessionId);
+    const root = live && live.header && live.header.cwd;
+    if (!root) return false;
+    const dir = join(root, '.dsh', 'canvas');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, sessionId + '.json'), JSON.stringify({ canvas, at: Date.now() }), 'utf8');
+    return true;
+  } catch (_e) {
+    return false;
+  }
+}
+
 async function runPlan(scope, args, exec) {
   const agent = exec && exec.agent;
   const sid = agent && agent.id !== undefined ? String(agent.id) : '';
@@ -477,7 +496,7 @@ export function apply(ctx) {
       }
     });
 
-    ctx.inject(['tools', 'subagents'], (scope) => {
+    ctx.inject(['tools', 'subagents', 'sessions'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_generate',
@@ -528,6 +547,7 @@ export function apply(ctx) {
               type: 'object',
               properties: {
                 canvas: { type: 'object' },
+                delivered: { type: 'boolean' },
                 error: { type: 'string' },
               },
             },
@@ -543,16 +563,23 @@ export function apply(ctx) {
                 type: 'text',
                 text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线\n'
                   + lines.join('\n')
-                  + '\n\n**下一步**：点画布工具栏的「⇩ 导入」，它会把这段画布数据装进当前画布。\n```json canvas\n'
+                  + (v.delivered
+                    ? '\n\n画布已经自动同步到右侧画布，直接看即可（若没出现，点画布上的「◎ 定位」）。'
+                    : '\n\n**下一步**：点画布工具栏的「⇩ 导入」，它会把这段画布数据装进当前画布。')
+                  + '\n```json canvas\n'
                   + JSON.stringify(canvas) + '\n```',
               }];
             },
           },
-          execute: (args) => {
+          execute: (args, exec) => {
             try {
               const result = normalizeCanvas(args || {});
               if (result.error) return { error: result.error };
-              return { canvas: { nodes: result.nodes, edges: result.edges } };
+              const canvas = { nodes: result.nodes, edges: result.edges };
+              const agent = exec && exec.agent;
+              const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+              const delivered = sid ? publishCanvas(scope, sid, canvas) : false;
+              return { canvas, delivered };
             } catch (error) {
               return { error: String((error && error.message) || error) };
             }
