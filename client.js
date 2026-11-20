@@ -31,9 +31,9 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 184;
+    const NODE_H = 204;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 118;
+    const SOCKET_BAND_TOP = 140;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
@@ -71,9 +71,9 @@ window.__ModuleLoader__.load({
         generated: '已从对话生成画布',
         dupName: '已存在，请换一个名字',
         guideDesc: '画一张子代理流程图',
-        model: '模型', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
+        model: '模型', reason: '推理', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
-        memory: '记忆', preset: '预设', fallback: '备用', structured: '结构化',
+        memory: '记忆', preset: '权限', fallback: '重试', structured: 'JSON',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
         presetEmpty: '还没有保存过预设', del: '删除这个预设',
@@ -98,9 +98,9 @@ window.__ModuleLoader__.load({
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（仅同一进程内有效）',
-        tipPreset: '预设：点击循环 无 / minimal / standard',
-        tipFallback: '备用：失败时用第一个模型重试一次',
-        tipStructured: '结构化：要求该节点返回 JSON 对象，供 structured 连线使用',
+        tipPreset: '权限范围（agent 预设）：无 = 默认全部能力；minimal 只读少工具；standard 标准工具集',
+        tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
+        tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
         lang: 'ZH',
       },
       en: {
@@ -122,9 +122,9 @@ window.__ModuleLoader__.load({
         generated: 'Canvas generated from chat',
         dupName: 'already exists, pick another name',
         guideDesc: 'Sketch a subagent workflow',
-        model: 'Model', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
+        model: 'Model', reason: 'Reasoning', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
-        memory: 'Memory', preset: 'Preset', fallback: 'Fallback', structured: 'JSON',
+        memory: 'Memory', preset: 'Scope', fallback: 'Retry', structured: 'JSON',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
         stOrphan: 'Unlinked', stLead: 'Runs in chat',
         presetEmpty: 'No presets saved yet', del: 'Delete this preset',
@@ -149,9 +149,9 @@ window.__ModuleLoader__.load({
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (same process only)',
-        tipPreset: 'Preset: cycle none / minimal / standard',
-        tipFallback: 'Fallback: retry once with the first model when this node fails',
-        tipStructured: 'JSON: require this node to return an object for structured links',
+        tipPreset: 'Capability scope (agent preset): none = full access, minimal = read-only few tools, standard = usual tool set',
+        tipFallback: 'Retry: when this node fails, rerun it once on another model',
+        tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
         lang: 'EN',
       },
     };
@@ -269,19 +269,26 @@ window.__ModuleLoader__.load({
       },
 
       fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '30px', height: '26px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '62px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '58px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '86px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       optRow: {
-        position: 'absolute', left: '10px', right: '10px', top: '90px', height: '20px',
+        position: 'absolute', left: '10px', right: '10px', top: '112px', height: '20px',
         display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
         overflow: 'hidden',
       },
       optChip: {
-        flex: '0 0 auto', padding: '2px 5px', borderRadius: '4px', border: '1px solid ' + C.border,
-        background: 'transparent', color: C.dim, fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap',
-        lineHeight: '12px',
+        flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
+        border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
+        fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
+        outline: 'none',
       },
-      optChipOn: { borderColor: C.accent, color: C.accent },
+      optChipOn: {
+        flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
+        border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
+        fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
+        outline: 'none',
+      },
       fieldLabel: { flex: '0 0 auto', width: '30px', fontSize: '10px', color: C.dim },
 
       input: {
@@ -1360,6 +1367,37 @@ window.__ModuleLoader__.load({
         return (found && (found.name || found.id)) || node.reasoning;
       };
 
+      const reasoningControl = (node) => {
+        const key = 'r:' + node.id;
+        const isOpen = openModelFor === key;
+        const entry = modelEntry(node);
+        const labelOf = (id) => {
+          if (!id) return t('defaultEffort');
+          const found = entry && entry.efforts ? entry.efforts.find((e) => e.id === id) : undefined;
+          return (found && (found.name || found.id)) || id;
+        };
+        const rows = reasoningOptions(node).map((id, i) => h('div', {
+          key: 'r' + i,
+          style: node.reasoning === id ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+          onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+          onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+          onClick: () => { updateNode(node.id, { reasoning: id }); setOpenModelFor(null); },
+        }, labelOf(id)));
+        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+          h('button', {
+            style: S.select,
+            type: 'button',
+            title: t('tipModel'),
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: () => setOpenModelFor(isOpen ? null : key),
+          },
+            h('span', { style: S.selectText }, labelOf(node.reasoning)),
+            h('span', { style: S.caret }, '▾'),
+          ),
+          isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
+        );
+      };
+
       const modelControl = (node) => {
         if (!models.length) {
           return h('input', {
@@ -1622,22 +1660,16 @@ window.__ModuleLoader__.load({
                     })
                   : isLeadKind
                     ? roleInput(S.fieldRoleTop)
-                    : h('div', { style: S.fieldModel },
+                    : h(React.Fragment, null,
+                      h('div', { style: S.fieldModel },
                         h('span', { style: S.fieldLabel }, t('model')),
                         modelControl(node),
-                        h('button', {
-                          style: S.reasonChip,
-                          type: 'button',
-                          title: t('tipModel'),
-                          onMouseDown: (e) => e.stopPropagation(),
-                          onClick: () => {
-                            const opts = reasoningOptions(node);
-                            const cur = node.reasoning || '';
-                            const next = opts[(opts.indexOf(cur) + 1) % opts.length];
-                            updateNode(node.id, { reasoning: next || '' });
-                          },
-                        }, reasoningLabel(node)),
                       ),
+                      h('div', { style: S.fieldReason },
+                        h('span', { style: S.fieldLabel }, t('reason')),
+                        reasoningControl(node),
+                      ),
+                    ),
                 !isEntry && !isLeadKind && h('div', { style: S.optRow },
                   h('button', {
                     style: node.keepSession ? { ...S.optChip, ...S.optChipOn } : S.optChip,
