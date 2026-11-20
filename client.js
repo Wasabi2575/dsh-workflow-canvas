@@ -31,9 +31,9 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 224;
+    const NODE_H = 204;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 160;
+    const SOCKET_BAND_TOP = 140;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
@@ -73,7 +73,7 @@ window.__ModuleLoader__.load({
         guideDesc: '画一张子代理流程图',
         model: '模型', reason: '推理', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
-        memory: '记忆', scope: '能力', retry: '失败重试', jsonOut: 'JSON 输出',
+        memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
         sep: ': ', on: '开', off: '关', allTools: '默认',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
@@ -279,11 +279,7 @@ window.__ModuleLoader__.load({
         display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
         overflow: 'hidden',
       },
-      optRow2: {
-        position: 'absolute', left: '10px', right: '10px', top: '134px', height: '18px',
-        display: 'flex', alignItems: 'center', gap: '5px', fontSize: '9px', color: C.dim,
-        overflow: 'hidden',
-      },
+
       optChip: {
         flex: '0 0 auto', padding: '2px 6px', borderRadius: '4px',
         border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
@@ -588,7 +584,8 @@ window.__ModuleLoader__.load({
             reasoning: n.reasoning || '',
             preset: n.preset || '',
             keepSession: Boolean(n.keepSession),
-            structured: Boolean(n.structured),
+            // A structured link is the only thing that decides this: no separate switch.
+            structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
             fallbackModel: n.fallbackModel || '',
             fallbackProvider: n.fallbackProvider || '',
           })),
@@ -1678,46 +1675,38 @@ window.__ModuleLoader__.load({
                       ),
                     ),
                 !isEntry && !isLeadKind && h('div', { style: S.optRow },
-                  h('button', {
-                    style: node.keepSession ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                    type: 'button',
-                    title: t('tipMemory'),
-                    onMouseDown: (e) => e.stopPropagation(),
-                    onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-                  }, t('memory') + t('sep') + (node.keepSession ? t('on') : t('off'))),
-                  h('button', {
-                    style: node.preset ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                    type: 'button',
-                    title: t('tipPreset'),
-                    onMouseDown: (e) => e.stopPropagation(),
-                    onClick: () => {
-                      const cycle = ['', 'minimal', 'standard'];
-                      const next = cycle[(cycle.indexOf(node.preset || '') + 1) % cycle.length];
-                      updateNode(node.id, { preset: next });
-                    },
-                  }, t('scope') + t('sep') + (node.preset || t('allTools'))),
+  h('button', {
+                      style: node.keepSession ? { ...S.optChip, ...S.optChipOn } : S.optChip,
+                      type: 'button',
+                      title: t('tipMemory'),
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
+                    }, t('memory') + t('sep') + (node.keepSession ? t('on') : t('off'))),
+  h('button', {
+                      style: node.preset ? { ...S.optChip, ...S.optChipOn } : S.optChip,
+                      type: 'button',
+                      title: t('tipPreset'),
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onClick: () => {
+                        const cycle = ['', 'minimal', 'standard'];
+                        const next = cycle[(cycle.indexOf(node.preset || '') + 1) % cycle.length];
+                        updateNode(node.id, { preset: next });
+                      },
+                    }, t('scope') + t('sep') + (node.preset || t('allTools'))),
+  h('button', {
+                      style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
+                      type: 'button',
+                      title: node.fallbackModel ? t('tipFallback') + ': ' + node.fallbackModel : t('tipFallback'),
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onClick: () => {
+                        if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
+                        const first = models[0];
+                        if (!first) { flash(t('modelsMissing')); return; }
+                        updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
+                      },
+                    }, t('retry') + t('sep') + (node.fallbackModel ? t('on') : t('off'))),
                 ),
-                !isEntry && !isLeadKind && h('div', { style: S.optRow2 },
-                  h('button', {
-                    style: node.fallbackModel ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                    type: 'button',
-                    title: node.fallbackModel ? t('tipFallback') + ': ' + node.fallbackModel : t('tipFallback'),
-                    onMouseDown: (e) => e.stopPropagation(),
-                    onClick: () => {
-                      if (node.fallbackModel) { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); return; }
-                      const first = models[0];
-                      if (!first) { flash(t('modelsMissing')); return; }
-                      updateNode(node.id, { fallbackModel: first.model, fallbackProvider: first.provider });
-                    },
-                  }, t('retry') + t('sep') + (node.fallbackModel ? t('on') : t('off'))),
-                  h('button', {
-                    style: node.structured ? { ...S.optChip, ...S.optChipOn } : S.optChip,
-                    type: 'button',
-                    title: t('tipStructured'),
-                    onMouseDown: (e) => e.stopPropagation(),
-                    onClick: () => updateNode(node.id, { structured: !node.structured }),
-                  }, t('jsonOut') + t('sep') + (node.structured ? t('on') : t('off'))),
-                ),                selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
+                selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
                   title: t('delNodeTip'),
                   onMouseDown: (e) => e.stopPropagation(),
