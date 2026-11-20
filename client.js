@@ -160,10 +160,10 @@ window.__ModuleLoader__.load({
       },
       presetInput: {
         width: '92px', padding: '3px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
-        background: C.base, color: C.text, fontSize: '11px', outline: 'none',
+        background: C.base, color: C.text, fontSize: '11px', outline: 'none', userSelect: 'text',
       },
       presetEmpty: { padding: '6px', fontSize: '10px', color: C.dim },
-      canvas: { position: 'relative', flex: '1 1 auto', overflow: 'auto', minHeight: '0' },
+      canvas: { position: 'relative', flex: '1 1 auto', overflow: 'auto', minHeight: '0', userSelect: 'none' },
       content: { position: 'relative', width: CONTENT_W, height: CONTENT_H },
 
       node: {
@@ -180,7 +180,7 @@ window.__ModuleLoader__.load({
         position: 'absolute', left: '10px', right: '10px', top: '10px', height: '18px',
         fontWeight: 600, fontSize: '13px', lineHeight: '18px',
         border: 'none', background: 'transparent', color: C.text, padding: 0, margin: 0,
-        outline: 'none', boxSizing: 'border-box',
+        outline: 'none', boxSizing: 'border-box', userSelect: 'text',
       },
       titleReadonly: {
         position: 'absolute', left: '10px', right: '10px', top: '10px', height: '18px',
@@ -215,13 +215,13 @@ window.__ModuleLoader__.load({
       input: {
         flex: '1 1 auto', minWidth: '0', padding: '3px 6px', borderRadius: '5px',
         border: '1px solid ' + C.border, background: C.base, color: C.text, fontSize: '12px',
-        outline: 'none',
+        outline: 'none', userSelect: 'text',
       },
       task: {
         position: 'absolute', left: '10px', right: '10px', top: '30px', height: '52px',
         padding: '4px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', resize: 'none', outline: 'none',
-        lineHeight: '14px', boxSizing: 'border-box',
+        lineHeight: '14px', boxSizing: 'border-box', userSelect: 'text',
       },
 
       selectBtn: {
@@ -950,6 +950,8 @@ window.__ModuleLoader__.load({
 
       const onCanvasDown = (e) => {
         if (e.button !== 0) return;
+        e.preventDefault();
+        try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
         const p = pointTo(e);
         setMarquee({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
         if (selectedIds.length) setSelectedIds([]);
