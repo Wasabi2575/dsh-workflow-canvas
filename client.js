@@ -8,8 +8,22 @@ window.__ModuleLoader__.load({
     const useEffect = React.useEffect;
     const Component = React.Component;
 
-    /** Set once the `remote.workspaceFiles` service resolves; see apply(). */
+    /** Resolved lazily so a missing namespace can never fail plugin load. */
     let workspaceFilesService = null;
+    function resolveWorkspaceFiles(ctx) {
+      if (workspaceFilesService) return workspaceFilesService;
+      try {
+        if (ctx && typeof ctx.get === 'function') {
+          workspaceFilesService = ctx.get('remote.workspaceFiles') || null;
+        }
+      } catch (_e) { /* service absent */ }
+      if (!workspaceFilesService) {
+        try {
+          workspaceFilesService = (ctx && ctx.remote && ctx.remote.workspaceFiles) || null;
+        } catch (_e) { /* proxy refuses unknown namespaces */ }
+      }
+      return workspaceFilesService;
+    }
 
     const TAB_ID = '@local/dsh-workflow-canvas';
     const KIND = 'workflow';
@@ -141,6 +155,11 @@ window.__ModuleLoader__.load({
         lang: 'EN',
       },
     };
+
+    /** Bilingual string for text read outside the component (tab titles, guide). */
+    function pick(zh, en) {
+      return loadLang() === 'en' ? en : zh;
+    }
 
     function loadLang() {
       try {
@@ -1228,7 +1247,7 @@ window.__ModuleLoader__.load({
         if (!AUTO_CANVAS) return undefined;
         let remote;
         try { remote = hostCtx && hostCtx.remote; } catch (_e) { remote = undefined; }
-        let wf = workspaceFilesService;
+        let wf = resolveWorkspaceFiles(hostCtx);
         if (!wf) {
           try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
         }
@@ -1677,16 +1696,8 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'sessions', 'remote', 'remote.session', 'sidebarRight'],
       apply(ctx) {
-        hostCtx = ctx;
         try {
-          ctx.inject(['remote.workspaceFiles'], (scope) => {
-            try {
-              workspaceFilesService = scope['remote.workspaceFiles']
-                || (scope.remote && scope.remote.workspaceFiles)
-                || null;
-            } catch (_e) { /* service differs across versions */ }
-          });
-        } catch (_e) { /* namespace not offered by this host */ }
+        hostCtx = ctx;
         ctx.inject(['sidebarRightTabs'], (scope) => {
           scope.effect(() => scope.sidebarRightTabs.register({
             id: TAB_ID,
@@ -1698,7 +1709,7 @@ window.__ModuleLoader__.load({
               id: 'workflow-canvas',
               order: 100,
               title: () => 'Workflow canvas',
-              description: () => t('guideDesc'),
+              description: () => pick('画一张子代理流程图', 'Sketch a subagent workflow'),
             }],
           }), 'workflow-canvas: tab type');
 
@@ -1707,6 +1718,9 @@ window.__ModuleLoader__.load({
             key: TAB_ID,
           }, (props) => h(CanvasBoundary, null, h(WorkflowCanvas, props)))), 'workflow-canvas: tab body');
         });
+        } catch (error) {
+          try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
+        }
       },
       __test: { topoOrder, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY },
     };
