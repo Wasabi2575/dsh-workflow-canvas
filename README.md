@@ -39,7 +39,7 @@ across links to cut them (toggle in `⋯`).
 
 1. Write the task in the entry Lead, and a role for each node.
 2. Connect the nodes — unlinked nodes are dashed and skipped.
-3. Press the **● 已启用 / ○ 已禁用** pill over the canvas, then ask in chat to run it.
+3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat to run it.
 4. The run proceeds in parallel waves (up to 4 at a time) and pauses at each Lead
    node with the results collected so far.
 
@@ -73,7 +73,7 @@ fresh.
 ## Limits
 
 - Presets do not travel between the Desktop app and `dsh web`, nor across machines.
-- Node status is read from the subagent catalog, so Lead steps show **由对话执行**
+- Node status is read from the subagent catalog, so Lead steps show **Runs in chat**
   instead of a tracked state.
 - Up to 4 nodes run at a time.
 
