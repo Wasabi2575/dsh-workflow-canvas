@@ -7,21 +7,16 @@ itself.
 
 ![workflow canvas](docs/images/canvas-demo.png)
 
-## 中文简介
-
-在右侧栏画一张流程图来编排 DSH 的子代理：子代理节点会被真实启动，Lead 节点则由对话本体执行。
-画布可以保存为预设、跨会话复用，也能由模型直接生成或就地修改。
-
----
+- [中文说明](README.zh.md)
 
 ## Nodes
 
 - **Subagent node** (green top bar) — spawns a child agent. Each node sets its own
-  model, reasoning effort, capability scopes (`standard` / `minimal`), fallback
+  model, reasoning effort, capability scope (`standard` / `minimal`), fallback
   model, memory and role.
-- **Lead node** (blue top bar) — performed by the conversation, never spawned.
-  The entry Lead carries the overall task; the run stops at every Lead step and
-  resumes with your answer.
+- **Lead node** (blue top bar) — performed by the conversation, never spawned. The
+  entry Lead carries the overall task; the run stops at every Lead step and resumes
+  with your answer.
 
 ## Links
 
@@ -39,7 +34,8 @@ across links to cut them (toggle in `⋯`).
 
 1. Write the task in the entry Lead, and a role for each node.
 2. Connect the nodes — unlinked nodes are dashed and skipped.
-3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat to run it.
+3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat
+   to run it.
 4. The run proceeds in parallel waves (up to 4 at a time) and pauses at each Lead
    node with the results collected so far.
 
@@ -60,8 +56,8 @@ Both write the canvas to the workspace, and the panel picks it up within ~1.5s.
 ## Presets
 
 Name a canvas and press `☆ Save`; load it in another session from `☰ Presets`.
-Presets live in browser storage, shared across sessions of the same origin, and
-are not synchronised across machines.
+Presets live in browser storage, shared across sessions of the same origin, and are
+not synchronised across machines.
 
 ## Memory
 
@@ -77,31 +73,28 @@ fresh.
   instead of a tracked state.
 - Up to 4 nodes run at a time.
 
-## Development
-
-Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host
-changes need a restart. See [docs/DETAIL.md](docs/DETAIL.md) for the internals.
-
 ## Making the agent use this plugin
 
-The bundled guide ships as a skill named `workflow-canvas`. DSH has no
-"auto-load" switch: the model sees each skill's **name and description** in its
-catalogue and loads the body on demand. Three things make it reliable:
+The bundled guide ships as a skill named `workflow-canvas`. DSH has no "auto-load"
+switch: the model sees each skill's **name and description** in its catalogue and
+loads the body on demand. Three things make it reliable:
 
 1. **A description that names the trigger words** — canvas, workflow, pipeline,
-   node graph, 画布, 工作流, 编排. It already does.
-2. **Pointers from the tools** — every `canvas_*` tool description tells the
-   model to load the skill first, and tools are always in context.
+   node graph, 画布, 工作流, 编排.
+2. **Pointers from the tools** — every `canvas_*` tool description tells the model
+   to load the skill first, and tools are always in context.
 3. **A line in your project's `AGENTS.md`** — the strongest option, because it is
    always loaded:
 
 ```markdown
-When a task involves the workflow canvas (画布 / 工作流 / 编排) or the canvas_*
-tools, call the `skill` tool with name `workflow-canvas` first.
+When a task involves the workflow canvas or the canvas_* tools, call the `skill`
+tool with name `workflow-canvas` first.
 ```
 
-Add that to the workspace `AGENTS.md` once per project and the agent will load
-the guide without being asked.
+## Development
+
+Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host
+changes need a restart. See [docs/DETAIL.md](docs/DETAIL.md) for the internals.
 
 ## License
 
