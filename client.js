@@ -1505,10 +1505,10 @@ window.__ModuleLoader__.load({
             type: e.type || 'prompt',
           }));
           if (!merge) return incoming;
-false
-false
-0
-false
+          const drop = new Set((doc.removeEdges || []).map((e) => String(e.from) + '>' + String(e.to)));
+          const kept = existing.filter((e) => !drop.has(e.from + '>' + e.to));
+          const seen = new Set(kept.map((e) => e.from + '>' + e.to + '|' + e.type));
+          const added = incoming.filter((e) => !seen.has(e.from + '>' + e.to + '|' + e.type));
           return kept.concat(added);
         });
         setSelectedIds([]);
