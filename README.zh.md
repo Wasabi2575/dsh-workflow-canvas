@@ -10,6 +10,22 @@
 
 - [English README](README.md)
 
+## 安装
+
+需要 DeepSeek Harness **0.2.2** 或更新版本（包声明
+`engines.dsh: ">=0.2.2-rc.1 <0.3.0-0"`）。
+
+- **从插件市场安装** —— 打开 **插件 → 发现（Discover）**，搜索
+  *"workflow canvas"* 并安装。dshmarket 条目尚在审核中，见
+  [目录 PR](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180)。
+- **从 npm 安装** —— 从 **插件** 面板，或用 `plugin_manager` 工具 / `dsh` CLI
+  的 `install_bundle`（`target` 填 `dsh-workflow-canvas`）安装已发布的包
+  `dsh-workflow-canvas`（最新 `0.1.0`）。
+- **从源码安装** —— 克隆仓库后，用 **插件 → 添加插件（Add plugin）** 把它作为
+  本地目录安装，指向 checkout 目录。
+
+装好并启用插件后，右侧边栏会出现 `workflow` 标签页。
+
 ## 与其它画布插件的区别
 
 DSH 生态里不止一个「工作流画布」。本项目在侧边栏里编排**子代理**，Lead 步骤由对话本体执行，
