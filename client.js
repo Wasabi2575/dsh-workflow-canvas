@@ -1423,7 +1423,7 @@ window.__ModuleLoader__.load({
           setSelectedIds(hitTest(next));
         } else if (pending) {
           const p = pointTo(e);
-          setPending({ fromId: pending.fromId, type: pending.type, sx: pending.sx, sy: pending.sy, x: p.x, y: p.y });
+          setPending((prev) => (prev ? { ...prev, x: p.x, y: p.y } : prev));
         }
       };
 
@@ -1432,12 +1432,13 @@ window.__ModuleLoader__.load({
           cutRef.current = null;
           setDragging(false);
           const victims = Array.from(cutHits.current);
+          const victimIds = new Set(victims);
+          cutHits.current = new Set();
           if (victims.length) {
             pushSnapshot();
-            setEdges((es) => es.filter((x) => !cutHits.current.has(x.id)));
+            setEdges((es) => es.filter((x) => !victimIds.has(x.id)));
             flash(t('linkCut') + ' ×' + victims.length);
           }
-          cutHits.current = new Set();
         }
         if (cutPath.length) { setCutPath([]); setCutVictims([]); }
         if (marquee) {
