@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "工作流画布",
+    "description": "在可视化画布上拖拽节点，编排 subagent。",
+    "detail": "docs/DETAIL.md"
+  }
+}

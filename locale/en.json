@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Workflow canvas",
+    "description": "Drag nodes to orchestrate subagents on a visual canvas.",
+    "detail": "docs/DETAIL.md"
+  }
+}
