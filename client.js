@@ -572,7 +572,8 @@ window.__ModuleLoader__.load({
 
       const [nodes, setNodes] = useState(() => (initial ? initial.nodes : defaultNodes()));
       const [edges, setEdges] = useState(() => (initial ? initial.edges : defaultEdges()));
-      const [selectedId, setSelectedId] = useState(null);
+      const [selectedIds, setSelectedIds] = useState([]);
+      const [marquee, setMarquee] = useState(null);
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -581,8 +582,7 @@ window.__ModuleLoader__.load({
 
       const contentRef = useRef(null);
       const canvasElRef = useRef(null);
-      const nodeDrag = useRef(null);
-      const statusTimer = useRef(null);
+      const nodeDrag = useRef(null);      const statusTimer = useRef(null);
       const dropdownRef = useRef(null);
       const syncTimer = useRef(null);
       const lastSync = useRef('');
@@ -800,7 +800,7 @@ window.__ModuleLoader__.load({
         if (!prev) { flash(t('undoNone')); return; }
         setNodes(prev.nodes);
         setEdges(prev.edges);
-        setSelectedId(null);
+        setSelectedIds([]);
         flash(t('undoDone'));
       };
 
@@ -884,17 +884,23 @@ window.__ModuleLoader__.load({
         pushSnapshot();
         setNodes((ns) => ns.filter((n) => n.id !== id));
         setEdges((es) => es.filter((e) => e.from !== id && e.to !== id));
-        setSelectedId(null);
+        setSelectedIds([]);
         flash('节点已删除，可点「撤销」找回');
       };
 
+      /** Dragging any selected node moves the whole selection together. */
       const onNodeDown = (e, id) => {
         if (!contentRef.current) return;
         const node = nodes.find((n) => n.id === id);
         if (!node) return;
         const p = pointTo(e);
-        nodeDrag.current = { id, dx: p.x - node.x, dy: p.y - node.y };
-        setSelectedId(id);
+        const group = selectedIds.includes(id) ? selectedIds : [id];
+        if (!selectedIds.includes(id)) setSelectedIds([id]);
+        const origins = group
+          .map((nid) => nodes.find((n) => n.id === nid))
+          .filter(Boolean)
+          .map((n) => ({ id: n.id, x: n.x, y: n.y }));
+        nodeDrag.current = { origins, startX: p.x, startY: p.y, moved: false };
         setOpenModelFor(null);
         e.preventDefault();
         e.stopPropagation();
@@ -942,13 +948,29 @@ window.__ModuleLoader__.load({
         setPending(null);
       };
 
+      const onCanvasDown = (e) => {
+        if (e.button !== 0) return;
+        const p = pointTo(e);
+        setMarquee({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+        if (selectedIds.length) setSelectedIds([]);
+        setOpenModelFor(null);
+      };
+
       const onCanvasMove = (e) => {
         if (nodeDrag.current) {
           const p = pointTo(e);
-          const id = nodeDrag.current.id;
-          const x = p.x - nodeDrag.current.dx;
-          const y = p.y - nodeDrag.current.dy;
-          setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, x, y } : n)));
+          const drag = nodeDrag.current;
+          const dx = p.x - drag.startX;
+          const dy = p.y - drag.startY;
+          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) drag.moved = true;
+          const byId = new Map(drag.origins.map((o) => [o.id, o]));
+          setNodes((ns) => ns.map((n) => {
+            const origin = byId.get(n.id);
+            return origin ? { ...n, x: origin.x + dx, y: origin.y + dy } : n;
+          }));
+        } else if (marquee) {
+          const p = pointTo(e);
+          setMarquee({ x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y });
         } else if (pending) {
           const p = pointTo(e);
           setPending({ fromId: pending.fromId, type: pending.type, sx: pending.sx, sy: pending.sy, x: p.x, y: p.y });
@@ -956,6 +978,18 @@ window.__ModuleLoader__.load({
       };
 
       const onCanvasUp = () => {
+        if (marquee) {
+          const left = Math.min(marquee.x1, marquee.x2);
+          const right = Math.max(marquee.x1, marquee.x2);
+          const top = Math.min(marquee.y1, marquee.y2);
+          const bottom = Math.max(marquee.y1, marquee.y2);
+          const moved = right - left > 3 || bottom - top > 3;
+          const hit = moved
+            ? nodes.filter((n) => n.x + NODE_W >= left && n.x <= right && n.y + NODE_H >= top && n.y <= bottom)
+            : [];
+          setSelectedIds(hit.map((n) => n.id));
+          setMarquee(null);
+        }
         nodeDrag.current = null;
         setPending(null);
       };
@@ -981,7 +1015,7 @@ window.__ModuleLoader__.load({
         pushSnapshot();
         setNodes(preset.nodes);
         setEdges(preset.edges);
-        setSelectedId(null);
+        setSelectedIds([]);
         setStatusById({});
         setPresetOpen(null);
         flash(t('loadedPreset') + ': ' + name);
@@ -1172,12 +1206,23 @@ window.__ModuleLoader__.load({
               transform: 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')',
               transformOrigin: '0 0',
             },
+            onMouseDown: onCanvasDown,
             onMouseMove: onCanvasMove,
             onMouseUp: onCanvasUp,
             onMouseLeave: onCanvasUp,
           },
             h('svg', { width: CONTENT_W, height: CONTENT_H, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none' } },
               h('g', null, edgeEls),
+              marquee && h('rect', {
+                x: Math.min(marquee.x1, marquee.x2),
+                y: Math.min(marquee.y1, marquee.y2),
+                width: Math.abs(marquee.x2 - marquee.x1),
+                height: Math.abs(marquee.y2 - marquee.y1),
+                fill: 'rgba(47,129,247,0.12)',
+                stroke: C.accent,
+                strokeWidth: 1,
+                strokeDasharray: '4 3',
+              }),
               pending && (() => {
                 const color = (SOCKET_TYPES.find((t) => t.id === pending.type) || SOCKET_TYPES[0]).color;
                 const d = 'M ' + pending.sx + ' ' + pending.sy + ' L ' + pending.x + ' ' + pending.y;
@@ -1194,14 +1239,14 @@ window.__ModuleLoader__.load({
                   value: node.role || '',
                   placeholder: isLeadKind ? t('rolePhLead') : t('rolePhAgent'),
                   onMouseDown: (e) => e.stopPropagation(),
-                  onFocus: () => setSelectedId(node.id),
+                  onFocus: () => setSelectedIds([node.id]),
                   onChange: (e) => updateNode(node.id, { role: e.target.value }),
                 }),
               );
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
               return h('div', {
                 key: node.id,
-                style: selectedId === node.id
+                style: selectedIds.includes(node.id)
                   ? { ...S.node, left: node.x, top: node.y, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
                   : { ...S.node, left: node.x, top: node.y, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
                 title: isOrphan ? '未连线：运行时会被跳过' : undefined,
@@ -1233,7 +1278,7 @@ window.__ModuleLoader__.load({
                       style: S.title,
                       value: node.label,
                       onMouseDown: (e) => e.stopPropagation(),
-                      onFocus: () => setSelectedId(node.id),
+                      onFocus: () => setSelectedIds([node.id]),
                       onChange: (e) => updateNode(node.id, { label: e.target.value }),
                     }),
                 isEntry
@@ -1242,7 +1287,7 @@ window.__ModuleLoader__.load({
                       value: node.task || '',
                       placeholder: t('taskPh'),
                       onMouseDown: (e) => e.stopPropagation(),
-                      onFocus: () => setSelectedId(node.id),
+                      onFocus: () => setSelectedIds([node.id]),
                       onChange: (e) => updateNode(node.id, { task: e.target.value }),
                     })
                   : isLeadKind
@@ -1304,7 +1349,7 @@ window.__ModuleLoader__.load({
                     onClick: () => updateNode(node.id, { structured: !node.structured }),
                   }, t('structured')),
                 ),
-                selectedId === node.id && node.id !== 'lead' && h('div', {
+                selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
                   title: '删除节点（可用 ↶ 撤销 找回）',
                   onMouseDown: (e) => e.stopPropagation(),
