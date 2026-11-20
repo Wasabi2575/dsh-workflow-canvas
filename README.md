@@ -81,3 +81,24 @@ fresh.
 
 Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host
 changes need a restart. See [docs/DETAIL.md](docs/DETAIL.md) for the internals.
+
+## Making the agent use this plugin
+
+The bundled guide ships as a skill named `workflow-canvas`. DSH has no
+"auto-load" switch: the model sees each skill's **name and description** in its
+catalogue and loads the body on demand. Three things make it reliable:
+
+1. **A description that names the trigger words** — canvas, workflow, pipeline,
+   node graph, 画布, 工作流, 编排. It already does.
+2. **Pointers from the tools** — every `canvas_*` tool description tells the
+   model to load the skill first, and tools are always in context.
+3. **A line in your project's `AGENTS.md`** — the strongest option, because it is
+   always loaded:
+
+```markdown
+When a task involves the workflow canvas (画布 / 工作流 / 编排) or the canvas_*
+tools, call the `skill` tool with name `workflow-canvas` first.
+```
+
+Add that to the workspace `AGENTS.md` once per project and the agent will load
+the guide without being asked.

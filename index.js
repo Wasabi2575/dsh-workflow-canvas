@@ -501,7 +501,7 @@ async function runPlan(scope, args, exec) {
 
 /** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
 const SKILL_NAME = 'workflow-canvas';
-const SKILL_DESCRIPTION = 'Draw, edit and run a DSH workflow canvas: nodes, typed links, Lead steps, presets.';
+const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排): draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_generate, canvas_patch or canvas_workflow.';
 function skillPath() {
   try {
     return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));
@@ -585,7 +585,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_generate',
-          description: 'Build a workflow canvas for this session from a node/edge sketch. Returns a canvas document that the user imports with the canvas "Import" button (the canvas cannot receive data from the Host directly).',
+          description: 'Build a workflow canvas for this session from a node/edge sketch. It is written to the workspace and the open canvas picks it up. Load the `workflow-canvas` skill first for node fields and link semantics.',
           parameters: {
             type: 'object',
             properties: {
@@ -679,7 +679,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_patch',
-          description: 'Edit the current canvas in place: update the given nodes by id, add new ones, remove some, and add or remove links. Everything else, including node positions, is left alone.',
+          description: 'Edit the current canvas in place: update the given nodes by id, add new ones, remove some, and add or remove links. Everything else, including node positions, is left alone. Prefer this over canvas_generate for edits; load the `workflow-canvas` skill first if unsure.',
           parameters: {
             type: 'object',
             properties: {
@@ -773,7 +773,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_workflow',
-          description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult.',
+          description: 'Run the workflow canvas of the current session. Executes subagent nodes in parallel waves; when a Lead node is reached it returns status "need-lead" and expects a follow-up call carrying leadResult. Load the `workflow-canvas` skill first when you are unsure how the canvas works.',
           parameters: {
             type: 'object',
             properties: {
