@@ -191,13 +191,25 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
 
   const run = async (childId) => {
     const withChild = childId ? { ...spec, childId } : spec;
-    const activation = await scope.subagents.startActivation(withChild);
+    let activation;
+    try {
+      activation = await scope.subagents.startActivation(withChild);
+    } catch (error) {
+      const message = String((error && error.message) || error);
+      return { ok: false, text: '启动失败：' + message, reason: 'activation-failed' };
+    }
     try {
       if (activation && activation.childId) {
         childByNode.set(node.id, activation.childId);
         liveChild.set(node.id, activation.childId);
       }
-      const result = await activation.result;
+      let result;
+      try {
+        result = await activation.result;
+      } catch (error) {
+        const message = String((error && error.message) || error);
+        return { ok: false, text: '运行失败：' + message, reason: 'run-failed' };
+      }
       return { ok: !failed(result), text: textOf(result), reason: result && result.stopReason };
     } finally {
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
