@@ -919,31 +919,57 @@ window.__ModuleLoader__.load({
         const idx = SOCKET_TYPES.findIndex((t) => t.id === type);
         const sx = node.x + NODE_W;
         const sy = node.y + socketCenterY(idx);
-        setPending({ fromId: id, type, sx, sy, x: sx, y: sy });
+        setPending({ dir: 'out', fromId: id, type, sx, sy, x: sx, y: sy });
         setDragging(true);
         e.preventDefault();
         e.stopPropagation();
       };
 
-      // Blender behavior: dragging the link off a connected input detaches it.
+      /** Release over an output socket: completes a drag that started at an input. */
+      const onOutputUp = (e, id, type) => {
+        if (!pending || pending.dir !== 'in' || pending.type !== type) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const toId = pending.toId;
+        if (toId && toId !== id) {
+          pushSnapshot();
+          setEdges((es) => {
+            if (es.some((x) => x.from === id && x.to === toId && x.type === type)) return es;
+            return [...es, { id: 'e' + Date.now().toString(36), from: id, to: toId, type }];
+          });
+        }
+        setPending(null);
+        setDragging(false);
+      };
+
+      // Dragging a connected input detaches it; dragging a free input starts a
+      // link that finishes on an output socket of the same type.
       const onInputDown = (e, id, type) => {
         e.preventDefault();
         e.stopPropagation();
         const link = edges.find((x) => x.to === id && x.type === type);
-        if (!link) return;
+        const idx = SOCKET_TYPES.findIndex((t) => t.id === type);
+        if (!link) {
+          const node = nodes.find((n) => n.id === id);
+          if (!node) return;
+          const sx = node.x;
+          const sy = node.y + socketCenterY(idx);
+          setPending({ dir: 'in', toId: id, type, sx, sy, x: sx, y: sy });
+          setDragging(true);
+          return;
+        }
         pushSnapshot();
         setEdges((es) => es.filter((x) => !(x.to === id && x.type === type)));
         const from = nodes.find((n) => n.id === link.from);
         if (!from) return;
-        const idx = SOCKET_TYPES.findIndex((t) => t.id === type);
         const sx = from.x + NODE_W;
         const sy = from.y + socketCenterY(idx);
-        setPending({ fromId: link.from, type, sx, sy, x: sx, y: sy });
+        setPending({ dir: 'out', fromId: link.from, type, sx, sy, x: sx, y: sy });
         setDragging(true);
       };
 
       const onInputUp = (e, id, type) => {
-        if (!pending || pending.type !== type) return;
+        if (!pending || pending.dir !== 'out' || pending.type !== type) return;
         e.preventDefault();
         e.stopPropagation();
         if (pending.fromId !== id) {
@@ -955,6 +981,7 @@ window.__ModuleLoader__.load({
           });
         }
         setPending(null);
+        setDragging(false);
       };
 
       useEffect(() => {
@@ -1142,8 +1169,9 @@ window.__ModuleLoader__.load({
             }),
             h('div', {
               style: { ...S.socket, right: -PORT / 2, borderColor: t.color },
-              title: '从这里拖出连线',
+              title: '从这里拖出连线 / 也可以把输入口拖到这里',
               onMouseDown: (e) => onOutputDown(e, node.id, t.id),
+              onMouseUp: (e) => onOutputUp(e, node.id, t.id),
             }),
           )),
         );
