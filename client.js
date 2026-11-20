@@ -258,13 +258,13 @@ window.__ModuleLoader__.load({
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       },
       floatOn: {
-        position: 'absolute', top: '10px', right: '10px', zIndex: 30,
+        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.accent,
         background: C.elevated, color: C.accent, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
       },
       floatOff: {
-        position: 'absolute', top: '10px', right: '10px', zIndex: 30,
+        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
