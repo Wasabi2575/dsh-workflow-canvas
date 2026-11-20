@@ -1278,7 +1278,7 @@ window.__ModuleLoader__.load({
               return h('div', {
                 key: node.id,
                 style: selectedIds.includes(node.id)
-                  ? { ...S.node, left: node.x, top: node.y, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
+                  ? { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
                   : { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
                 title: isOrphan ? '未连线：运行时会被跳过' : undefined,
                 onMouseDown: (e) => onNodeDown(e, node.id),
