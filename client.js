@@ -58,7 +58,7 @@ window.__ModuleLoader__.load({
         tipPreset: '预设：点击循环 无 / minimal / standard',
         tipFallback: '备用：失败时用第一个模型重试一次',
         tipStructured: '结构化：要求该节点返回 JSON 对象，供 structured 连线使用',
-        lang: 'EN',
+        lang: 'ZH',
       },
       en: {
         addAgent: '+ Subagent', addLead: '+ Lead', undo: '↶ Undo', sync: '↥ Sync',
@@ -86,7 +86,7 @@ window.__ModuleLoader__.load({
         tipPreset: 'Preset: cycle none / minimal / standard',
         tipFallback: 'Fallback: retry once with the first model when this node fails',
         tipStructured: 'JSON: require this node to return an object for structured links',
-        lang: '中',
+        lang: 'EN',
       },
     };
 
