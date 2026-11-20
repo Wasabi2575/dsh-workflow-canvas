@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, normalizeCanvas, applyPatch, inspectPlan, executePlan } from '../index.js';
+import { orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -328,4 +328,228 @@ test('inspectPlan returns empty snapshot for unknown session', () => {
   assert.equal(snap.hasCanvas, false);
   assert.equal(snap.enabled, false);
   assert.deepEqual(snap.nodes, []);
+  assert.deepEqual(snap, JSON.parse(JSON.stringify(snap)), 'inspectPlan output is lossless JSON');
+});
+
+test('executePlan starts newly unblocked children immediately without waiting for slow siblings', async () => {
+  const events = [];
+  const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        events.push('start:' + id);
+        const waitMs = id === 'slow' ? 70 : 10;
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: delay(waitMs).then(() => {
+            events.push('end:' + id);
+            return { output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' };
+          }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '并发池测试',
+    nodes: [
+      { id: 'fast', kind: 'agent', label: '脚手架', role: '快节点' },
+      { id: 'slow', kind: 'agent', label: '回响系统', role: '慢节点' },
+      { id: 'child', kind: 'agent', label: '美术', role: '只依赖脚手架' },
+    ],
+    edges: [
+      { from: 'lead', to: 'fast', type: 'prompt' },
+      { from: 'lead', to: 'slow', type: 'prompt' },
+      { from: 'fast', to: 'child', type: 'prompt' },
+    ],
+  };
+
+  const exec = { agent: { id: 's-pool' }, signal: new AbortController().signal };
+  const result = await executePlan(scope, plan, {}, exec);
+
+  assert.equal(result.status, 'done');
+  const childStart = events.indexOf('start:child');
+  const slowEnd = events.indexOf('end:slow');
+  assert.ok(childStart >= 0 && slowEnd >= 0);
+  assert.ok(childStart < slowEnd, 'child started before slow sibling finished: ' + events.join(', '));
+});
+
+test('normalizeCanvas promotes hand-authored root Lead and auto-wires missing lead edges', () => {
+  const promoted = normalizeCanvas({
+    task: '回声塔',
+    nodes: [
+      { id: 'n1', kind: 'lead', label: '总控·策划', role: '总控' },
+      { id: 'n2', kind: 'agent', label: '脚手架', role: '搭框架' },
+      { id: 'n3', kind: 'lead', label: '集成交付', role: '收尾' },
+    ],
+    edges: [
+      { from: 'n1', to: 'n2', type: 'prompt' },
+      { from: 'n2', to: 'n3', type: 'prompt' },
+    ],
+  });
+  assert.equal(promoted.nodes.filter((n) => n.id === 'lead').length, 1);
+  assert.equal(promoted.nodes.filter((n) => n.kind === 'lead').length, 2, 'no duplicate entry Lead created');
+  assert.ok(promoted.edges.some((e) => e.from === 'lead' && e.to === 'n2'), 'promoted Lead edges rewritten to lead');
+
+  const autoWired = normalizeCanvas({
+    task: '自动连线测试',
+    nodes: [
+      { id: 'a', label: '步骤A', role: 'A' },
+      { id: 'b', label: '步骤B', role: 'B' },
+    ],
+    edges: [{ from: 'a', to: 'b', type: 'prompt' }],
+  });
+  assert.ok(autoWired.edges.some((e) => e.from === 'lead' && e.to === 'a'), 'entry Lead auto-wired to root node');
+});
+
+test('analyzeCanvasWarnings flags dead-end subagents when a downstream Lead exists', () => {
+  const warnings = analyzeCanvasWarnings(
+    [
+      { id: 'lead', kind: 'lead', label: 'Lead' },
+      { id: 'n2', kind: 'agent', label: '脚手架' },
+      { id: 'n3', kind: 'agent', label: '玩家控制器' },
+      { id: 'n9', kind: 'lead', label: '集成交付' },
+    ],
+    [
+      { from: 'lead', to: 'n2' },
+      { from: 'lead', to: 'n3' },
+      { from: 'n2', to: 'n9' },
+    ],
+  );
+  assert.equal(warnings.length, 1);
+  assert.ok(warnings[0].includes('玩家控制器'));
+
+  // No false warning in a simple chain with no downstream Lead
+  const noWarn = analyzeCanvasWarnings(
+    [{ id: 'lead', kind: 'lead', label: 'Lead' }, { id: 'a', kind: 'agent', label: 'A' }],
+    [{ from: 'lead', to: 'a' }],
+  );
+  assert.equal(noWarn.length, 0);
+});
+
+test('briefFor forbids process monologue and requires incomplete delivery marker', () => {
+  const brief = briefFor(
+    { task: '测试', nodes: [{ id: 'a', kind: 'agent', label: '美术', role: '画图' }], edges: [{ from: 'lead', to: 'a' }] },
+    { id: 'a', kind: 'agent', label: '美术', role: '画图' },
+    {},
+  );
+  assert.ok(brief.includes('不要包含思考独白'));
+  assert.ok(brief.includes('【未完全交付】'));
+});
+
+test('executePlan stops immediately on AbortSignal without launching downstream nodes', async () => {
+  const launched = [];
+  const ac = new AbortController();
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        launched.push(id);
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: new Promise((resolve) => {
+            setTimeout(() => {
+              ac.abort();
+              resolve({ output: [{ type: 'text', text: 'cancelled' }], stopReason: 'aborted' });
+            }, 15);
+          }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '取消测试',
+    nodes: [
+      { id: 'n1', kind: 'agent', label: '第一步', role: '1' },
+      { id: 'n2', kind: 'agent', label: '第二步', role: '2' },
+    ],
+    edges: [
+      { from: 'lead', to: 'n1', type: 'prompt' },
+      { from: 'n1', to: 'n2', type: 'prompt' },
+    ],
+  };
+
+  const result = await executePlan(scope, plan, {}, { agent: { id: 's-abort' }, signal: ac.signal });
+  assert.ok(result.error && result.error.includes('取消'));
+  assert.deepEqual(launched, ['n1'], 'downstream n2 must never start after abort');
+});
+
+test('applyPatch clears structured flag when structured edge is removed and updates task', () => {
+  const base = {
+    task: '旧任务',
+    nodes: [
+      { id: 'a', kind: 'agent', label: '上游', role: 'A', structured: true },
+      { id: 'b', kind: 'agent', label: '下游', role: 'B', structured: false },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'b', type: 'structured' },
+    ],
+  };
+  const patched = applyPatch(base, {
+    task: '新任务',
+    removeEdges: [{ from: 'a', to: 'b', type: 'structured' }],
+    edges: [{ from: 'a', to: 'b', type: 'prompt' }],
+  });
+  assert.equal(patched.taskPatched, true);
+  assert.equal(patched.plan.task, '新任务');
+  assert.equal(patched.plan.nodes.find((n) => n.id === 'a').structured, false);
+});
+
+test('normalizeCanvas deduplicates duplicate node ids so DAG stays valid', () => {
+  const canvas = normalizeCanvas({
+    task: '去重测试',
+    nodes: [
+      { id: 'n1', label: '节点A', role: 'A' },
+      { id: 'n1', label: '节点B', role: 'B' },
+    ],
+    edges: [],
+  });
+  const ids = canvas.nodes.map((n) => n.id);
+  assert.equal(new Set(ids).size, ids.length, 'all node ids are unique');
+  assert.ok(orderNodes({ nodes: withoutEntry(canvas.nodes), edges: canvas.edges }), 'deduplicated graph is acyclic');
+});
+
+test('executePlan flags subagents that return empty prose without structured output', async () => {
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        if (id === 'silent') {
+          return Promise.resolve({
+            childId: 'kid-silent',
+            result: Promise.resolve({ output: [], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-json',
+          result: Promise.resolve({ structured: { ok: true }, output: [], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+
+  const plan = {
+    task: '空输出检查',
+    nodes: [
+      { id: 'silent', kind: 'agent', label: '静默节点', role: '无文本' },
+      { id: 'json', kind: 'agent', label: '结构化节点', role: '产 JSON' },
+    ],
+    edges: [
+      { from: 'lead', to: 'silent', type: 'prompt' },
+      { from: 'lead', to: 'json', type: 'prompt' },
+      { from: 'json', to: 'silent', type: 'structured' },
+    ],
+  };
+
+  const result = await executePlan(scope, plan, {}, { agent: { id: 's-empty' }, signal: new AbortController().signal });
+  assert.equal(result.status, 'done');
+  assert.deepEqual(result.emptyOutputs, [{ id: 'silent', label: '静默节点' }]);
+  assert.deepEqual(result, JSON.parse(JSON.stringify(result)), 'result is lossless JSON');
 });

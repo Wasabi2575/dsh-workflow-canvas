@@ -180,6 +180,9 @@ window.__ModuleLoader__.load({
         fxStandard: '标准',
         fxVivid: '炫酷',
         tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
+        stDeadEnd: '无出边',
+        tipDeadEnd: '该子代理节点没有下游连线：若需把产出交给后续节点或终审 Lead，请从右侧端口连出',
+        singleModelHint: '当前仅 1 个可用模型，暂无其它备用路由',
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
@@ -275,6 +278,9 @@ window.__ModuleLoader__.load({
         fxStandard: 'Standard',
         fxVivid: 'Vivid',
         tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
+        stDeadEnd: 'No out-link',
+        tipDeadEnd: 'This subagent has no outgoing link: wire it to a downstream node or Lead so its output is consumed',
+        singleModelHint: 'Only 1 model available — no alternate fallback route',
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
@@ -473,6 +479,13 @@ window.__ModuleLoader__.load({
         padding: '1px 5px', borderRadius: '999px',
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
         display: 'inline-flex', alignItems: 'center', gap: '3px',
+      },
+      warnChip: {
+        position: 'absolute', left: '12px', bottom: '4px', fontSize: '9px', lineHeight: '13px',
+        padding: '1px 5px', borderRadius: '999px',
+        color: '#d29922', background: 'rgba(210,153,34,0.14)', border: '1px solid rgba(210,153,34,0.55)',
+        pointerEvents: 'auto', zIndex: 5, whiteSpace: 'nowrap',
+        display: 'inline-flex', alignItems: 'center', gap: '2px',
       },
       statusBtn: {
         position: 'absolute', right: '12px', bottom: '3px', fontSize: '10px', lineHeight: '14px',
@@ -1305,6 +1318,8 @@ window.__ModuleLoader__.load({
       edgesRef.current = edges;
       const selectedIdsRef = useRef(selectedIds);
       selectedIdsRef.current = selectedIds;
+      const skipDirtyOnce = useRef(false);
+      const staleChildIds = useRef(new Set());
 
       useEffect(() => {
         const stamp = applyStamp.current;
@@ -1312,8 +1327,13 @@ window.__ModuleLoader__.load({
         saveDoc(sessionId, { nodes, edges, enabled }, stamp === null ? undefined : stamp);
       }, [sessionId, nodes, edges, enabled]);
 
-      // Any structural edit after enabling leaves the Host copy stale.
+      // Any structural edit after enabling leaves the Host copy stale,
+      // except when the update came directly from the Host itself.
       useEffect(() => {
+        if (skipDirtyOnce.current) {
+          skipDirtyOnce.current = false;
+          return;
+        }
         if (enabled) setDirty(true);
       }, [nodes, edges]);
 
@@ -1372,7 +1392,7 @@ window.__ModuleLoader__.load({
             if (ack && ack.ok) {
               lastSync.current = sig;
               setDirty(false);
-              setStatusById({});
+              snapshotStaleCatalog();
               flash(t('syncedToHost'));
             } else {
               flash(t('syncFailed'));
@@ -1418,6 +1438,26 @@ window.__ModuleLoader__.load({
 
       const NODE_MARK = /#([^\s#]+)$/;
 
+      /** Mark existing historical subagent sessions as stale before a fresh run. */
+      const snapshotStaleCatalog = () => {
+        try {
+          const sessions = hostCtx && hostCtx.sessions;
+          if (sessions && sessionId) {
+            const state = sessions.list.getSnapshot();
+            const proj = state && state.projectionsBySession && state.projectionsBySession[sessionId];
+            const catalog = proj && proj.values && proj.values.subagentCatalog;
+            if (Array.isArray(catalog)) {
+              const stale = new Set();
+              for (const entry of catalog) {
+                if (entry && entry.id) stale.add(entry.id);
+              }
+              staleChildIds.current = stale;
+            }
+          }
+        } catch (_e) { /* ignore */ }
+        setStatusById({});
+      };
+
       const readCatalog = () => {
         try {
           const sessions = hostCtx && hostCtx.sessions;
@@ -1437,9 +1477,6 @@ window.__ModuleLoader__.load({
             const child = state.byId && state.byId[entry.id];
             const timingProj = state.projectionsBySession && state.projectionsBySession[entry.id];
             const timing = timingProj && timingProj.values && timingProj.values.subagentTiming;
-            if (child && child.running) nextStatus[nodeId] = 'running';
-            else if (timing && timing.lastTurnCompleted === false) nextStatus[nodeId] = 'failed';
-            else nextStatus[nodeId] = 'done';
             if (entry.id) {
               const prev = nextRuns[nodeId];
               nextRuns[nodeId] = {
@@ -1448,6 +1485,13 @@ window.__ModuleLoader__.load({
                 mode: entry.mode || 'continuable',
                 count: prev ? prev.count + 1 : 1,
               };
+            }
+            if (child && child.running) {
+              if (entry.id) staleChildIds.current.delete(entry.id);
+              nextStatus[nodeId] = 'running';
+            } else if (!entry.id || !staleChildIds.current.has(entry.id)) {
+              if (timing && timing.lastTurnCompleted === false) nextStatus[nodeId] = 'failed';
+              else nextStatus[nodeId] = 'done';
             }
           }
           return { status: nextStatus, runs: nextRuns };
@@ -1460,6 +1504,7 @@ window.__ModuleLoader__.load({
       // catalog lists children by `label#nodeId`. Lead steps run inside the
       // conversation, so the canvas cannot observe them and must not pretend to.
       useEffect(() => {
+        staleChildIds.current = new Set();
         const sessions = hostCtx && hostCtx.sessions;
         const face = sessionFace(sessionId);
         if (!sessions || !sessionId || !face || typeof face.subscribe !== 'function') return undefined;
@@ -1477,8 +1522,6 @@ window.__ModuleLoader__.load({
         const onSnapshot = () => {
           let running = false;
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
-          // A new turn means a new run: drop the previous run's statuses first.
-          if (running && !wasRunning) setStatusById({});
           const finished = !running && wasRunning;
           wasRunning = running;
           if (running && !timer) { read(); timer = setInterval(read, 700); }
@@ -2256,13 +2299,20 @@ window.__ModuleLoader__.load({
       };
 
       /** Load a canvas document produced by the model. */
-      const applyCanvasDoc = (doc, remoteAt) => {
+      const applyCanvasDoc = (doc, remoteAt, fromRemote) => {
         if (!doc || !Array.isArray(doc.nodes)) return false;
         const merge = doc.mode === 'merge';
         if (!merge && !doc.nodes.length) return false;
         pushSnapshot();
         const stamp = typeof remoteAt === 'number' ? remoteAt : (typeof doc.at === 'number' ? doc.at : null);
         applyStamp.current = stamp;
+        if (fromRemote) {
+          skipDirtyOnce.current = true;
+          setDirty(false);
+        }
+        if (typeof doc.enabled === 'boolean') {
+          setEnabled(doc.enabled);
+        }
         const removedNodes = new Set(doc.removeNodes || []);
         const rawIncomingEdges = Array.isArray(doc.edges) ? doc.edges : [];
         setNodes((existing) => {
@@ -2293,7 +2343,9 @@ window.__ModuleLoader__.load({
           });
           if (!merge) return incoming;
           const touched = new Set(incoming.map((n) => n.id));
-          const kept = existing.filter((n) => !touched.has(n.id) && !removedNodes.has(n.id));
+          const kept = existing
+            .filter((n) => !touched.has(n.id) && !removedNodes.has(n.id))
+            .map((n) => (n.id === 'lead' && typeof doc.task === 'string' ? { ...n, task: doc.task } : n));
           return kept.concat(incoming);
         });
         setEdges((existing) => {
@@ -2315,7 +2367,7 @@ window.__ModuleLoader__.load({
           return kept.concat(added);
         });
         setSelectedIds([]);
-        setStatusById({});
+        snapshotStaleCatalog();
         if (!merge) {
           setRunsById({});
           setTimeout(() => fitView(nodesRef.current), 0);
@@ -2377,7 +2429,7 @@ window.__ModuleLoader__.load({
             const valid = canvas && Array.isArray(canvas.nodes)
               && (canvas.mode === 'merge' || canvas.nodes.length > 0)
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas, doc.at)) {
+            if (valid && applyCanvasDoc(canvas, doc.at, true)) {
               flash(t('generated'));
               setSyncNote(t('syncApplied'));
               setTimeout(() => setSyncNote(''), 4000);
@@ -2418,7 +2470,7 @@ window.__ModuleLoader__.load({
         setNodes(preset.nodes);
         setEdges(preset.edges);
         setSelectedIds([]);
-        setStatusById({});
+        snapshotStaleCatalog();
         setRunsById({});
         setPresetOpen(null);
         setTimeout(() => fitView(preset.nodes), 0);
@@ -2433,7 +2485,7 @@ window.__ModuleLoader__.load({
         setNodes(clonedNodes);
         setEdges(clonedEdges);
         setSelectedIds([]);
-        setStatusById({});
+        snapshotStaleCatalog();
         setRunsById({});
         setPresetOpen(null);
         setTimeout(() => fitView(clonedNodes), 0);
@@ -2519,6 +2571,9 @@ window.__ModuleLoader__.load({
             onMouseLeave: (e) => { e.currentTarget.style.background = picked ? C.hover : 'transparent'; },
             onClick: () => { updateNode(node.id, { fallbackModel: m.model, fallbackProvider: m.provider }); setOpenModelFor(null); },
           }, m.modelName || m.model));
+        }
+        if (models.length === 1) {
+          rows.push(h('div', { key: 'single-hint', style: S.presetEmpty }, t('singleModelHint')));
         }
         return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
@@ -2632,6 +2687,11 @@ window.__ModuleLoader__.load({
       }
       const reachableIds = reachableFrom(nodes, edges);
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const hasDownstreamLead = nodes.some((n) => n.kind === 'lead' && n.id !== 'lead' && reachableIds.has(n.id));
+      const hasOutNode = new Set(edges.map((e) => e.from));
+      const deadEndIds = new Set(hasDownstreamLead
+        ? nodes.filter((n) => n.kind !== 'lead' && reachableIds.has(n.id) && !hasOutNode.has(n.id)).map((n) => n.id)
+        : []);
 
       // Identify intermediate/final Lead nodes whose upstream subagents are all
       // finished and whose downstream has not started yet ("Ready for Lead").
@@ -3036,6 +3096,7 @@ window.__ModuleLoader__.load({
                 }),
               );
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
+              const isDeadEnd = deadEndIds.has(node.id);
               const isSelected = selectedSet.has(node.id);
               const nodeStatus = enabled ? statusById[node.id] : undefined;
               const isLeadReady = leadReadyIds.has(node.id);
@@ -3053,7 +3114,9 @@ window.__ModuleLoader__.load({
                     ? { border: '1.5px solid rgba(229,83,75,0.8)', boxShadow: '0 0 12px rgba(229,83,75,0.18)' }
                     : isDone
                       ? { border: '1px solid rgba(63,185,80,0.55)' }
-                      : null;
+                      : isDeadEnd
+                        ? { border: '1px solid rgba(210,153,34,0.55)' }
+                        : null;
               const topBarBg = (isRunning || isLeadReady) && fxLevel === 'vivid'
                 ? (isLeadKind
                   ? 'linear-gradient(90deg, #2f81f7 0%, #79c0ff 50%, #2f81f7 100%)'
@@ -3083,6 +3146,11 @@ window.__ModuleLoader__.load({
                 }),
                 h('div', { style: S.nodeHeader }),
                 h('div', { style: S.bandDivider }),
+                isDeadEnd && h('div', {
+                  style: S.warnChip,
+                  title: t('tipDeadEnd'),
+                  onMouseDown: (e) => e.stopPropagation(),
+                }, '⚠ ', t('stDeadEnd')),
                 (() => {
                   const latestRun = !isLeadKind ? runsById[node.id] : null;
                   const statusColor = isLeadReady ? '#2f81f7'

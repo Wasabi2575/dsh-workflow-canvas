@@ -62,11 +62,11 @@ When `canvas_workflow` runs, `executePlan` executes the following pipeline:
 1. **Entry stripping & task override**: The entry `lead` node is stripped (`withoutEntry`) and never spawned. If `args.task` is provided, it overrides `plan.task` for this run (allowing blank-task templates to be reused straight from chat).
 2. **Cycle validation (Kahn topological sort)**: `orderNodes` validates the DAG is acyclic (the client also blocks cycles interactively via `wouldCycle`).
 3. **Reachability pruning**: BFS from `'lead'` filters out disconnected nodes. Unreachable nodes are drawn dashed, skipped at run time, and listed in `skipped` without burning tokens.
-4. **Parallel waves & resumable pauses**:
+4. **Event-driven concurrency pool & resumable pauses**:
    - Progress per session is tracked in `runBySession` (`{ sig, done, results, labels, failed }`).
-   - Each iteration finds every remaining node whose dependencies are all in `done`:
-     - Ready **subagent nodes** run in parallel via `Promise.all`, up to **4 per wave** (`MAX_PARALLEL = 4`).
-     - When only **Lead nodes** are ready and no `leadResult` was passed, execution pauses with `status: "need-lead"`, returning collected results, any failures, and `session` child IDs.
+   - Instead of a strict per-wave barrier, the executor runs an **event-driven concurrency pool (`inFlight` + `Promise.race`, `MAX_PARALLEL = 4`)**:
+     - The instant any running subagent finishes, newly unblocked downstream subagents launch immediately — fast branches never stall waiting for slower siblings.
+     - Once no runnable subagents remain and only downstream **non-entry Lead nodes** are ready (entry Lead never pauses) without a `leadResult`, execution pauses with `status: "need-lead"`, returning collected results, any failures, and `session` child IDs.
    - The conversation performs that Lead step and calls `canvas_workflow({ leadResult: "..." })` to resume seamlessly.
    - Changing the graph (different plan `sig`) or passing `reset: true` discards paused progress and restarts cleanly.
 

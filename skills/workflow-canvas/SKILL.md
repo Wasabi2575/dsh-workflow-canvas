@@ -9,8 +9,9 @@ A canvas is a DAG of agents the user can see and edit.
 
 ## Node kinds
 
-- **Lead** (blue top bar) — performed by the conversation itself, never spawned. The entry Lead holds the overall task; any other Lead node holds a role and pauses the run so you can do that step.
-- **Subagent** (green top bar) — spawned as a child agent with its own model, reasoning effort, capability scope, fallback model and memory switch.
+- **Entry Lead** (`id: "lead"`, blue top bar) — created automatically by `canvas_generate` to hold the overall `task`. **Do not author a separate entry Lead node** — wire first-wave nodes directly from `from: "lead"`. The entry Lead **never** triggers `need-lead` (it does not pause before Wave 1).
+- **Downstream Lead** (`kind: "lead"`, blue top bar) — performed by the conversation itself, never spawned. Any added non-entry Lead node holds a `role` and pauses the run (`status: "need-lead"`) so you can decide, review, or integrate before continuing.
+- **Subagent** (`kind: "agent"`, green top bar) — spawned as a child agent with its own model, reasoning effort, capability scope, fallback model and memory switch. Wire every subagent's output into a downstream node or final Lead so nothing becomes a dead end.
 
 ## Which tool to call
 
@@ -50,13 +51,30 @@ Links only join matching types. Nodes the entry Lead cannot reach are skipped at
 
 1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled.
 2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), or `reset: true` to discard a paused run and start from scratch.
-3. Subagent nodes run in parallel waves of up to four; the run stops at every Lead node and returns `status: "need-lead"`.
-4. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
-5. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
+3. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
+4. The run pauses (`status: "need-lead"`) only at downstream non-entry Lead nodes (never at the entry Lead).
+5. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
+6. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
+7. Only assign image/visual inspection roles to models that declare image input support.
 
-## Failures
+## Failures & verification iron rule
 
 A failing node (unknown model, provider error, a stop reason other than completed) does not abort the run. Its result carries the reason, a node with `fallbackModel` is retried once on that model, and unrecovered failures are listed in `failed: [{ id, label, reason }]` while downstream nodes are warned not to treat the error as valid output. Failed nodes show red in the canvas.
+
+If a subagent finishes with no prose and no structured JSON (`[completed]` / `[no-output]`), it is flagged in `emptyOutputs: [{ id, label }]`. **Never claim a workflow or step succeeded while `failed`, `emptyOutputs`, or `【未完全交付】` is present** — always verify the declared files on disk or follow up with that subagent first.
+
+## Designing a good workflow (checklist)
+
+1. **Pre-flight before `canvas_workflow`**:
+   - Never author a duplicate entry Lead — wire first-wave nodes from `from: "lead"`.
+   - Always check `warnings` returned by `canvas_generate` / `canvas_patch` / `canvas_inspect` and fix dead-end subagents (missing out-links) or unreachable nodes before running.
+   - Give parallel subagents **strictly disjoint file/directory ownership** in their `role` so two agents never overwrite the same file.
+2. **When to add an intermediate Lead gate**:
+   - **Add an intermediate Lead** when scope/architecture is not yet locked down (need human/Lead sign-off before coding), or when downstream steps heavily depend on foundation artifacts (e.g. verify scaffold/assets actually exist and pass checks before building levels on top).
+   - **End-only Lead is fine** when all shared contracts (file paths, signals, APIs, groups) are already frozen upfront in the entry `task` and you want uninterrupted parallel execution into a final integration/review Lead.
+3. **When to use `session-ref` (purple links)**:
+   - **Subagent → Subagent**: when an implementer should continue a codebase scanner's warm session instead of re-reading the repo from scratch.
+   - **Subagent → final Lead**: wire key implementation nodes into the final review/integration Lead with `session-ref` so if review finds bugs, you can message the original author's warm session to fix them in place.
 
 ## Memory
 
@@ -64,4 +82,4 @@ A failing node (unknown model, provider error, a stop reason other than complete
 
 ## Style
 
-Keep labels short and distinct; ids must be unique even when labels repeat. Describe each step by its outcome, not by the tool it uses.
+Keep labels short and distinct; ids must be unique even when labels repeat. Describe each step by its outcome and exact file ownership, not by internal tool names.
