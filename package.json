@@ -38,5 +38,8 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Wasabi2575/dsh-workflow-canvas.git"
+  },
+  "scripts": {
+    "test": "node --test"
   }
 }

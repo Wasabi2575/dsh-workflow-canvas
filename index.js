@@ -415,7 +415,13 @@ async function runPlan(scope, args, exec) {
   if (!payload) return { error: '当前会话还没有画布数据。请在右侧 Workflow 画布点「启用」。' };
   if (!payload.enabled) return { error: '画布当前是「已禁用」状态。请在画布上点「启用」后再运行。' };
   if (payload.error) return { error: String(payload.error) };
-  let plan = payload.plan;
+  return executePlan(scope, payload.plan, args, exec);
+}
+
+/** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
+async function executePlan(scope, plan, args, exec) {
+  const agent = exec && exec.agent;
+  const sid = agent && agent.id !== undefined ? String(agent.id) : '';
   if (!plan || !Array.isArray(plan.nodes) || !plan.nodes.length) {
     return { error: '画布没有可执行的节点。' };
   }
@@ -869,3 +875,14 @@ export function apply(ctx) {
     /* never fail the plugin load because of the bridge */
   }
 }
+
+export {
+  orderNodes,
+  upstreamOf,
+  downstreamLabels,
+  briefFor,
+  withoutEntry,
+  normalizeCanvas,
+  runPlan,
+  executePlan,
+};
