@@ -1,0 +1,60 @@
+---
+name: workflow-canvas
+description: Draw, edit and run a DSH workflow canvas: nodes, typed links, Lead steps, presets.
+---
+
+# Workflow canvas
+
+A canvas is a DAG of agents the user can see and edit.
+
+## Node kinds
+
+- **Lead** (blue top bar) — performed by the conversation itself, never spawned. The entry Lead holds the overall task; any other Lead node holds a role and pauses the run so you can do that step.
+- **Subagent** (green top bar) — spawned as a child agent with its own model, reasoning effort, capability scope, fallback model and memory switch.
+
+## Which tool to call
+
+| The user asks for | Call |
+|---|---|
+| a visual workflow, pipeline, or graph of agents | `canvas_generate` (replaces the canvas) |
+| a change to the existing canvas | `canvas_patch` (edits in place, keeps the layout) |
+| running the canvas | `canvas_workflow` |
+
+Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or re-modelled nodes keep their position and untouched nodes stay as they are. Regenerating throws the layout away.
+
+## Node fields
+
+`id` (stable handle, never reuse it for a different node), `kind` (`lead` or `agent`), `label` (display name), `role` (what this step must do — this is the instruction the node actually follows), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
+
+Fill `role` for every node. A node with an empty role still runs, but it invents its own task and may wander.
+
+`standard` is the usual tool set (filesystem, shells, jobs, subagents, workflow, web, office). `minimal` is deliberately small: filesystem read/write/edit off, privileged shells, no subagent or workflow tools.
+
+## Links
+
+| type | colour | carries |
+|---|---|---|
+| `prompt` | grey | the upstream result as plain text |
+| `structured` | blue | a JSON object; the upstream node is asked for structured output automatically, so do not set that by hand |
+| `session-ref` | purple | the upstream child session; the downstream step runs inside it |
+
+Links only join matching types. Nodes the entry Lead cannot reach are skipped at run time and drawn dashed.
+
+## Running
+
+1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled.
+2. Subagent nodes run in parallel waves of up to four; the run stops at every Lead node and returns `status: "need-lead"`.
+3. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
+4. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
+
+## Failures
+
+A failing node (unknown model, provider error, a stop reason other than completed) does not abort the run. Its result carries the reason, and a node with `fallbackModel` is retried once on that model. Failed nodes show red in the canvas.
+
+## Memory
+
+`keepSession: true` reuses that node's child session — across runs, and after a restart through a persisted id (cold resume). If the Host refuses the resume the record is dropped and the node starts fresh.
+
+## Style
+
+Keep labels short and distinct; ids must be unique even when labels repeat. Describe each step by its outcome, not by the tool it uses.

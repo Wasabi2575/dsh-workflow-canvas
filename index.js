@@ -18,6 +18,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 /** Latest canvas payload per Session id. */
 const canvasBySession = new Map();
@@ -498,8 +499,63 @@ async function runPlan(scope, args, exec) {
   }
 }
 
+/** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
+const SKILL_NAME = 'workflow-canvas';
+const SKILL_DESCRIPTION = 'Draw, edit and run a DSH workflow canvas: nodes, typed links, Lead steps, presets.';
+function skillPath() {
+  try {
+    return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));
+  } catch (_e) {
+    return undefined;
+  }
+}
+
+function readSkillGuide() {
+  try {
+    const location = skillPath();
+    if (!location) return fallbackGuide();
+    const raw = readFileSync(location, 'utf8');
+    const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(raw);
+    return match ? raw.slice(match[0].length).trim() : raw.trim();
+  } catch (_e) {
+    return fallbackGuide();
+  }
+}
+
+function fallbackGuide() {
+  return '# Workflow canvas\n\nThe bundled guide could not be read from this installation.';
+}
 export function apply(ctx) {
   loadStore();
+    ctx.inject(['skills'], (scope) => {
+      try {
+        scope.effect(() => scope.skills.registerProvider(() => ({
+          name: 'dsh-workflow-canvas',
+          async list() {
+            return {
+              candidates: [{
+                name: SKILL_NAME,
+                description: SKILL_DESCRIPTION,
+                invocation: { modelInvocable: true, userInvocable: true },
+                provider: 'dsh-workflow-canvas',
+                source: 'bundled',
+                rank: 0,
+                locator: 'dsh-workflow-canvas/skills/workflow-canvas/SKILL.md',
+              }],
+              complete: true,
+            };
+          },
+          async get(candidate) {
+            const { rank, locator, ...summary } = candidate;
+            void rank;
+            void locator;
+            return { ...summary, content: readSkillGuide() };
+          },
+        })), 'workflow-canvas: skill');
+      } catch (_e) {
+        /* skill registry unavailable */
+      }
+    });
   try {
     ctx.inject(['commands'], (scope) => {
       try {
