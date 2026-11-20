@@ -164,7 +164,8 @@ function failed(result) {
   return reason !== undefined && reason !== 'completed';
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild) {
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid) {
+  const childKey = (id) => String(sid || '') + '::' + id;
   const spec = {
     provider: 'spawn',
     label: node.label + '#' + node.id,
@@ -200,8 +201,8 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     }
     try {
       if (activation && activation.childId) {
-        childByNode.set(node.id, activation.childId);
-        liveChild.set(node.id, activation.childId);
+        childByNode.set(childKey(node.id), activation.childId);
+        liveChild.set(childKey(node.id), activation.childId);
       }
       let result;
       try {
@@ -218,48 +219,54 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
 
   // A `session` edge means "continue the upstream node's conversation": run this
   // step inside that child session instead of starting a fresh one.
-  if (forcedChild && forcedChild !== liveChild.get(node.id)) {
+  if (forcedChild && forcedChild !== liveChild.get(childKey(node.id))) {
     try {
       const continued = await run(forcedChild);
-      if (continued.ok) liveChild.set(node.id, forcedChild);
+      if (continued.ok) liveChild.set(childKey(node.id), forcedChild);
       return continued;
     } catch (_e) {
       /* fall through to a fresh session */
     }
   }
 
-  // Reusing a previous child only works while that identity is still ours; a
-  // stale one is dropped and the node starts fresh instead of failing.
+  // Memory: prefer the session created in this process, then the one persisted
+  // from an earlier run. A cold resume that the Host refuses is forgotten so the
+  // node simply starts fresh instead of failing.
   if (node.keepSession) {
-    const previous = liveChild.get(node.id);
+    const inProcess = liveChild.get(childKey(node.id));
+    const fromDisk = childByNode.get(childKey(node.id));
+    const previous = inProcess || fromDisk;
     if (previous) {
-      try {
-        return await run(previous);
-      } catch (_e) {
-        liveChild.delete(node.id);
+      const resumed = await run(previous);
+      if (resumed.ok) return resumed;
+      if (resumed.reason === 'activation-failed') {
+        liveChild.delete(childKey(node.id));
+        childByNode.delete(childKey(node.id));
+      } else {
+        return resumed;
       }
     }
   }
   const started = await run(undefined);
   if (node.keepSession && started.ok) {
-    const current = childByNode.get(node.id);
-    if (current) liveChild.set(node.id, current);
+    const current = childByNode.get(childKey(node.id));
+    if (current) liveChild.set(childKey(node.id), current);
   }
   return started;
 }
 
-async function spawnNode(scope, plan, node, results, parent, signal) {
+async function spawnNode(scope, plan, node, results, parent, signal, sid) {
   const continueFrom = (plan.edges || [])
     .filter((e) => e.to === node.id && e.type === 'session-ref')
-    .map((e) => liveChild.get(e.from))
+    .map((e) => liveChild.get(String(sid || '') + '::' + e.from))
     .find((id) => typeof id === 'string');
 
   if (continueFrom) {
-    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom);
+    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid);
     if (continued.ok) return continued.text + '\n（已在上游会话中继续）';
   }
 
-  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined);
+  const first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid);
   if (first.ok) return first.text;
   if (!node.fallbackModel && !node.fallbackProvider) {
     return first.text + '\n（失败原因：' + (first.reason || 'unknown') + '，未配置备用模型）';
@@ -267,7 +274,7 @@ async function spawnNode(scope, plan, node, results, parent, signal) {
   const retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
-  });
+  }, undefined, sid);
   if (retry.ok) return retry.text + '\n（已用备用模型重试成功）';
   return retry.text + '\n（重试仍失败：' + (retry.reason || 'unknown') + '）';
 }
@@ -452,7 +459,7 @@ async function runPlan(scope, args, exec) {
     if (agentReady.length) {
       const batch = agentReady.slice(0, MAX_PARALLEL);
       const texts = await Promise.all(
-        batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal)),
+        batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal, sid)),
       );
       batch.forEach((node, i) => {
         state.results[node.label] = texts[i];

@@ -95,6 +95,23 @@ window.__ModuleLoader__.load({
         importBtn: '⇩ 导入',
         tipImport: '从剪贴板导入模型生成的画布（先复制聊天里的画布 JSON）',
         importOk: '已导入画布，共 ',
+        tipMore: '更多',
+        help: '使用说明',
+        helpTitle: '怎么用这个画布',
+        close: '关闭',
+        cutLinks: '右键划断连线',
+        helpBody: [
+          '1. 在入口 Lead 里写「本次任务」，这是整张图的总目标。',
+          '2. 点「+ 子代理」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
+          '3. 连线有三种：prompt 传文本，structured 传 JSON，session 让下游接着上游的会话跑。',
+          '4. 端口颜色即类型，只能同色相连；拖已连接的左口可以断开。',
+          '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆。',
+          '6. 连好后点「● 已启用」，然后对对话说「跑一次」，由我调用执行。',
+          '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续。',
+          '8. 没连线的节点显示为虚线，运行时会被跳过。',
+          '9. 右键按住划过一条连线可以切断；可在「⋯」里关掉这个手势。',
+          '10. 预设名 + ☆ 保存 可以把整张图存下来，新对话里从「☰ 预设」载入。',
+        ].join('\n'),
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
@@ -149,6 +166,23 @@ window.__ModuleLoader__.load({
         importBtn: '⇩ Import',
         tipImport: 'Import a model-generated canvas from the clipboard (copy the canvas JSON from chat first)',
         importOk: 'Canvas imported, ',
+        tipMore: 'More',
+        help: 'How to use',
+        helpTitle: 'Using this canvas',
+        close: 'Close',
+        cutLinks: 'Right-drag to cut links',
+        helpBody: [
+          '1. Write the overall task in the entry Lead node.',
+          '2. Add nodes with the + buttons, then drag from a right socket to a left socket.',
+          '3. Links carry text (prompt), JSON (structured), or continue the upstream session (session).',
+          '4. Socket colour is the type; only matching types connect. Drag a connected input to detach.',
+          '5. Each node sets model, reasoning, capability scope, fallback model and memory.',
+          '6. Press ● ON, then ask in chat to run the canvas.',
+          '7. The run pauses at every Lead node so the conversation can do that step.',
+          '8. Unlinked nodes are dashed and skipped at run time.',
+          '9. Hold the right button and sweep across a link to cut it; turn the gesture off under ⋯.',
+          '10. Name a preset and press ☆ Save to keep the canvas for other sessions.',
+        ].join('\n'),
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
@@ -215,6 +249,29 @@ window.__ModuleLoader__.load({
         fontSize: '11px', color: C.dim,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       },
+      moreBar: { position: 'relative', flex: '0 0 auto' },
+      moreMenu: {
+        position: 'absolute', right: 0, top: '100%', marginTop: '4px', minWidth: '190px',
+        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '6px',
+        zIndex: 80, padding: '4px', boxShadow: '0 10px 26px rgba(0,0,0,0.45)',
+      },
+      moreRow: {
+        padding: '5px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer',
+        whiteSpace: 'nowrap', color: C.text,
+      },
+      helpOverlay: {
+        position: 'absolute', inset: '0', background: 'rgba(0,0,0,0.45)', zIndex: 90,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '12px',
+      },
+      helpCard: {
+        width: '100%', maxWidth: '420px', maxHeight: '100%', overflow: 'auto',
+        background: C.elevated, border: '1px solid ' + C.border, borderRadius: '8px',
+        boxShadow: '0 16px 40px rgba(0,0,0,0.5)', padding: '12px',
+      },
+      helpHead: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
+      helpTitle: { flex: '1 1 auto', fontSize: '13px', fontWeight: 600, color: C.text },
+      helpBody: { fontSize: '11px', lineHeight: '17px', color: C.dim },
+      helpLine: { whiteSpace: 'pre-wrap' },
       presetBar: {
         marginLeft: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'flex-end',
         gap: '3px', position: 'relative', flex: '0 0 auto',
@@ -434,13 +491,47 @@ window.__ModuleLoader__.load({
       return doc;
     }
 
-    function edgePath(from, to, type) {
+    /** Control points of one link, in canvas coordinates. */
+    function edgeCurve(from, to, type) {
       const idx = Math.max(0, SOCKET_TYPES.findIndex((t) => t.id === type));
       const y = socketCenterY(idx);
       const x1 = from.x + WORLD_PAD + NODE_W, y1 = from.y + WORLD_PAD + y;
       const x2 = to.x + WORLD_PAD, y2 = to.y + WORLD_PAD + y;
       const dx = Math.max(40, Math.abs(x2 - x1) * 0.5);
-      return 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2;
+      return { x1, y1, c1x: x1 + dx, c1y: y1, c2x: x2 - dx, c2y: y2, x2, y2 };
+    }
+
+    function edgePath(from, to, type) {
+      const c = edgeCurve(from, to, type);
+      return 'M ' + c.x1 + ' ' + c.y1 + ' C ' + c.c1x + ' ' + c.c1y + ', ' + c.c2x + ' ' + c.c2y + ', ' + c.x2 + ' ' + c.y2;
+    }
+
+    /** Shortest distance between a point and one link, sampled along the curve. */
+    function distanceToEdge(point, from, to, type) {
+      const c = edgeCurve(from, to, type);
+      let best = Infinity;
+      let prevX = c.x1;
+      let prevY = c.y1;
+      for (let i = 1; i <= 18; i += 1) {
+        const t = i / 18;
+        const u = 1 - t;
+        const bx = u * u * u * c.x1 + 3 * u * u * t * c.c1x + 3 * u * t * t * c.c2x + t * t * t * c.x2;
+        const by = u * u * u * c.y1 + 3 * u * u * t * c.c1y + 3 * u * t * t * c.c2y + t * t * t * c.y2;
+        best = Math.min(best, distanceToSegment(point, prevX, prevY, bx, by));
+        prevX = bx;
+        prevY = by;
+      }
+      return best;
+    }
+
+    function distanceToSegment(p, ax, ay, bx, by) {
+      const vx = bx - ax;
+      const vy = by - ay;
+      const len = vx * vx + vy * vy;
+      const t = len === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - ax) * vx + (p.y - ay) * vy) / len));
+      const dx = p.x - (ax + t * vx);
+      const dy = p.y - (ay + t * vy);
+      return Math.hypot(dx, dy);
     }
 
     function topoOrder(nodes, edges) {
@@ -628,6 +719,20 @@ window.__ModuleLoader__.load({
       };
     }
 
+    function loadCutMode() {
+      try {
+        return window.localStorage.getItem(STORAGE_PREFIX + 'cut') !== 'off';
+      } catch (_e) {
+        return true;
+      }
+    }
+
+    function saveCutMode(on) {
+      try {
+        window.localStorage.setItem(STORAGE_PREFIX + 'cut', on ? 'on' : 'off');
+      } catch (_e) { /* ignore */ }
+    }
+
     function loadPresets() {
       try {
         const raw = window.localStorage.getItem(PRESET_KEY);
@@ -728,6 +833,10 @@ window.__ModuleLoader__.load({
       const [dragging, setDragging] = useState(false);
       const [syncNote, setSyncNote] = useState('');
       const [roleEditFor, setRoleEditFor] = useState(null);
+      const [menuOpen, setMenuOpen] = useState(false);
+      const [helpOpen, setHelpOpen] = useState(false);
+      const [cutMode, setCutMode] = useState(loadCutMode);
+      const cutRef = useRef(null);
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -1201,8 +1310,17 @@ window.__ModuleLoader__.load({
       }, [dragging, marquee, pending]);
 
       const onCanvasDown = (e) => {
+        if (e.button === 2) {
+          if (!cutMode) return;
+          e.preventDefault();
+          try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
+          cutRef.current = pointTo(e);
+          setDragging(true);
+          return;
+        }
         if (e.button !== 0) return;
         if (roleEditFor) setRoleEditFor(null);
+        if (menuOpen) setMenuOpen(false);
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
         const p = pointTo(e);
@@ -1224,6 +1342,24 @@ window.__ModuleLoader__.load({
             const origin = byId.get(n.id);
             return origin ? { ...n, x: origin.x + dx, y: origin.y + dy } : n;
           }));
+        } else if (cutRef.current) {
+          const p = pointTo(e);
+          const threshold = 10 / (viewRef.current.k || 1);
+          const victim = edges.find((edge) => {
+            if (edge.type && !SOCKET_TYPES.some((t) => t.id === edge.type)) return false;
+            const from = nodes.find((n) => n.id === edge.from);
+            const to = nodes.find((n) => n.id === edge.to);
+            if (!from || !to) return false;
+            return distanceToEdge(p, from, to, edge.type) <= threshold;
+          });
+          if (victim) {
+            pushSnapshot();
+            setEdges((es) => es.filter((x) => x.id !== victim.id));
+            cutRef.current = null;
+            setDragging(false);
+            return;
+          }
+          cutRef.current = p;
         } else if (marquee) {
           const p = pointTo(e);
           const next = { x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y };
@@ -1237,6 +1373,7 @@ window.__ModuleLoader__.load({
       };
 
       const onCanvasUp = () => {
+        if (cutRef.current) { cutRef.current = null; setDragging(false); }
         if (marquee) {
           setSelectedIds(hitTest(marquee));
           setMarquee(null);
@@ -1624,12 +1761,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipSync'),
           }, t('sync')),
-          h('button', {
-            style: S.btn,
-            onClick: importFromClipboard,
-            type: 'button',
-            title: t('tipImport'),
-          }, t('importBtn')),
+
           h('button', {
             style: S.btn,
             onClick: focusLead,
@@ -1642,6 +1774,39 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
+          h('div', { style: S.moreBar },
+            h('button', {
+              style: S.btn,
+              type: 'button',
+              title: t('tipMore'),
+              onMouseDown: (e) => e.stopPropagation(),
+              onClick: () => setMenuOpen(!menuOpen),
+            }, '⋯'),
+            menuOpen && h('div', { style: S.moreMenu, onMouseDown: (e) => e.stopPropagation() },
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { setMenuOpen(false); importFromClipboard(); },
+              }, t('importBtn')),
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { setMenuOpen(false); setHelpOpen(true); },
+              }, t('help')),
+              h('div', {
+                style: S.moreRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => {
+                  const next = !cutMode;
+                  setCutMode(next);
+                  saveCutMode(next);
+                },
+              }, t('cutLinks') + t('sep') + (cutMode ? t('on') : t('off'))),
+            ),
+          ),
           syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
           h('button', {
             style: S.btn,
@@ -1689,6 +1854,15 @@ window.__ModuleLoader__.load({
                   : h('div', { style: S.presetEmpty }, t('presetEmpty')),
               );
             })(),
+          ),
+        ),
+        helpOpen && h('div', { style: S.helpOverlay, onMouseDown: (e) => e.stopPropagation() },
+          h('div', { style: S.helpCard },
+            h('div', { style: S.helpHead },
+              h('span', { style: S.helpTitle }, t('helpTitle')),
+              h('button', { style: S.btn, type: 'button', onClick: () => setHelpOpen(false) }, t('close')),
+            ),
+            h('div', { style: S.helpBody }, t('helpBody').split('\n').map((line, i) => h('div', { key: i, style: S.helpLine }, line))),
           ),
         ),
         h('div', { ref: canvasElRef, style: S.canvas, onMouseDown: onCanvasDown },
