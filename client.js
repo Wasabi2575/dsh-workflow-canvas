@@ -574,6 +574,7 @@ window.__ModuleLoader__.load({
       const [edges, setEdges] = useState(() => (initial ? initial.edges : defaultEdges()));
       const [selectedIds, setSelectedIds] = useState([]);
       const [marquee, setMarquee] = useState(null);
+      const [dragging, setDragging] = useState(false);
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -901,6 +902,7 @@ window.__ModuleLoader__.load({
           .filter(Boolean)
           .map((n) => ({ id: n.id, x: n.x, y: n.y }));
         nodeDrag.current = { origins, startX: p.x, startY: p.y, moved: false };
+        setDragging(true);
         setOpenModelFor(null);
         e.preventDefault();
         e.stopPropagation();
@@ -913,6 +915,7 @@ window.__ModuleLoader__.load({
         const sx = node.x + NODE_W;
         const sy = node.y + socketCenterY(idx);
         setPending({ fromId: id, type, sx, sy, x: sx, y: sy });
+        setDragging(true);
         e.preventDefault();
         e.stopPropagation();
       };
@@ -931,6 +934,7 @@ window.__ModuleLoader__.load({
         const sx = from.x + NODE_W;
         const sy = from.y + socketCenterY(idx);
         setPending({ fromId: link.from, type, sx, sy, x: sx, y: sy });
+        setDragging(true);
       };
 
       const onInputUp = (e, id, type) => {
@@ -948,12 +952,25 @@ window.__ModuleLoader__.load({
         setPending(null);
       };
 
+      useEffect(() => {
+        if (!dragging) return undefined;
+        const move = (ev) => onCanvasMove(ev);
+        const up = () => onCanvasUp();
+        window.addEventListener('mousemove', move);
+        window.addEventListener('mouseup', up);
+        return () => {
+          window.removeEventListener('mousemove', move);
+          window.removeEventListener('mouseup', up);
+        };
+      }, [dragging, marquee, pending]);
+
       const onCanvasDown = (e) => {
         if (e.button !== 0) return;
         e.preventDefault();
         try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
         const p = pointTo(e);
         setMarquee({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
+        setDragging(true);
         if (selectedIds.length) setSelectedIds([]);
         setOpenModelFor(null);
       };
@@ -989,6 +1006,7 @@ window.__ModuleLoader__.load({
         }
         nodeDrag.current = null;
         setPending(null);
+        setDragging(false);
       };
 
       const savePresetNow = () => {
@@ -1219,9 +1237,6 @@ window.__ModuleLoader__.load({
               transformOrigin: '0 0',
             },
             onMouseDown: onCanvasDown,
-            onMouseMove: onCanvasMove,
-            onMouseUp: onCanvasUp,
-            onMouseLeave: onCanvasUp,
           },
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
               h('g', null, edgeEls),
