@@ -100,6 +100,8 @@ window.__ModuleLoader__.load({
         helpTitle: '怎么用这个画布',
         close: '关闭',
         cutLinks: '右键划断连线',
+        linkCut: '已断开一条连线',
+        tipToggle: '启用/禁用此画布（启用后我才能执行它）',
         helpBody: [
           '1. 在入口 Lead 里写「本次任务」，这是整张图的总目标。',
           '2. 点「+ 子代理」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
@@ -171,6 +173,8 @@ window.__ModuleLoader__.load({
         helpTitle: 'Using this canvas',
         close: 'Close',
         cutLinks: 'Right-drag to cut links',
+        linkCut: 'Link cut',
+        tipToggle: 'Enable or disable this canvas (I can only run it while enabled)',
         helpBody: [
           '1. Write the overall task in the entry Lead node.',
           '2. Add nodes with the + buttons, then drag from a right socket to a left socket.',
@@ -248,6 +252,18 @@ window.__ModuleLoader__.load({
       status: {
         fontSize: '11px', color: C.dim,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
+      },
+      floatOn: {
+        position: 'absolute', top: '10px', right: '10px', zIndex: 30,
+        padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.accent,
+        background: C.elevated, color: C.accent, fontSize: '11px', fontWeight: 600,
+        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+      },
+      floatOff: {
+        position: 'absolute', top: '10px', right: '10px', zIndex: 30,
+        padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
+        background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
+        cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
       },
       moreBar: { position: 'relative', flex: '0 0 auto' },
       moreMenu: {
@@ -837,6 +853,8 @@ window.__ModuleLoader__.load({
       const [helpOpen, setHelpOpen] = useState(false);
       const [cutMode, setCutMode] = useState(loadCutMode);
       const cutRef = useRef(null);
+      const [cutPath, setCutPath] = useState([]);
+      const [cutVictim, setCutVictim] = useState(null);
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -1297,6 +1315,30 @@ window.__ModuleLoader__.load({
         setDragging(false);
       };
 
+      // Suppress the host context menu over the canvas while cutting is on.
+      useEffect(() => {
+        if (!cutMode) return undefined;
+        const inside = (ev) => {
+          const el = canvasElRef.current;
+          return Boolean(el) && ev.target instanceof Node && el.contains(ev.target);
+        };
+        const onCtx = (ev) => { if (inside(ev)) ev.preventDefault(); };
+        const onDown = (ev) => {
+          if (ev.button !== 2 || !inside(ev) || ev.target.closest('[data-node]')) return;
+          ev.preventDefault();
+          const start = pointTo(ev);
+          cutRef.current = start;
+          setCutPath([start]);
+          setDragging(true);
+        };
+        window.addEventListener('contextmenu', onCtx, true);
+        window.addEventListener('mousedown', onDown, true);
+        return () => {
+          window.removeEventListener('contextmenu', onCtx, true);
+          window.removeEventListener('mousedown', onDown, true);
+        };
+      }, [cutMode, sessionId]);
+
       useEffect(() => {
         if (!dragging) return undefined;
         const move = (ev) => onCanvasMove(ev);
@@ -1314,7 +1356,9 @@ window.__ModuleLoader__.load({
           if (!cutMode) return;
           e.preventDefault();
           try { window.getSelection().removeAllRanges(); } catch (_sel) { /* ignore */ }
-          cutRef.current = pointTo(e);
+          const start = pointTo(e);
+          cutRef.current = start;
+          setCutPath([start]);
           setDragging(true);
           return;
         }
@@ -1344,22 +1388,31 @@ window.__ModuleLoader__.load({
           }));
         } else if (cutRef.current) {
           const p = pointTo(e);
-          const threshold = 10 / (viewRef.current.k || 1);
-          const victim = edges.find((edge) => {
-            if (edge.type && !SOCKET_TYPES.some((t) => t.id === edge.type)) return false;
-            const from = nodes.find((n) => n.id === edge.from);
-            const to = nodes.find((n) => n.id === edge.to);
-            if (!from || !to) return false;
-            return distanceToEdge(p, from, to, edge.type) <= threshold;
-          });
+          const threshold = 12 / (viewRef.current.k || 1);
+          const from = cutRef.current;
+          let victim = null;
+          for (const edge of edges) {
+            const source = nodes.find((n) => n.id === edge.from);
+            const target = nodes.find((n) => n.id === edge.to);
+            if (!source || !target) continue;
+            if (distanceToEdge(p, source, target, edge.type) <= threshold) {
+              victim = edge;
+              break;
+            }
+          }
+          setCutVictim(victim ? victim.id : null);
+          setCutPath((path) => path.concat([{ x: p.x, y: p.y }]).slice(-40));
+          cutRef.current = p;
           if (victim) {
             pushSnapshot();
             setEdges((es) => es.filter((x) => x.id !== victim.id));
+            flash(t('linkCut'));
             cutRef.current = null;
+            setCutPath([]);
+            setCutVictim(null);
             setDragging(false);
-            return;
           }
-          cutRef.current = p;
+          void from;
         } else if (marquee) {
           const p = pointTo(e);
           const next = { x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y };
@@ -1374,6 +1427,7 @@ window.__ModuleLoader__.load({
 
       const onCanvasUp = () => {
         if (cutRef.current) { cutRef.current = null; setDragging(false); }
+        if (cutPath.length) { setCutPath([]); setCutVictim(null); }
         if (marquee) {
           setSelectedIds(hitTest(marquee));
           setMarquee(null);
@@ -1468,7 +1522,11 @@ window.__ModuleLoader__.load({
             const canvas = doc && doc.canvas;
             const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas)) { setSyncNote(t('syncApplied')); flash(t('generated')); }
+            if (valid && applyCanvasDoc(canvas)) {
+              flash(t('generated'));
+              setSyncNote(t('syncApplied'));
+              setTimeout(() => setSyncNote(''), 4000);
+            }
             else setSyncNote(t('syncBadFile'));
           } catch (_e) { /* file absent or not readable yet */ }
         };
@@ -1707,7 +1765,15 @@ window.__ModuleLoader__.load({
         if (!from || !to) return null;
         const color = (SOCKET_TYPES.find((t) => t.id === edge.type) || SOCKET_TYPES[0]).color;
         const d = edgePath(from, to, edge.type);
-        return h('path', { key: edge.id, d, stroke: color, strokeWidth: 2, fill: 'none', style: { pointerEvents: 'none' } });
+        const highlighted = cutVictim === edge.id;
+        return h('path', {
+          key: edge.id,
+          d,
+          stroke: highlighted ? '#e5534b' : color,
+          strokeWidth: highlighted ? 3 : 2,
+          fill: 'none',
+          style: { pointerEvents: 'none' },
+        });
       });
 
       const renderBand = (node) => {
@@ -1753,8 +1819,6 @@ window.__ModuleLoader__.load({
           h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
           h('button', { style: S.btn, onClick: () => addNode('lead'), type: 'button' }, t('addLead')),
           h('button', { style: S.btn, onClick: undo, type: 'button', title: t('tipUndo') }, t('undo')),
-          h('button', { style: enabled ? S.toggleOn : S.toggleOff, onClick: toggleEnabled, type: 'button' },
-            enabled ? t('enabled') : t('disabled')),
           h('button', {
             style: S.btn,
             onClick: () => pushPlan(enabled),
@@ -1774,6 +1838,13 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
+          syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
+          h('button', {
+            style: S.btn,
+            onClick: toggleLang,
+            type: 'button',
+            title: 'Switch language / 切换语言',
+          }, t('lang')),
           h('div', { style: S.moreBar },
             h('button', {
               style: S.btn,
@@ -1807,13 +1878,6 @@ window.__ModuleLoader__.load({
               }, t('cutLinks') + t('sep') + (cutMode ? t('on') : t('off'))),
             ),
           ),
-          syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
-          h('button', {
-            style: S.btn,
-            onClick: toggleLang,
-            type: 'button',
-            title: 'Switch language / 切换语言',
-          }, t('lang')),
           h('div', { style: S.presetBar },
             h('div', { style: S.presetRowTop },
               h('input', {
@@ -1866,6 +1930,13 @@ window.__ModuleLoader__.load({
           ),
         ),
         h('div', { ref: canvasElRef, style: S.canvas, onMouseDown: onCanvasDown },
+          h('button', {
+            style: enabled ? S.floatOn : S.floatOff,
+            type: 'button',
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: toggleEnabled,
+            title: t('tipToggle'),
+          }, enabled ? t('enabled') : t('disabled')),
           h('div', {
             ref: contentRef,
             style: {
@@ -1876,6 +1947,13 @@ window.__ModuleLoader__.load({
           },
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
               h('g', null, edgeEls),
+              cutPath.length > 1 && h('polyline', {
+                points: cutPath.map((pt) => (pt.x + WORLD_PAD) + ',' + (pt.y + WORLD_PAD)).join(' '),
+                fill: 'none',
+                stroke: '#e5534b',
+                strokeWidth: 1.5,
+                strokeDasharray: '5 4',
+              }),
               marquee && h('rect', {
                 x: Math.min(marquee.x1, marquee.x2) + WORLD_PAD,
                 y: Math.min(marquee.y1, marquee.y2) + WORLD_PAD,
@@ -1909,6 +1987,7 @@ window.__ModuleLoader__.load({
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
               return h('div', {
                 key: node.id,
+                'data-node': node.id,
                 style: selectedIds.includes(node.id)
                   ? { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null), ...S.nodeSel }
                   : { ...S.node, left: node.x + WORLD_PAD, top: node.y + WORLD_PAD, ...(isLeadKind ? S.leadNode : null), ...(isOrphan ? S.orphanNode : null) },
