@@ -1,13 +1,15 @@
 {
-  "name": "@local/dsh-workflow-canvas",
+  "name": "dsh-workflow-canvas",
   "version": "0.1.0",
-  "private": true,
+  "description": "A visual subagent-workflow canvas for DeepSeek Harness, docked in the sidebar.",
   "type": "module",
+  "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
@@ -21,6 +23,17 @@
     "README.md",
     "README.zh.md"
   ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wasabi2575/dsh-workflow-canvas.git"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -33,13 +46,5 @@
         "@deepseek-ai/dsh-client-ui-slots"
       ]
     }
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Wasabi2575/dsh-workflow-canvas.git"
-  },
-  "scripts": {
-    "test": "node --test"
   }
 }
