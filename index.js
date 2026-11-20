@@ -664,6 +664,19 @@ export function apply(ctx) {
               const agent = exec && exec.agent;
               const sid = agent && agent.id !== undefined ? String(agent.id) : '';
               const delivered = sid ? publishCanvas(scope, sid, canvas) : false;
+              if (sid) {
+                const previous = canvasBySession.get(sid);
+                canvasBySession.set(sid, {
+                  enabled: previous ? previous.enabled : true,
+                  plan: {
+                    task: String((args && args.task) || ''),
+                    nodes: canvas.nodes,
+                    edges: canvas.edges,
+                  },
+                });
+                runBySession.delete(sid);
+                saveStore();
+              }
               return { canvas, delivered };
             } catch (error) {
               return { error: String((error && error.message) || error) };
@@ -675,7 +688,7 @@ export function apply(ctx) {
       }
     });
 
-    ctx.inject(['tools', 'subagents'], (scope) => {
+    ctx.inject(['tools', 'subagents', 'sessions'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_patch',
