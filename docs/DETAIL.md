@@ -63,5 +63,7 @@ if the Host refuses, the record is dropped and the node starts fresh.
 - Saved presets live in browser storage and do not auto-sync between the Desktop
   app and `dsh web`, nor across machines (use `⋯ → ⇧ Copy JSON` and `⇩ Import`
   to share or migrate them; starter templates are built in under `☰ Presets`).
-- Lead steps have no tracked state; they show **Runs in chat**.
+- Lead steps have no tracked state; they show **Runs in chat** (or **Ready** once all upstream subagents finish).
 - Up to 4 nodes run at a time.
+
+For architecture diagrams and runtime internals, see [MECHANISM.md](MECHANISM.md) ([中文](MECHANISM.zh.md)).

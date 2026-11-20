@@ -4,7 +4,7 @@
 [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2-2f81f7)](https://github.com/Wasabi2575/dsh-workflow-canvas)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950.svg)](LICENSE)
 
-中文 | [English](README.md)
+中文 | [English](README.md) | [工作机制与架构原理](docs/MECHANISM.zh.md)
 
 在 DSH 侧边栏里编排子代理工作流：把每一步画成一个节点、用三种连线标出数据怎么流转，
 启用后直接在对话里运行。子代理节点会被真实启动，Lead 节点会暂停运行、由对话本体执行。
@@ -116,9 +116,10 @@ DSH 生态里不止一个「工作流画布」。本项目在侧边栏里编排*
 先调用 `skill` 工具加载 `workflow-canvas`。
 ```
 
-## 开发
+## 开发与原理
 
-编辑 `client.js` / `index.js` 后重载应用；客户端改动热更生效，Host 改动需要重启。运行 `npm test` 执行单测；内部实现见 [docs/DETAIL.md](docs/DETAIL.md)。
+- 底层架构、双向同步通道、波次执行、三种连线运行时行为与冷恢复机制详见 [**工作机制与架构原理**](docs/MECHANISM.zh.md)（[English](docs/MECHANISM.md)）。
+- 编辑 `client.js` / `index.js` 后重载应用；客户端改动热更生效，Host 改动需要重启。运行 `npm test` 执行单测；插件详情页说明见 [docs/DETAIL.md](docs/DETAIL.md)。
 
 ## 许可
 

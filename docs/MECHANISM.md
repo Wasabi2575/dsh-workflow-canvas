@@ -1,0 +1,135 @@
+# Mechanism & Architecture
+
+English | [中文](MECHANISM.zh.md)
+
+This document explains how **DSH Workflow Canvas** works under the hood: how the
+sidebar canvas (Client) and the DSH Host stay in sync, how the DAG executor runs
+parallel waves and pauses at Lead gates, what the three link types actually do
+at run time, and how memory cold-resume, fallbacks, and live status tracking work.
+
+---
+
+## 1. Architecture: Bidirectional Client ↔ Host Bridge
+
+The plugin splits cleanly into two halves:
+- **Client (`client.js`)**: Mounted as a right-sidebar `Workflow` tab (`keepMounted: true`, preserving state while collapsed). Owns visual editing, presets, shortcuts, visual effects, and live status rendering.
+- **Host (`index.js`)**: Registers the bundled `workflow-canvas` skill, the `/canvas-sync` command, and four tools (`canvas_inspect`, `canvas_generate`, `canvas_patch`, `canvas_workflow`). Owns real subagent execution and durable state persistence.
+
+```mermaid
+flowchart LR
+    subgraph Client["Sidebar Canvas (client.js)"]
+        UI["Graph Editor / Presets / Status Pills"]
+        LS["localStorage\n(drafts / presets / prefs)"]
+        Poll["workspaceFiles Poll\n(every 1.5s)"]
+        Cat["subagentCatalog Observer\n(every 700ms while running)"]
+    end
+
+    subgraph Host["Host Plugin (index.js)"]
+        Sync["/canvas-sync command"]
+        Store["Atomic Disk Store\n.workflow-canvas-state.json"]
+        Tools["canvas_inspect / generate / patch"]
+        Exec["canvas_workflow\nDAG Wave Executor"]
+        Sub["ctx.subagents\nReal Child Sessions"]
+    end
+
+    UI <--> LS
+    UI -- "enable / sync / turn edge\n/canvas-sync" --> Sync
+    Sync --> Store
+    Tools -- "writes .dsh/canvas/<sid>.json" --> Poll
+    Poll -- "timestamp guard + merge layout" --> UI
+    Exec <--> Store
+    Exec -- "startActivation\nlabel#nodeId" --> Sub
+    Sub -- "live status & childId" --> Cat
+    Cat --> UI
+```
+
+### Sync & Conflict-Free Editing
+1. **Canvas → Host (`pushPlan` → `/canvas-sync`)**:
+   - Triggered when pressing **● ON**, clicking `↥ Sync`, or starting a chat turn while `enabled && dirty`.
+   - The Host stores the plan per session in `canvasBySession` and persists it **atomically** (write `.tmp` → `renameSync`) to `<DSH_PROFILE_DIR>/.workflow-canvas-state.json`, so plans and node memory survive Host restarts.
+2. **Host → Canvas (Workspace Bridge + 1.5s Polling)**:
+   - `canvas_generate` and `canvas_patch` update `canvasBySession` immediately and publish `<workspace>/.dsh/canvas/<sessionId>.json` stamped with `at`.
+   - The client polls via `remote.workspaceFiles.read` every 1.5s.
+   - **Local-wins timestamp guard**: every local edit updates `localStorage.at`; a stale bridge file with `doc.at < local.at` is ignored so manual edits are never clobbered.
+   - **In-place `merge` mode**: `canvas_patch` publishes `mode: "merge"` together with `removeNodes` and `removeEdges`, so existing node coordinates and the current viewport remain untouched while newly added nodes are placed neatly relative to their upstream parent.
+
+---
+
+## 2. DAG Wave Execution & Lead Handover
+
+When `canvas_workflow` runs, `executePlan` executes the following pipeline:
+
+1. **Entry stripping & task override**: The entry `lead` node is stripped (`withoutEntry`) and never spawned. If `args.task` is provided, it overrides `plan.task` for this run (allowing blank-task templates to be reused straight from chat).
+2. **Cycle validation (Kahn topological sort)**: `orderNodes` validates the DAG is acyclic (the client also blocks cycles interactively via `wouldCycle`).
+3. **Reachability pruning**: BFS from `'lead'` filters out disconnected nodes. Unreachable nodes are drawn dashed, skipped at run time, and listed in `skipped` without burning tokens.
+4. **Parallel waves & resumable pauses**:
+   - Progress per session is tracked in `runBySession` (`{ sig, done, results, labels, failed }`).
+   - Each iteration finds every remaining node whose dependencies are all in `done`:
+     - Ready **subagent nodes** run in parallel via `Promise.all`, up to **4 per wave** (`MAX_PARALLEL = 4`).
+     - When only **Lead nodes** are ready and no `leadResult` was passed, execution pauses with `status: "need-lead"`, returning collected results, any failures, and `session` child IDs.
+   - The conversation performs that Lead step and calls `canvas_workflow({ leadResult: "..." })` to resume seamlessly.
+   - Changing the graph (different plan `sig`) or passing `reset: true` discards paused progress and restarts cleanly.
+
+```mermaid
+sequenceDiagram
+    participant Chat as Main Chat (Lead)
+    participant Exec as Host Executor (executePlan)
+    participant Sub1 as Subagents Wave 1 (up to 4)
+    participant Sub2 as Subagents Wave 2 (up to 4)
+
+    Chat->>Exec: canvas_workflow()
+    Exec->>Sub1: Parallel startActivation (Nodes A, B)
+    Sub1-->>Exec: Results (text or structured JSON)
+    Note over Exec: Reaches Lead node — pauses with state kept
+    Exec-->>Chat: status="need-lead" + results + sessions (purple links)
+    Note over Chat: Lead decides (can follow up with purple sessions)
+    Chat->>Exec: canvas_workflow(leadResult="approved plan")
+    Exec->>Sub2: Parallel startActivation (Nodes C, D)
+    Sub2-->>Exec: Results
+    Exec-->>Chat: status="done" + results + failed + skipped
+```
+
+---
+
+## 3. Runtime Semantics of the Three Link Types
+
+The three link types are distinct runtime channels, not just visual colour coding:
+
+| Link Type | Colour | Runtime Behaviour |
+|---|---|---|
+| `prompt` | grey | Appends upstream text as a labelled section inside the downstream node's `briefFor` prompt. |
+| `structured` | blue | `spawnOnce` detects any outgoing `structured` edge and **automatically** injects a JSON `outputSchema` (`type: "object", additionalProperties: true`) into `startActivation`. `textOf` extracts `result.structured` as JSON and wraps it in a `` ```json `` block for downstream consumers. |
+| `session` (`session-ref`) | purple | **Into a subagent**: resolves the upstream `childId` (preferring in-process `liveChild`, falling back to disk-persisted `childByNode`) and passes it to `startActivation({ ...spec, childId })`, running the downstream step **inside the upstream child's live conversation**.<br>**Into a Lead**: reports `sessions: [{ label, childId }]` in `need-lead` so the main chat can message that subagent directly for follow-ups or fixes. |
+
+---
+
+## 4. Memory Cold-Resume, Fallback Retry & Failure Isolation
+
+### Memory (`keepSession`) & Cold Resume
+- The Host keeps two maps keyed by `<sessionId>::<nodeId>`: `liveChild` (current process) and `childByNode` (persisted in `.workflow-canvas-state.json`).
+- A node with `keepSession: true` resumes `liveChild || childByNode`.
+- After a Host restart, `childByNode` enables **cold resume**; if the Host refuses activation (`activation-failed`), the stale ID is dropped and the node starts a fresh child session automatically.
+
+### Fallback Model & Failure Reporting
+- If a subagent fails to start (`activation-failed`), throws (`run-failed`), or stops with `stopReason !== 'completed'`:
+  1. When `fallbackModel` / `fallbackProvider` is configured, it retries once on the fallback route.
+  2. Unrecovered failures do **not** abort unrelated branches — they are recorded in `failed: [{ id, label, reason }]`.
+  3. Downstream prompts built by `briefFor` receive an explicit upstream-failure warning so downstream agents do not hallucinate on error text, and `canvas_workflow` highlights failed nodes prominently in its rendered summary.
+
+---
+
+## 5. Live Status Pills & Click-to-Open Subagent Chats
+
+1. **Node tagging**: `spawnOnce` tags every spawned child with `label: "<node.label>#<node.id>"`.
+2. **Catalog projection tracking**: While a turn runs (every 700ms, plus on mount and turn completion), the client reads `subagentCatalog` and `subagentTiming` from `sessions.list`, matching `/#([^\s#]+)$/` to map each child back to its canvas node (`running` / `done` / `failed`) and latest `childId`.
+3. **Lead `⏸ Ready` detection**: For non-entry Lead nodes, the client highlights **`⏸ Ready`** as soon as all upstream subagents are `done` and no downstream node has started yet.
+4. **Jump to live chat**: Clicking any subagent's status pill (e.g. `Running ↗`, `Done ↗`) opens `dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>` via `sidebarRight.openResource(..., { kind: 'subagentchat', preferNewPane: true })`.
+
+---
+
+## 6. Skill & Tool Discovery
+
+Because DSH loads skills on demand rather than auto-injecting every plugin guide, the plugin combines three layers for reliable agent adoption:
+1. **Bundled skill provider**: `index.js` registers `workflow-canvas` via `ctx.skills.registerProvider` with bilingual trigger keywords (`canvas / workflow / pipeline / 画布 / 工作流 / 编排`) and all four `canvas_*` tool names, serving [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md).
+2. **Tool-level pointers**: Every `canvas_*` tool description reminds the model to load the `workflow-canvas` skill first, and tool schemas are always in context.
+3. **Optional `AGENTS.md` rule**: Adding a single line in a project's `AGENTS.md` guarantees deterministic skill loading in every session.

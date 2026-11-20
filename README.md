@@ -4,7 +4,7 @@
 [![DSH](https://img.shields.io/badge/DSH-%3E%3D0.2.2-2f81f7)](https://github.com/Wasabi2575/dsh-workflow-canvas)
 [![License: MIT](https://img.shields.io/badge/License-MIT-3fb950.svg)](LICENSE)
 
-English | [中文](README.zh.md)
+English | [中文](README.zh.md) | [Mechanism & Architecture](docs/MECHANISM.md)
 
 Orchestrate subagent workflows from the DSH sidebar. Draw each step as a node, wire
 the data flow with three link types, enable it, and run it from chat — subagent nodes
@@ -152,11 +152,10 @@ When a task involves the workflow canvas or the canvas_* tools, call the `skill`
 tool with name `workflow-canvas` first.
 ```
 
-## Development
+## Development & internals
 
-Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host
-changes need a restart. Run `npm test` for the test suite. See
-[docs/DETAIL.md](docs/DETAIL.md) for the internals.
+- For the full architecture, Client ↔ Host sync bridge, DAG wave execution, runtime link semantics, cold resume, and live status tracking, see [**Mechanism & Architecture**](docs/MECHANISM.md) ([中文](docs/MECHANISM.zh.md)).
+- Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host changes need a restart. Run `npm test` for the test suite. See [docs/DETAIL.md](docs/DETAIL.md) for the compact plugin detail page.
 
 ## License
 
