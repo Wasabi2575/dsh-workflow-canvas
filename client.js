@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
         generated: '已从对话生成画布',
         dupName: '已存在，请换一个名字',
         guideDesc: '画一张子代理流程图',
-        model: '模型', reason: '推理', role: '分工', taskPh: '本次任务：例如把这批反馈归类并给出建议',
+        model: '模型', reason: '推理', role: '分工', task: '任务', taskPh: '本次任务：例如把这批反馈归类并给出建议',
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
         memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
         sep: ': ', on: '开', off: '关', allTools: '默认（全部工具）', none: '无',
@@ -125,7 +125,7 @@ window.__ModuleLoader__.load({
         generated: 'Canvas generated from chat',
         dupName: 'already exists, pick another name',
         guideDesc: 'Sketch a subagent workflow',
-        model: 'Model', reason: 'Reasoning', role: 'Role', taskPh: 'Task, e.g. classify these reports and suggest actions',
+        model: 'Model', reason: 'Reasoning', role: 'Role', task: 'Task', taskPh: 'Task, e.g. classify these reports and suggest actions',
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
         memory: 'Memory', scope: 'Scope', retry: 'Retry', jsonOut: 'JSON out',
         sep: ': ', on: 'on', off: 'off', allTools: 'default (all tools)', none: 'none',
@@ -288,12 +288,12 @@ window.__ModuleLoader__.load({
       },
 
       toggleSwitch: {
-        flex: '0 0 auto', width: '46px', padding: '3px 6px', borderRadius: '5px',
+        flex: '1 1 auto', width: '100%', height: '22px', boxSizing: 'border-box', padding: '0 6px', borderRadius: '5px',
         border: '1px solid ' + C.border, background: 'transparent', color: C.dim,
         fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
       },
       toggleSwitchOn: {
-        flex: '0 0 auto', width: '46px', padding: '3px 6px', borderRadius: '5px',
+        flex: '1 1 auto', width: '100%', height: '22px', boxSizing: 'border-box', padding: '0 6px', borderRadius: '5px',
         border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
         fontSize: '11px', cursor: 'pointer', outline: 'none', textAlign: 'center',
       },
@@ -309,24 +309,27 @@ window.__ModuleLoader__.load({
         fontSize: '9px', cursor: 'pointer', whiteSpace: 'nowrap', lineHeight: '12px',
         outline: 'none',
       },
-      fieldLabel: { flex: '0 0 auto', width: '30px', fontSize: '10px', color: C.dim },
+      fieldLabel: { flex: '0 0 32px', width: '32px', fontSize: '10px', color: C.dim },
 
       input: {
         flex: '1 1 auto', minWidth: '0', padding: '3px 6px', borderRadius: '5px',
         border: '1px solid ' + C.border, background: C.base, color: C.text, fontSize: '12px',
         outline: 'none', userSelect: 'text',
       },
+      leadLabel: { position: 'absolute', left: '10px', right: '10px', top: '26px', height: '16px', display: 'flex', alignItems: 'center' },
       task: {
-        position: 'absolute', left: '10px', right: '10px', top: '30px', height: '52px',
+        position: 'absolute', left: '10px', right: '10px', top: '44px', height: '118px',
         padding: '4px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', resize: 'none', outline: 'none',
         lineHeight: '14px', boxSizing: 'border-box', userSelect: 'text',
       },
 
       selectBtn: {
-        flex: '1 1 auto', minWidth: '0', display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '3px 6px', borderRadius: '5px', border: '1px solid ' + C.border,
+        flex: '1 1 auto', minWidth: '0', width: '100%', height: '22px', boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '0 6px', borderRadius: '5px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '11px', cursor: 'pointer', textAlign: 'left',
+        lineHeight: '16px',
       },
       reasonChip: {
         flex: '0 0 auto', maxWidth: '44px', padding: '3px 4px', borderRadius: '5px',
@@ -1752,16 +1755,29 @@ window.__ModuleLoader__.load({
                       onChange: (e) => updateNode(node.id, { label: e.target.value }),
                     }),
                 isEntry
-                  ? h('textarea', {
+                  ? h(React.Fragment, null,
+                    h('div', { style: S.leadLabel }, h('span', { style: S.fieldLabel }, t('task'))),
+                    h('textarea', {
                       style: S.task,
                       value: node.task || '',
                       placeholder: t('taskPh'),
                       onMouseDown: (e) => e.stopPropagation(),
                       onFocus: () => setSelectedIds([node.id]),
                       onChange: (e) => updateNode(node.id, { task: e.target.value }),
-                    })
+                    }),
+                  )
                   : isLeadKind
-                    ? roleInput(S.fieldRoleTop)
+                    ? h(React.Fragment, null,
+                      h('div', { style: S.leadLabel }, h('span', { style: S.fieldLabel }, t('role'))),
+                      h('textarea', {
+                        style: S.task,
+                        value: node.role || '',
+                        placeholder: t('rolePhLead'),
+                        onMouseDown: (e) => e.stopPropagation(),
+                        onFocus: () => setSelectedIds([node.id]),
+                        onChange: (e) => updateNode(node.id, { role: e.target.value }),
+                      }),
+                    )
                     : h(React.Fragment, null,
                       h('div', { style: S.fieldModel },
                         h('span', { style: S.fieldLabel }, t('model')),
@@ -1783,6 +1799,7 @@ window.__ModuleLoader__.load({
                         h('span', { style: S.fieldLabel }, t('memory')),
                         memoryToggle(node),
                       ),
+                      roleInput(S.fieldRole),
                     ),
                 selectedIds.includes(node.id) && node.id !== 'lead' && h('div', {
                   style: S.nodeDelete,
