@@ -182,6 +182,7 @@ window.__ModuleLoader__.load({
         background: C.base, color: C.text, fontSize: '11px', outline: 'none', userSelect: 'text',
       },
       presetEmpty: { padding: '6px', fontSize: '10px', color: C.dim },
+      syncNote: { fontSize: '10px', color: C.dim, maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
       canvas: { position: 'relative', flex: '1 1 auto', overflow: 'auto', minHeight: '0', userSelect: 'none' },
       content: { position: 'relative', width: CONTENT_W, height: CONTENT_H },
 
@@ -628,6 +629,7 @@ window.__ModuleLoader__.load({
       const [selectedIds, setSelectedIds] = useState([]);
       const [marquee, setMarquee] = useState(null);
       const [dragging, setDragging] = useState(false);
+      const [syncNote, setSyncNote] = useState('');
       const [pending, setPending] = useState(null);
       const [status, setStatus] = useState('');
       const [models, setModels] = useState([]);
@@ -1195,7 +1197,8 @@ window.__ModuleLoader__.load({
         try { remote = hostCtx && hostCtx.remote; } catch (_e) { remote = undefined; }
         let wf;
         try { wf = remote && remote.workspaceFiles; } catch (_e) { wf = undefined; }
-        if (!wf || typeof wf.read !== 'function' || !sessionId) return undefined;
+        if (!wf || typeof wf.read !== 'function') { setSyncNote('自动同步不可用'); return undefined; }
+        if (!sessionId) { setSyncNote('无会话 id'); return undefined; }
         // The Host names the file after the agent id (session-<uuid>); the
         // pane prop may carry either form, so try both.
         const bare = String(sessionId).replace(/^session-/, '');
@@ -1216,15 +1219,19 @@ window.__ModuleLoader__.load({
                 const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
                 const read = payload && (typeof payload.text === 'string' ? payload.text : '');
                 if (read) { text = read; break; }
-              } catch (_e) { /* try the next name */ }
+              } catch (err) {
+                setSyncNote('读取失败: ' + String((err && err.message) || err).slice(0, 90));
+              }
             }
-            if (!text || text === lastText) return;
+            if (!text) return;
+            if (text === lastText) return;
             lastText = text;
             const doc = JSON.parse(text);
             const canvas = doc && doc.canvas;
             const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
-            if (valid && applyCanvasDoc(canvas)) flash('已从对话生成画布');
+            if (valid && applyCanvasDoc(canvas)) { setSyncNote('已应用生成结果'); flash('已从对话生成画布'); }
+            else setSyncNote('文件内容无效');
           } catch (_e) { /* file absent or not readable yet */ }
         };
         const timer = setInterval(tick, 1500);
@@ -1422,6 +1429,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
+          syncNote ? h('span', { style: S.syncNote, title: syncNote }, syncNote) : null,
           h('button', {
             style: S.btn,
             onClick: toggleLang,
