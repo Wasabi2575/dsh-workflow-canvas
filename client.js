@@ -75,7 +75,7 @@ window.__ModuleLoader__.load({
         rolePhLead: '我自己这一步做什么', rolePhAgent: '这个子代理做什么',
         memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
         sep: ': ', on: '开', off: '关', allTools: '默认（全部工具）', none: '无',
-        scopeMinimal: 'minimal（只读、少工具）', scopeStandard: 'standard（标准工具集）',
+        scopeMinimal: 'minimal（只读思考）', scopeStandard: 'standard（全部工具）',
         fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
@@ -122,7 +122,7 @@ window.__ModuleLoader__.load({
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（仅同一进程内有效）',
-        tipPreset: '能力范围：standard 标准工具集（含子代理/工作流/网页/办公）；minimal 只读少工具（无子代理、无工作流）',
+        tipPreset: '能力范围（点一下切换）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
         tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
         lang: 'ZH',
@@ -150,7 +150,7 @@ window.__ModuleLoader__.load({
         rolePhLead: 'What I do in this step', rolePhAgent: 'What this subagent does',
         memory: 'Memory', scope: 'Scope', retry: 'Retry', jsonOut: 'JSON out',
         sep: ': ', on: 'on', off: 'off', allTools: 'default (all tools)', none: 'none',
-        scopeMinimal: 'minimal (read-only)', scopeStandard: 'standard (usual tools)',
+        scopeMinimal: 'minimal (read-only thinking)', scopeStandard: 'standard (all tools)',
         fallbackModel: 'Fallback',
         stPending: 'Pending', stRunning: 'Running', stDone: 'Done', stFailed: 'Failed',
         stOrphan: 'Unlinked', stLead: 'Runs in chat',
@@ -197,7 +197,7 @@ window.__ModuleLoader__.load({
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (same process only)',
-        tipPreset: 'Capability: standard = full tool set (subagents, workflow, web, office); minimal = read-only, few tools',
+        tipPreset: 'Capability (click to toggle): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
         tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
         lang: 'EN',
@@ -1680,7 +1680,7 @@ false
           title: t('tipPreset'),
           onMouseDown: (e) => e.stopPropagation(),
           onClick: () => updateNode(node.id, { preset: wide ? 'minimal' : 'standard' }),
-        }, wide ? 'standard' : 'minimal');
+        }, wide ? t('scopeStandard') : t('scopeMinimal'));
       };
       const fallbackControl = (node) => {
         const key = 'f:' + node.id;
