@@ -1398,19 +1398,19 @@ window.__ModuleLoader__.load({
       const renderBand = (node) => {
         const isEntry = node.id === 'lead';
         return h('div', { style: S.band },
-          SOCKET_TYPES.map((sock) => h('div', { key: t.id, style: S.row },
-            h('span', { style: S.rowLabel }, t.label),
+          SOCKET_TYPES.map((sock) => h('div', { key: sock.id, style: S.row },
+            h('span', { style: S.rowLabel }, sock.label),
             !isEntry && h('div', {
-              style: { ...S.socket, left: -PORT / 2, borderColor: t.color },
+              style: { ...S.socket, left: -PORT / 2, borderColor: sock.color },
               title: t('tipSocketOut'),
-              onMouseDown: (e) => onInputDown(e, node.id, t.id),
-              onMouseUp: (e) => onInputUp(e, node.id, t.id),
+              onMouseDown: (e) => onInputDown(e, node.id, sock.id),
+              onMouseUp: (e) => onInputUp(e, node.id, sock.id),
             }),
             h('div', {
-              style: { ...S.socket, right: -PORT / 2, borderColor: t.color },
+              style: { ...S.socket, right: -PORT / 2, borderColor: sock.color },
               title: t('tipSocketIn'),
-              onMouseDown: (e) => onOutputDown(e, node.id, t.id),
-              onMouseUp: (e) => onOutputUp(e, node.id, t.id),
+              onMouseDown: (e) => onOutputDown(e, node.id, sock.id),
+              onMouseUp: (e) => onOutputUp(e, node.id, sock.id),
             }),
           )),
         );
