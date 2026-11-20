@@ -52,7 +52,10 @@ window.__ModuleLoader__.load({
         leadLocked: '入口 Lead 不能删除', modelsMissing: '模型列表未加载',
         tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
-        tipZoom: '滚轮缩放（以光标为中心），点击复位',
+        tipZoom: '滚轮缩放（以光标为中心）',
+        tipResetZoom: '回到 100% 并把画面中心拉到 Lead 节点',
+        tipLocate: '把画面中心拉到 Lead（本对话）节点',
+        locate: '◎ 定位',
         tipSync: '把当前画布同步给 Host（会在对话里留一条同步记录）',
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
@@ -80,7 +83,10 @@ window.__ModuleLoader__.load({
         leadLocked: 'The entry Lead cannot be deleted', modelsMissing: 'Model list is not loaded',
         tipLead: 'Lead steps run in the chat; the canvas does not track them',
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
-        tipZoom: 'Wheel zooms around the cursor; click to reset',
+        tipZoom: 'Wheel zooms around the cursor',
+        tipResetZoom: 'Reset to 100% and centre the view on the Lead node',
+        tipLocate: 'Centre the view on the Lead (this conversation) node',
+        locate: '◎ Locate',
         tipSync: 'Publish this canvas to the host (leaves one sync record in the chat)',
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
@@ -795,6 +801,40 @@ window.__ModuleLoader__.load({
         };
       };
 
+      /** Put a world point at the middle of the visible canvas. */
+      const centerOn = (wx, wy, nextK) => {
+        const el = canvasElRef.current;
+        if (!el) return;
+        const k = nextK || viewRef.current.k || 1;
+        const cw = el.clientWidth || 1;
+        const chh = el.clientHeight || 1;
+        setView({
+          k,
+          x: cw / 2 - (wx + WORLD_PAD) * k,
+          y: chh / 2 - (wy + WORLD_PAD) * k,
+        });
+        el.scrollLeft = 0;
+        el.scrollTop = 0;
+      };
+
+      /** World coordinate currently sitting in the middle of the viewport. */
+      const viewportCenterWorld = () => {
+        const el = canvasElRef.current;
+        const k = viewRef.current.k || 1;
+        const cw = (el && el.clientWidth) || 800;
+        const chh = (el && el.clientHeight) || 600;
+        return {
+          x: (cw / 2 - viewRef.current.x) / k - WORLD_PAD,
+          y: (chh / 2 - viewRef.current.y) / k - WORLD_PAD,
+        };
+      };
+
+      const focusLead = () => {
+        const lead = nodes.find((n) => n.id === 'lead');
+        if (!lead) return;
+        centerOn(lead.x + NODE_W / 2, lead.y + NODE_H / 2);
+      };
+
       // Snapshot before every structural change so a mis-click can be undone.
       const pushSnapshot = () => {
         historyRef.current.push({ nodes, edges });
@@ -868,11 +908,13 @@ window.__ModuleLoader__.load({
         pushSnapshot();
         setNodes((ns) => {
           const i = ns.length;
+          const center = viewportCenterWorld();
           return [...ns, {
             id: 'n' + Date.now().toString(36),
             kind: kind === 'lead' ? 'lead' : 'agent',
-            x: 60 + (ns.length % 3) * 70,
-            y: 230 + (ns.length % 3) * 170,
+            // New nodes land near the middle of the viewport, nudged right.
+            x: center.x + 40 + (ns.length % 3) * 30,
+            y: center.y - NODE_H / 2 + (ns.length % 3) * 40,
             label: kind === 'lead' ? 'Lead 步骤 ' + i : 'Node ' + i,
             provider: '',
             model: '',
@@ -1209,9 +1251,15 @@ window.__ModuleLoader__.load({
           }, t('sync')),
           h('button', {
             style: S.btn,
-            onClick: () => setView({ k: 1, x: 0, y: 0 }),
+            onClick: focusLead,
             type: 'button',
-            title: t('tipZoom'),
+            title: t('tipLocate'),
+          }, t('locate')),
+          h('button', {
+            style: S.btn,
+            onClick: () => focusLead(),
+            type: 'button',
+            title: t('tipResetZoom'),
           }, Math.round(view.k * 100) + '%'),
           h('button', {
             style: S.btn,
