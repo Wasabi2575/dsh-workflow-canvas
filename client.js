@@ -792,7 +792,9 @@ window.__ModuleLoader__.load({
 
     function saveDoc(sessionId, doc) {
       try {
-        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(doc));
+        /** Stamp every local edit so a stale generated canvas cannot overwrite it. */
+        const stamped = { ...doc, at: Date.now() };
+        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(stamped));
       } catch (_e) {
         /* storage unavailable */
       }
@@ -1511,6 +1513,23 @@ false
         });
         setSelectedIds([]);
         setStatusById({});
+        // Remember what the remote document claimed, so re-reading it on the next
+        // start does not resurrect nodes the user has deleted since.
+        if (typeof doc.at === 'number') {
+          try {
+            const key = storageKey(sessionId);
+            const raw = window.localStorage.getItem(key);
+            const local = raw ? JSON.parse(raw) : {};
+            if (!local || typeof local.at !== 'number' || local.at <= doc.at) {
+              window.localStorage.setItem(key, JSON.stringify({
+                nodes: doc.nodes,
+                edges: Array.isArray(doc.edges) ? doc.edges : [],
+                enabled: Boolean(local && local.enabled),
+                at: doc.at,
+              }));
+            }
+          } catch (_e) { /* storage unavailable */ }
+        }
         const lead = doc.nodes.find((n) => n.id === 'lead') || doc.nodes[0];
         if (lead) {
           const lx = typeof lead.x === 'number' ? lead.x : 60;
@@ -1562,6 +1581,15 @@ false
             lastText = text;
             const doc = JSON.parse(text);
             const canvas = doc && doc.canvas;
+            // A canvas the user has edited more recently wins over an old file.
+            try {
+              const raw = window.localStorage.getItem(storageKey(sessionId));
+              const local = raw ? JSON.parse(raw) : null;
+              if (local && typeof local.at === 'number' && typeof doc.at === 'number' && local.at > doc.at) {
+                lastText = text;
+                return;
+              }
+            } catch (_e) { /* ignore */ }
             const valid = canvas && Array.isArray(canvas.nodes) && canvas.nodes.length
               && canvas.nodes.every((n) => n && typeof n.id === 'string');
             if (valid && applyCanvasDoc(canvas)) {
