@@ -972,7 +972,10 @@ window.__ModuleLoader__.load({
           }));
         } else if (marquee) {
           const p = pointTo(e);
-          setMarquee({ x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y });
+          const next = { x1: marquee.x1, y1: marquee.y1, x2: p.x, y2: p.y };
+          setMarquee(next);
+          // Live preview: highlight what the band currently covers.
+          setSelectedIds(hitTest(next));
         } else if (pending) {
           const p = pointTo(e);
           setPending({ fromId: pending.fromId, type: pending.type, sx: pending.sx, sy: pending.sy, x: p.x, y: p.y });
@@ -981,15 +984,7 @@ window.__ModuleLoader__.load({
 
       const onCanvasUp = () => {
         if (marquee) {
-          const left = Math.min(marquee.x1, marquee.x2);
-          const right = Math.max(marquee.x1, marquee.x2);
-          const top = Math.min(marquee.y1, marquee.y2);
-          const bottom = Math.max(marquee.y1, marquee.y2);
-          const moved = right - left > 3 || bottom - top > 3;
-          const hit = moved
-            ? nodes.filter((n) => n.x + NODE_W >= left && n.x <= right && n.y + NODE_H >= top && n.y <= bottom)
-            : [];
-          setSelectedIds(hit.map((n) => n.id));
+          setSelectedIds(hitTest(marquee));
           setMarquee(null);
         }
         nodeDrag.current = null;
@@ -1133,6 +1128,21 @@ window.__ModuleLoader__.load({
 
       const reachableIds = reachableFrom(nodes, edges);
 
+      // The canvas grows with its nodes so links past the original size are
+      // still painted instead of being clipped by the SVG viewport.
+      const contentW = Math.max(CONTENT_W, ...nodes.map((n) => n.x + NODE_W + 400));
+      const contentH = Math.max(CONTENT_H, ...nodes.map((n) => n.y + NODE_H + 400));
+
+      const hitTest = (m) => {
+        const left = Math.min(m.x1, m.x2);
+        const right = Math.max(m.x1, m.x2);
+        const top = Math.min(m.y1, m.y2);
+        const bottom = Math.max(m.y1, m.y2);
+        return nodes
+          .filter((n) => n.x + NODE_W >= left && n.x <= right && n.y + NODE_H >= top && n.y <= bottom)
+          .map((n) => n.id);
+      };
+
       return h('div', { style: S.root },
         h('div', { style: S.toolbar },
           h('button', { style: S.btn, onClick: () => addNode('agent'), type: 'button' }, t('addAgent')),
@@ -1204,7 +1214,7 @@ window.__ModuleLoader__.load({
           h('div', {
             ref: contentRef,
             style: {
-              ...S.content,
+              ...S.content, width: contentW, height: contentH, overflow: 'visible',
               transform: 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')',
               transformOrigin: '0 0',
             },
@@ -1213,7 +1223,7 @@ window.__ModuleLoader__.load({
             onMouseUp: onCanvasUp,
             onMouseLeave: onCanvasUp,
           },
-            h('svg', { width: CONTENT_W, height: CONTENT_H, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none' } },
+            h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
               h('g', null, edgeEls),
               marquee && h('rect', {
                 x: Math.min(marquee.x1, marquee.x2),
