@@ -258,13 +258,13 @@ window.__ModuleLoader__.load({
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%',
       },
       floatOn: {
-        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
+        position: 'absolute', top: '52px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.accent,
         background: C.elevated, color: C.accent, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
       },
       floatOff: {
-        position: 'absolute', top: '10px', left: '10px', zIndex: 30,
+        position: 'absolute', top: '52px', left: '10px', zIndex: 30,
         padding: '5px 10px', borderRadius: '999px', border: '1px solid ' + C.border,
         background: C.elevated, color: C.dim, fontSize: '11px', fontWeight: 600,
         cursor: 'pointer', boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
@@ -790,10 +790,10 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function saveDoc(sessionId, doc) {
+    function saveDoc(sessionId, doc, stamp) {
       try {
         /** Stamp every local edit so a stale generated canvas cannot overwrite it. */
-        const stamped = { ...doc, at: Date.now() };
+        const stamped = { ...doc, at: typeof stamp === 'number' ? stamp : Date.now() };
         window.localStorage.setItem(storageKey(sessionId), JSON.stringify(stamped));
       } catch (_e) {
         /* storage unavailable */
@@ -861,6 +861,8 @@ window.__ModuleLoader__.load({
       const [helpOpen, setHelpOpen] = useState(false);
       const [cutMode, setCutMode] = useState(loadCutMode);
       const cutRef = useRef(null);
+      /** Timestamp of the remote document being applied, so saving it does not bump the clock. */
+      const applyStamp = useRef(null);
       const [cutPath, setCutPath] = useState([]);
       const [cutVictims, setCutVictims] = useState([]);
       const cutHits = useRef(new Set());
@@ -896,7 +898,9 @@ window.__ModuleLoader__.load({
       nodesRef.current = nodes;
 
       useEffect(() => {
-        saveDoc(sessionId, { nodes, edges, enabled });
+        const stamp = applyStamp.current;
+        applyStamp.current = null;
+        saveDoc(sessionId, { nodes, edges, enabled }, stamp === null ? undefined : stamp);
       }, [sessionId, nodes, edges, enabled]);
 
       // Any structural edit after enabling leaves the Host copy stale.
@@ -1479,6 +1483,7 @@ window.__ModuleLoader__.load({
         const merge = doc.mode === 'merge';
         if (!merge && !doc.nodes.length) return false;
         pushSnapshot();
+        applyStamp.current = typeof doc.at === 'number' ? doc.at : null;
         setNodes((existing) => {
           const byId = new Map(existing.map((n) => [n.id, n]));
           const incoming = doc.nodes.map((n, i) => {
@@ -1976,14 +1981,14 @@ window.__ModuleLoader__.load({
             h('div', { style: S.helpBody }, t('helpBody').split('\n').map((line, i) => h('div', { key: i, style: S.helpLine }, line))),
           ),
         ),
+        h('button', {
+          style: enabled ? S.floatOn : S.floatOff,
+          type: 'button',
+          onMouseDown: (e) => e.stopPropagation(),
+          onClick: toggleEnabled,
+          title: t('tipToggle'),
+        }, enabled ? t('enabled') : t('disabled')),
         h('div', { ref: canvasElRef, style: S.canvas, onMouseDown: onCanvasDown },
-          h('button', {
-            style: enabled ? S.floatOn : S.floatOff,
-            type: 'button',
-            onMouseDown: (e) => e.stopPropagation(),
-            onClick: toggleEnabled,
-            title: t('tipToggle'),
-          }, enabled ? t('enabled') : t('disabled')),
           h('div', {
             ref: contentRef,
             style: {
