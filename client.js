@@ -120,7 +120,7 @@ window.__ModuleLoader__.load({
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（仅同一进程内有效）',
-        tipPreset: '权限范围（agent 预设）：无 = 默认全部能力；minimal 只读少工具；standard 标准工具集',
+        tipPreset: '能力范围：standard 标准工具集（含子代理/工作流/网页/办公）；minimal 只读少工具（无子代理、无工作流）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
         tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
         lang: 'ZH',
@@ -193,7 +193,7 @@ window.__ModuleLoader__.load({
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (same process only)',
-        tipPreset: 'Capability scope (agent preset): none = full access, minimal = read-only few tools, standard = usual tool set',
+        tipPreset: 'Capability: standard = full tool set (subagents, workflow, web, office); minimal = read-only, few tools',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
         tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
         lang: 'EN',
@@ -725,7 +725,7 @@ window.__ModuleLoader__.load({
             provider: n.provider || '',
             model: n.model || '',
             reasoning: n.reasoning || '',
-            preset: n.preset || '',
+            preset: n.preset === 'minimal' ? 'minimal' : 'standard',
             keepSession: Boolean(n.keepSession),
             // A structured link is the only thing that decides this: no separate switch.
             structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
@@ -1033,9 +1033,11 @@ window.__ModuleLoader__.load({
         const onSnapshot = () => {
           let running = false;
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
+          // A new turn means a new run: drop the previous run's statuses first.
+          if (running && !wasRunning) setStatusById({});
+          wasRunning = running;
           if (running && !timer) { read(); timer = setInterval(read, 700); }
           if (!running && timer) { stop(); read(); }
-          wasRunning = running;
         };
         let unsub;
         try { unsub = face.subscribe(onSnapshot); } catch (_e) { unsub = undefined; }
@@ -1615,38 +1617,16 @@ window.__ModuleLoader__.load({
         return (found && (found.name || found.id)) || node.reasoning;
       };
 
-      const scopeControl = (node) => {
-        const key = 'p:' + node.id;
-        const isOpen = openModelFor === key;
-        const options = [
-          { value: '', label: t('allTools') },
-          { value: 'minimal', label: t('scopeMinimal') },
-          { value: 'standard', label: t('scopeStandard') },
-        ];
-        const current = node.preset || '';
-        const shown = options.find((o) => o.value === current);
-        const rows = options.map((o) => h('div', {
-          key: o.value || 'all',
-          style: o.value === current ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
-          onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
-          onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-          onClick: () => { updateNode(node.id, { preset: o.value }); setOpenModelFor(null); },
-        }, o.label));
-        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
-          h('button', {
-            style: S.selectBtn,
-            type: 'button',
-            title: t('tipPreset'),
-            onMouseDown: (e) => e.stopPropagation(),
-            onClick: () => setOpenModelFor(isOpen ? null : key),
-          },
-            h('span', { style: S.selectText }, shown ? shown.label : current),
-            h('span', { style: S.caret }, '▾'),
-          ),
-          isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
-        );
+      const scopeToggle = (node) => {
+        const wide = (node.preset || 'standard') !== 'minimal';
+        return h('button', {
+          style: wide ? S.toggleSwitchOn : S.toggleSwitch,
+          type: 'button',
+          title: t('tipPreset'),
+          onMouseDown: (e) => e.stopPropagation(),
+          onClick: () => updateNode(node.id, { preset: wide ? 'minimal' : 'standard' }),
+        }, wide ? 'standard' : 'minimal');
       };
-
       const fallbackControl = (node) => {
         const key = 'f:' + node.id;
         const isOpen = openModelFor === key;
@@ -1687,7 +1667,6 @@ window.__ModuleLoader__.load({
           isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
         );
       };
-
       const memoryToggle = (node) => h('button', {
         style: node.keepSession ? S.toggleSwitchOn : S.toggleSwitch,
         type: 'button',
@@ -2071,7 +2050,7 @@ window.__ModuleLoader__.load({
                       ),
                       h('div', { style: S.fieldScope },
                         h('span', { style: S.fieldLabel }, t('scope')),
-                        scopeControl(node),
+                        scopeToggle(node),
                       ),
                       h('div', { style: S.fieldFallback },
                         h('span', { style: S.fieldLabel }, t('fallbackModel')),
