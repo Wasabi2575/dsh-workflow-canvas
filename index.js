@@ -16,7 +16,7 @@
  * Everything is defensive: a missing service disables one piece instead of
  * failing the plugin load.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -57,10 +57,12 @@ function saveStore() {
   if (!path) return;
   try {
     mkdirSync(join(path, '..'), { recursive: true });
-    writeFileSync(path, JSON.stringify({
+    const tmp = path + '.tmp';
+    writeFileSync(tmp, JSON.stringify({
       canvas: Object.fromEntries(canvasBySession),
       children: Object.fromEntries(childByNode),
     }), 'utf8');
+    renameSync(tmp, path);
   } catch (_e) {
     /* persistence is best-effort */
   }
@@ -487,7 +489,9 @@ async function runPlan(scope, args, exec) {
           .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
           .map((id) => ({
             label: labelOf.get(id) || id,
-            childId: liveChild.get(String(sid || '') + '::' + id) || null,
+            childId: liveChild.get(String(sid || '') + '::' + id)
+              || childByNode.get(String(sid || '') + '::' + id)
+              || null,
           })),
         hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续。',
       };
@@ -726,26 +730,29 @@ export function apply(ctx) {
               const plan = payload.plan;
               const nodes = Array.isArray(plan.nodes) ? plan.nodes.slice() : [];
               const byId = new Map(nodes.map((n) => [n.id, n]));
+              const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'structured', 'fallbackModel', 'fallbackProvider'];
               const touched = [];
               for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
-                if (!patch || typeof patch.id !== 'string') continue;
+                // 'lead' is the reserved entry node and is never edited here.
+                if (!patch || typeof patch.id !== 'string' || patch.id === 'lead') continue;
                 const existing = byId.get(patch.id);
-                if (existing) { Object.assign(existing, patch); touched.push(patch.id); }
-                else {
+                if (existing) {
+                  for (const key of ALLOWED) {
+                    if (patch[key] !== undefined) existing[key] = patch[key];
+                  }
+                  touched.push(patch.id);
+                } else {
                   const created = {
                     id: patch.id,
                     kind: patch.kind === 'lead' ? 'lead' : 'agent',
                     label: patch.label || patch.id,
-                    role: patch.role || '',
-                    provider: patch.provider || '',
-                    model: patch.model || '',
-                    reasoning: patch.reasoning || '',
-                    preset: patch.preset === 'minimal' ? 'minimal' : 'standard',
-                    structured: Boolean(patch.structured),
-                    keepSession: Boolean(patch.keepSession),
-                    fallbackModel: patch.fallbackModel || '',
-                    fallbackProvider: patch.fallbackProvider || '',
+                    role: '', provider: '', model: '', reasoning: '', preset: 'standard',
+                    structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
                   };
+                  for (const key of ALLOWED) {
+                    if (patch[key] !== undefined) created[key] = patch[key];
+                  }
+                  created.preset = created.preset === 'minimal' ? 'minimal' : 'standard';
                   nodes.push(created);
                   byId.set(created.id, created);
                   touched.push(created.id);
