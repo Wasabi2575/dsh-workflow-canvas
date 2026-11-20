@@ -129,7 +129,7 @@ function briefFor(plan, node, results) {
   head.push('【要求】只完成你这一步；输出要能被下游直接使用，不要重复上游已完成的工作。');
   let text = head.join('\n') + '\n';
   for (const u of ups) {
-    const value = results[u.from.label];
+    const value = results[u.from.id];
     const type = u.edge.type || 'prompt';
     const body = typeof value === 'string' ? value : '（没有结果）';
     if (type === 'structured') {
@@ -431,7 +431,7 @@ async function runPlan(scope, args, exec) {
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   if (!state || state.sig !== sig) {
-    state = { sig, done: new Set(), results: {} };
+    state = { sig, done: new Set(), results: {}, labels: {} };
     runBySession.set(sid, state);
   }
 
@@ -449,7 +449,7 @@ async function runPlan(scope, args, exec) {
     if (!remaining.length) {
       runBySession.delete(sid);
       saveStore();
-      return { status: 'done', results: state.results, skipped };
+      return { status: 'done', results: state.results, labels: state.labels, skipped };
     }
 
     const ready = remaining.filter((n) => depsOf(n).every((id) => state.done.has(id)));
@@ -462,7 +462,8 @@ async function runPlan(scope, args, exec) {
         batch.map((node) => spawnNode(scope, plan, node, state.results, agent, exec.signal, sid)),
       );
       batch.forEach((node, i) => {
-        state.results[node.label] = texts[i];
+        state.results[node.id] = texts[i];
+        state.labels[node.id] = node.label;
         state.done.add(node.id);
       });
       continue;
@@ -479,10 +480,12 @@ async function runPlan(scope, args, exec) {
           needs: depsOf(leadNode).map((id) => byId.get(id).label),
         },
         results: state.results,
+        labels: state.labels,
         hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续。',
       };
     }
-    state.results[leadNode.label] = leadResult;
+    state.results[leadNode.id] = leadResult;
+    state.labels[leadNode.id] = leadNode.label;
     state.done.add(leadNode.id);
     leadResult = undefined;
   }
@@ -628,6 +631,7 @@ export function apply(ctx) {
                 status: { type: 'string' },
                 node: { type: 'object' },
                 results: { type: 'object' },
+                labels: { type: 'object' },
                 skipped: { type: 'array' },
                 hint: { type: 'string' },
                 error: { type: 'string' },
@@ -637,9 +641,10 @@ export function apply(ctx) {
               const v = value || {};
               if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
               const results = v.results || {};
-              const blocks = Object.keys(results).map((label) => {
-                const text = typeof results[label] === 'string' ? results[label] : JSON.stringify(results[label]);
-                return '## ' + label + '\n' + text;
+              const labels = v.labels || {};
+              const blocks = Object.keys(results).map((id) => {
+                const text = typeof results[id] === 'string' ? results[id] : JSON.stringify(results[id]);
+                return '## ' + (labels[id] || id) + '\n' + text;
               });
               const body = blocks.length ? blocks.join('\n\n') : '（暂无上游结果）';
               if (v.status === 'need-lead') {
