@@ -13,6 +13,24 @@ glance — grey carries text, blue carries JSON, purple continues the upstream s
 
 - [中文说明](README.zh.md)
 
+## Installation
+
+Requires DeepSeek Harness **0.2.2** or newer (the package declares
+`engines.dsh: ">=0.2.2-rc.1 <0.3.0-0"`).
+
+- **From the plugin market** — open **Plugins → Discover**, search
+  *"workflow canvas"*, and install. The dshmarket entry is still awaiting
+  review; see the
+  [catalog PR](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180).
+- **From npm** — install the published package `dsh-workflow-canvas`
+  (latest `0.1.0`) from the **Plugins** panel, or via the `plugin_manager` tool /
+  `dsh` CLI with `install_bundle` and `target: dsh-workflow-canvas`.
+- **From source** — clone the repository and install it as a local directory
+  with **Plugins → Add plugin**, pointing at the checkout.
+
+After installing, enable the plugin and the `workflow` tab appears in the right
+sidebar.
+
 ## How this differs from other canvas plugins
 
 DSH has more than one "workflow canvas". This one orchestrates **subagents** from
