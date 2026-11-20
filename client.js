@@ -31,9 +31,9 @@ window.__ModuleLoader__.load({
     const PRESET_KEY = STORAGE_PREFIX + 'presets';
 
     const NODE_W = 216;
-    const NODE_H = 252;
+    const NODE_H = 224;
     const PORT = 12;
-    const SOCKET_BAND_TOP = 196;
+    const SOCKET_BAND_TOP = 168;
     const ROW_H = 18;
     const CONTENT_W = 2400;
     const CONTENT_H = 1600;
@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
         memory: '记忆', scope: '能力', retry: '重试', jsonOut: 'JSON 输出',
         sep: ': ', on: '开', off: '关', allTools: '默认（全部工具）', none: '无',
         scopeMinimal: 'minimal（只读、少工具）', scopeStandard: 'standard（标准工具集）',
-        fallbackModel: '备用模型',
+        fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
         stOrphan: '未连线', stLead: '由对话执行',
         presetEmpty: '还没有保存过预设', del: '删除这个预设',
@@ -274,12 +274,12 @@ window.__ModuleLoader__.load({
         color: C.dim, pointerEvents: 'none', zIndex: 3, whiteSpace: 'nowrap',
       },
 
-      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '30px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '56px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldScope: { position: 'absolute', left: '10px', right: '10px', top: '82px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '108px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '134px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
-      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '160px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldModel: { position: 'absolute', left: '10px', right: '10px', top: '28px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldReason: { position: 'absolute', left: '10px', right: '10px', top: '50px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldScope: { position: 'absolute', left: '10px', right: '10px', top: '72px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldFallback: { position: 'absolute', left: '10px', right: '10px', top: '94px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldMemory: { position: 'absolute', left: '10px', right: '10px', top: '116px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
+      fieldRole: { position: 'absolute', left: '10px', right: '10px', top: '138px', height: '22px', display: 'flex', alignItems: 'center', gap: '6px' },
       fieldRoleTop: { position: 'absolute', left: '10px', right: '10px', top: '34px', height: '24px', display: 'flex', alignItems: 'center', gap: '6px' },
       optRow: {
         position: 'absolute', left: '10px', right: '10px', top: '114px', height: '18px',
@@ -1388,23 +1388,30 @@ window.__ModuleLoader__.load({
         return (found && (found.name || found.id)) || node.reasoning;
       };
 
-      /** A dropdown row built from plain options: { value, label }. */
-      const selectControl = (node, key, current, options, onPick) => {
-        const isOpen = openModelFor === key + node.id;
-        const rows = options.map((option) => h('div', {
-          key: option.value || 'none',
-          style: option.value === current ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+      const scopeControl = (node) => {
+        const key = 'p:' + node.id;
+        const isOpen = openModelFor === key;
+        const options = [
+          { value: '', label: t('allTools') },
+          { value: 'minimal', label: t('scopeMinimal') },
+          { value: 'standard', label: t('scopeStandard') },
+        ];
+        const current = node.preset || '';
+        const shown = options.find((o) => o.value === current);
+        const rows = options.map((o) => h('div', {
+          key: o.value || 'all',
+          style: o.value === current ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
           onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
           onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
-          onClick: () => { onPick(option.value); setOpenModelFor(null); },
-        }, option.label));
-        const shown = options.find((option) => option.value === current);
+          onClick: () => { updateNode(node.id, { preset: o.value }); setOpenModelFor(null); },
+        }, o.label));
         return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
           h('button', {
             style: S.selectBtn,
             type: 'button',
+            title: t('tipPreset'),
             onMouseDown: (e) => e.stopPropagation(),
-            onClick: () => setOpenModelFor(isOpen ? null : key + node.id),
+            onClick: () => setOpenModelFor(isOpen ? null : key),
           },
             h('span', { style: S.selectText }, shown ? shown.label : current),
             h('span', { style: S.caret }, '▾'),
@@ -1413,23 +1420,46 @@ window.__ModuleLoader__.load({
         );
       };
 
-      const scopeControl = (node) => selectControl(node, 'p:', node.preset || '', [
-        { value: '', label: t('allTools') },
-        { value: 'minimal', label: t('scopeMinimal') },
-        { value: 'standard', label: t('scopeStandard') },
-      ], (value) => updateNode(node.id, { preset: value }));
-
-      const fallbackControl = (node) => selectControl(
-        node, 'f:', node.fallbackModel,
-        [{ value: '', label: t('none') }].concat(models.map((m) => ({
-          value: m.model,
-          label: (m.modelName || m.model) + (m.providerName ? ' · ' + m.providerName : ''),
-        }))),
-        (value) => {
-          const hit = models.find((m) => m.model === value);
-          updateNode(node.id, { fallbackModel: hit ? hit.model : '', fallbackProvider: hit ? hit.provider : '' });
-        },
-      );
+      const fallbackControl = (node) => {
+        const key = 'f:' + node.id;
+        const isOpen = openModelFor === key;
+        const current = node.fallbackModel;
+        const shown = models.find((m) => m.model === current);
+        const rows = [];
+        rows.push(h('div', {
+          key: 'none',
+          style: current ? S.menuRow : { ...S.menuRow, background: C.hover, color: C.accent },
+          onClick: () => { updateNode(node.id, { fallbackModel: '', fallbackProvider: '' }); setOpenModelFor(null); },
+        }, t('none')));
+        let lastProvider = null;
+        for (const m of models) {
+          if (m.provider !== lastProvider) {
+            rows.push(h('div', { key: 'h-' + m.provider, style: S.menuHead }, m.providerName || m.provider));
+            lastProvider = m.provider;
+          }
+          const picked = m.model === current;
+          rows.push(h('div', {
+            key: m.provider + '::' + m.model,
+            style: picked ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+            onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+            onMouseLeave: (e) => { e.currentTarget.style.background = picked ? C.hover : 'transparent'; },
+            onClick: () => { updateNode(node.id, { fallbackModel: m.model, fallbackProvider: m.provider }); setOpenModelFor(null); },
+          }, m.modelName || m.model));
+        }
+        return h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+          h('button', {
+            style: S.selectBtn,
+            type: 'button',
+            title: t('tipFallback'),
+            onMouseDown: (e) => e.stopPropagation(),
+            onClick: () => setOpenModelFor(isOpen ? null : key),
+          },
+            h('span', { style: S.selectText }, shown ? (shown.modelName || shown.model) : t('none')),
+            h('span', { style: S.caret }, '▾'),
+          ),
+          isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
+        );
+      };
 
       const memoryToggle = (node) => h('button', {
         style: node.keepSession ? S.toggleSwitchOn : S.toggleSwitch,
