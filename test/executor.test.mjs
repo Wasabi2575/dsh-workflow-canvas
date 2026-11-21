@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -568,4 +568,126 @@ test('executePlan flags subagents that return empty prose without structured out
   assert.equal(result.status, 'done');
   assert.deepEqual(result.emptyOutputs, [{ id: 'silent', label: '静默节点' }]);
   assert.deepEqual(result, JSON.parse(JSON.stringify(result)), 'result is lossless JSON');
+});
+
+test('terminal Lead finishes directly with status done and finalLead without redundant callback', async () => {
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'out:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '终审测试',
+    nodes: [
+      { id: 'a', kind: 'agent', label: '方案', role: '出方案' },
+      { id: 'pick', kind: 'lead', label: 'Lead 拍板', role: '二选一' },
+      { id: 'exec', kind: 'agent', label: '执行', role: '落地' },
+      { id: 'final', kind: 'lead', label: 'Lead 终审', role: '验收交付' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'pick', type: 'prompt' },
+      { from: 'pick', to: 'exec', type: 'prompt' },
+      { from: 'exec', to: 'final', type: 'prompt' },
+      { from: 'exec', to: 'final', type: 'session-ref' },
+    ],
+  };
+  const exec = { agent: { id: 's-term-lead' }, signal: new AbortController().signal };
+
+  // Intermediate Lead MUST pause with need-lead
+  const step1 = await executePlan(scope, plan, {}, exec);
+  assert.equal(step1.status, 'need-lead');
+  assert.equal(step1.node.label, 'Lead 拍板');
+
+  // Resuming runs exec, then terminal Lead finishes directly with status done + finalLead
+  const step2 = await executePlan(scope, plan, { leadResult: '选方案 A' }, exec);
+  assert.equal(step2.status, 'done');
+  assert.equal(step2.finalLead.label, 'Lead 终审');
+  assert.equal(step2.sessions[0].childId, 'kid-exec', 'session-ref handover preserved on finalLead');
+  assert.equal(inspectPlan('s-term-lead').paused, false, 'run state cleaned up after terminal Lead');
+});
+
+test('systemPrompt.context injects active canvas per session and stays silent for disabled/other sessions', async () => {
+  let syncHandler = null;
+  let contextProvider = null;
+  const mockCtx = {
+    inject(services, cb) {
+      if (services.includes('systemPrompt')) {
+        cb({
+          systemPrompt: {
+            context(entry) { contextProvider = entry; },
+          },
+          effect(fn) { fn(); },
+        });
+      }
+      if (services.includes('commands')) {
+        cb({
+          commands: {
+            register(cmd) { if (cmd.name === 'canvas-sync') syncHandler = cmd.handler; },
+          },
+          effect(fn) { fn(); },
+        });
+      }
+    },
+  };
+  apply(mockCtx);
+  assert.ok(contextProvider && typeof contextProvider.text === 'function', 'registers systemPrompt.context');
+  assert.ok(syncHandler, 'registers canvas-sync command');
+
+  const sid = 's-ctx-test';
+  const plan = {
+    task: '',
+    nodes: [
+      { id: 'a', kind: 'agent', label: '调研', role: '调研' },
+      { id: 'pick', kind: 'lead', label: 'Lead 拍板', role: '拍板' },
+      { id: 'b', kind: 'agent', label: '执行', role: '执行' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'pick', type: 'prompt' },
+      { from: 'pick', to: 'b', type: 'prompt' },
+    ],
+  };
+
+  // Disabled canvas -> empty string
+  syncHandler({ agent: { id: sid }, rawInput: encodeURIComponent(JSON.stringify({ enabled: false, plan })) });
+  assert.equal(contextProvider.text({ agent: { id: sid } }), '');
+
+  // Enabled canvas -> injected ONLY for this session, empty for unrelated/subagent sessions
+  syncHandler({ agent: { id: sid }, rawInput: encodeURIComponent(JSON.stringify({ enabled: true, plan })) });
+  const activeText = contextProvider.text({ agent: { id: sid } });
+  assert.ok(activeText.includes('[Workflow Canvas Active]'));
+  assert.ok(activeText.includes('canvas_workflow'));
+  assert.equal(contextProvider.text({ agent: { id: 'other-session' } }), '');
+  assert.equal(contextProvider.text({}), '');
+  assert.equal(sessionIdFromContext({ agent: { id: sid } }), sid);
+
+  // When paused at intermediate Lead -> paused reminder names the Lead node
+  const scope = {
+    subagents: {
+      startActivation() {
+        return Promise.resolve({
+          childId: 'kid-a',
+          result: Promise.resolve({ output: [{ type: 'text', text: 'done-a' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const paused = await executePlan(scope, plan, { task: '新任务' }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(paused.status, 'need-lead');
+  const pausedText = buildActiveCanvasContext(sid);
+  assert.ok(pausedText.includes('Paused at Lead Step'));
+  assert.ok(pausedText.includes('Lead 拍板'));
+
+  // Disable canvas -> clears context immediately
+  syncHandler({ agent: { id: sid }, rawInput: encodeURIComponent(JSON.stringify({ enabled: false, plan })) });
+  assert.equal(contextProvider.text({ agent: { id: sid } }), '');
 });

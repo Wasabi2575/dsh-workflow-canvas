@@ -1,6 +1,6 @@
 {
   "name": "dsh-workflow-canvas",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A visual subagent-workflow canvas for DeepSeek Harness, docked in the sidebar.",
   "type": "module",
   "main": "index.js",

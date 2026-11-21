@@ -1421,12 +1421,15 @@ window.__ModuleLoader__.load({
       }, [openModelFor]);
 
       // Publishing costs one visible command row in the conversation, so it only
-      // happens when the user enables the canvas or asks for it explicitly.
-      const pushPlan = (nextEnabled) => {
+      // happens when the user enables the canvas, loads a preset/import, clears,
+      // or asks for it explicitly.
+      const pushPlan = (nextEnabled, overrideNodes, overrideEdges) => {
         try {
           const face = sessionFace(sessionId);
           if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return; }
-          const res = buildPlan(nodes, edges);
+          const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
+          const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
+          const res = buildPlan(curNodes, curEdges);
           const payload = res.error
             ? { enabled: nextEnabled, error: res.error }
             : { enabled: nextEnabled, plan: res.plan };
@@ -1904,6 +1907,12 @@ window.__ModuleLoader__.load({
       const clearCanvas = () => {
         const blank = [{ id: 'lead', kind: 'lead', x: 40, y: 203, label: 'Lead', task: '', provider: '', model: '', role: '' }];
         pushSnapshot();
+        if (enabled) {
+          skipDirtyOnce.current = true;
+          setEnabled(false);
+          setDirty(false);
+          pushPlan(false, blank, []);
+        }
         setNodes(blank);
         setEdges([]);
         setSelectedIds([]);
@@ -2513,6 +2522,7 @@ window.__ModuleLoader__.load({
             doc = JSON.parse(text.slice(start, end + 1));
           } catch (_e) { flash(t('importBad')); return; }
           if (!applyCanvasDoc(doc.canvas || doc)) { flash(t('importBad')); return; }
+          if (enabled) setTimeout(() => pushPlan(true), 0);
           flash(t('importOk') + (doc.canvas || doc).nodes.length);
         };
         try {
@@ -2528,6 +2538,10 @@ window.__ModuleLoader__.load({
         const preset = presets[name];
         if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash(t('invalidPreset')); return; }
         pushSnapshot();
+        if (enabled) {
+          skipDirtyOnce.current = true;
+          pushPlan(true, preset.nodes, preset.edges);
+        }
         setNodes(preset.nodes);
         setEdges(preset.edges);
         setSelectedIds([]);
@@ -2543,6 +2557,10 @@ window.__ModuleLoader__.load({
         const clonedNodes = tpl.nodes.map((n) => ({ ...n }));
         const clonedEdges = tpl.edges.map((e) => ({ ...e }));
         pushSnapshot();
+        if (enabled) {
+          skipDirtyOnce.current = true;
+          pushPlan(true, clonedNodes, clonedEdges);
+        }
         setNodes(clonedNodes);
         setEdges(clonedEdges);
         setSelectedIds([]);

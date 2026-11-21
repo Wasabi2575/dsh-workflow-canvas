@@ -657,11 +657,60 @@ function inspectPlan(sid) {
     nodes,
     edges,
     warnings: analyzeCanvasWarnings(nodes, edges),
-    paused: Boolean(sid && runBySession.has(sid)),
+    paused: Boolean(sid && runBySession.get(sid) && runBySession.get(sid).waitingLead),
   };
   // Never attach `error: undefined`: DSH's lossless JSON validator rejects keys with undefined values.
   if (payload.error) out.error = String(payload.error);
   return out;
+}
+
+/** Extract the active session id from a DSH `AssembleContext`. */
+function sessionIdFromContext(assembleCtx) {
+  if (!assembleCtx || typeof assembleCtx !== 'object') return '';
+  if (assembleCtx.agent && assembleCtx.agent.id !== undefined) return String(assembleCtx.agent.id);
+  if (assembleCtx.sessionId !== undefined) return String(assembleCtx.sessionId);
+  return '';
+}
+
+/**
+ * Per-turn runtime prompt context injected ONLY for the session whose canvas is
+ * currently enabled. Returns '' for disabled canvases, unrelated sessions, and
+ * subagent sessions (zero token overhead and no recursive triggering).
+ */
+function buildActiveCanvasContext(sid) {
+  if (!sid) return '';
+  const payload = canvasBySession.get(String(sid));
+  if (!payload || !payload.enabled || payload.error) return '';
+  const plan = payload.plan;
+  const nodes = withoutEntry(plan && plan.nodes);
+  if (!nodes.length) return '';
+
+  const runState = runBySession.get(String(sid));
+  if (runState && runState.waitingLead) {
+    const wl = runState.waitingLead;
+    return [
+      '[Workflow Canvas Active — Paused at Lead Step]',
+      '当前会话的工作流画布正暂停在中间 Lead 节点「' + wl.label + '」（分工：' + (wl.role || wl.label) + '）。',
+      '- 若用户的当前消息是在拍板、确认、补充决策或要求继续：请整理决策结论并直接调用 `canvas_workflow({ leadResult: "..." })` 恢复下游节点运行。',
+      '- 若用户要求放弃当前进度从头重跑：调用 `canvas_workflow({ reset: true })`。',
+      '- 若用户要求修改画布结构/分工：先 `canvas_inspect` 再用 `canvas_patch`。',
+    ].join('\n');
+  }
+
+  const preview = nodes
+    .slice(0, 8)
+    .map((n) => (n.kind === 'lead' ? '〔Lead〕' : '') + (n.label || n.id))
+    .join(' → ') + (nodes.length > 8 ? ' …' : '');
+  const hasTask = Boolean(String((plan && plan.task) || '').trim());
+  return [
+    '[Workflow Canvas Active]',
+    '当前会话的右侧工作流画布处于「● 已启用」状态（共 ' + nodes.length + ' 个执行节点：' + preview + '；入口总任务：' + (hasTask ? '已填写' : '未填写') + '）。',
+    '- 若用户发出任务请求、布置工作或说「开始 / 执行 / 跑一次」：请直接调用 `canvas_workflow` 按画布编排执行（'
+      + (hasTask ? '可直接沿用入口总任务；若用户给出了新任务则通过 task 参数传入' : '请将用户的任务内容作为 task 参数传入')
+      + '），不要绕过画布直接自己完成。',
+    '- 若用户在讨论或要求修改画布结构、模型、分工或连线：请先 `canvas_inspect` 再用 `canvas_patch` 就地修改，不要直接运行。',
+    '- 仅当用户明确只是闲聊、问无关问题或要求先停用画布时，才无需调用 `canvas_workflow`。',
+  ].join('\n');
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -706,7 +755,7 @@ async function executePlan(scope, plan, args, exec) {
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   if (!state || state.sig !== sig) {
-    state = { sig, done: new Set(), results: {}, labels: {}, failed: {}, emptyOutputs: {} };
+    state = { sig, done: new Set(), results: {}, labels: {}, failed: {}, emptyOutputs: {}, waitingLead: null };
     runBySession.set(sid, state);
   }
   if (!state.emptyOutputs) state.emptyOutputs = {};
@@ -745,6 +794,7 @@ async function executePlan(scope, plan, args, exec) {
 
   for (;;) {
     if (isAborted()) {
+      if (sid) runBySession.delete(sid);
       return { error: '工作流执行已取消。' };
     }
     const remaining = runnable.filter((n) => !state.done.has(n.id));
@@ -767,6 +817,7 @@ async function executePlan(scope, plan, args, exec) {
       const { node, outcome } = await Promise.race(inFlight.values());
       inFlight.delete(node.id);
       if (isAborted()) {
+        if (sid) runBySession.delete(sid);
         return { error: '工作流执行已取消。' };
       }
       state.results[node.id] = outcome.text;
@@ -785,7 +836,42 @@ async function executePlan(scope, plan, args, exec) {
 
     const leadNode = ready.find((n) => n.kind === 'lead');
     if (!leadNode) return { error: '没有可执行的节点。' };
+    const leadSessions = depsOf(leadNode)
+      .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
+      .map((id) => ({
+        label: labelOf.get(id) || id,
+        childId: liveChild.get(String(sid || '') + '::' + id)
+          || childByNode.get(String(sid || '') + '::' + id)
+          || null,
+      }));
+    const hasDownstreamWork = remaining.some((n) => n.id !== leadNode.id);
+    if (!hasDownstreamWork && leadResult === undefined) {
+      // Terminal Lead: zero downstream nodes remain, so complete the run directly
+      // and hand off final review/delivery to the Lead without a redundant extra turn.
+      if (sid) runBySession.delete(sid);
+      saveStore();
+      return {
+        status: 'done',
+        finalLead: {
+          label: leadNode.label,
+          role: leadNode.role || leadNode.label,
+          needs: depsOf(leadNode).map((id) => byId.get(id).label),
+        },
+        results: state.results,
+        labels: state.labels,
+        failed: Object.values(state.failed),
+        emptyOutputs: Object.values(state.emptyOutputs),
+        sessions: leadSessions,
+        skipped,
+        hint: '所有子代理已完成。最后一步由你（Lead 本体）按要求完成终审/汇总后直接向用户交付即可，无需再次调用 canvas_workflow。',
+      };
+    }
     if (leadResult === undefined) {
+      state.waitingLead = {
+        id: leadNode.id,
+        label: leadNode.label,
+        role: leadNode.role || leadNode.label,
+      };
       return {
         status: 'need-lead',
         node: {
@@ -797,17 +883,11 @@ async function executePlan(scope, plan, args, exec) {
         labels: state.labels,
         failed: Object.values(state.failed),
         emptyOutputs: Object.values(state.emptyOutputs),
-        sessions: depsOf(leadNode)
-          .filter((id) => (plan.edges || []).some((e) => e.to === leadNode.id && e.from === id && e.type === 'session-ref'))
-          .map((id) => ({
-            label: labelOf.get(id) || id,
-            childId: liveChild.get(String(sid || '') + '::' + id)
-              || childByNode.get(String(sid || '') + '::' + id)
-              || null,
-          })),
+        sessions: leadSessions,
         hint: '这一步由你（Lead 本体）完成。完成后再次调用本工具，把结果放进 leadResult 继续；若需从头重跑可传 reset: true。',
       };
     }
+    state.waitingLead = null;
     state.results[leadNode.id] = leadResult;
     state.labels[leadNode.id] = leadNode.label;
     state.done.add(leadNode.id);
@@ -843,7 +923,20 @@ function fallbackGuide() {
 }
 export function apply(ctx) {
   loadStore();
-    ctx.inject(['skills'], (scope) => {
+  ctx.inject(['systemPrompt'], (promptCtx) => {
+    try {
+      if (promptCtx.systemPrompt && typeof promptCtx.systemPrompt.context === 'function') {
+        promptCtx.effect(() => promptCtx.systemPrompt.context({
+          name: 'app:workflow-canvas-active',
+          order: 950,
+          text: (assembleCtx) => buildActiveCanvasContext(sessionIdFromContext(assembleCtx)),
+        }), 'workflow-canvas: active context');
+      }
+    } catch (_e) {
+      /* systemPrompt service unavailable */
+    }
+  });
+  ctx.inject(['skills'], (scope) => {
       try {
         scope.effect(() => scope.skills.registerProvider(() => ({
           name: 'dsh-workflow-canvas',
@@ -1172,6 +1265,7 @@ export function apply(ctx) {
               properties: {
                 status: { type: 'string' },
                 node: { type: 'object' },
+                finalLead: { type: 'object' },
                 results: { type: 'object' },
                 labels: { type: 'object' },
                 failed: { type: 'array' },
@@ -1221,6 +1315,25 @@ export function apply(ctx) {
                 const skip = Array.isArray(v.skipped) && v.skipped.length
                   ? '\n\n已跳过（未连线）：' + v.skipped.join('、')
                   : '';
+                if (v.finalLead) {
+                  const fl = v.finalLead;
+                  const handed = Array.isArray(v.sessions) ? v.sessions.filter((s) => s && s.childId) : [];
+                  const handover = handed.length
+                    ? '\n\n可用会话（session 连线）：' + handed.map((s) => s.label + ' → ' + s.childId).join('；')
+                      + '\n如需局部追问或返工，可直接给对应子代理发消息。'
+                    : '';
+                  return [{
+                    type: 'text',
+                    text: '所有子代理已完成，现在进入终审 Lead 步骤「' + fl.label + '」：' + fl.role
+                      + '\n需要用到：' + ((fl.needs && fl.needs.length) ? fl.needs.join('、') : '（无上游）')
+                      + failedList
+                      + emptyList
+                      + '\n\n已完成节点的结果：\n' + body
+                      + handover
+                      + skip
+                      + '\n\n' + (v.hint || ''),
+                  }];
+                }
                 return [{ type: 'text', text: '画布执行完成。' + failedList + emptyList + '\n\n' + body + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
@@ -1247,6 +1360,8 @@ export {
   normalizeCanvas,
   applyPatch,
   inspectPlan,
+  sessionIdFromContext,
+  buildActiveCanvasContext,
   runPlan,
   executePlan,
 };
