@@ -49,11 +49,11 @@ Links only join matching types. Nodes the entry Lead cannot reach are skipped at
 
 ## Running
 
-1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled.
+1. The canvas must be enabled (the pill over the canvas); `canvas_workflow` refuses while it is disabled. While enabled, the host automatically injects a per-session runtime context reminder on each turn.
 2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), or `reset: true` to discard a paused run and start from scratch.
 3. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
-4. The run pauses (`status: "need-lead"`) only at downstream non-entry Lead nodes (never at the entry Lead).
-5. Do that Lead step yourself, then call `canvas_workflow` again with `leadResult` — do not spawn an agent for it.
+4. Intermediate downstream Lead nodes pause the run (`status: "need-lead"`). Complete that Lead step yourself, then call `canvas_workflow` again with `leadResult` to resume downstream nodes — do not spawn an agent for it.
+5. A **terminal** Lead node (zero remaining downstream nodes) finishes directly with `status: "done"` and `finalLead`: complete the review/summary and reply directly to the user — no extra `canvas_workflow` callback is needed.
 6. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.
 7. Only assign image/visual inspection roles to models that declare image input support.
 
