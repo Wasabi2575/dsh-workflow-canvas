@@ -66,6 +66,40 @@ test('wouldCycle blocks cycles and edges pointing into entry Lead', () => {
   assert.equal(client.wouldCycle(nodes, edges, 'a', 'c'), false);
 });
 
+test('soloLeadNodeIds marks solo chained Leads inactive/skipped while allowing Lead + Subagent -> Lead', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't' },
+    { id: 'a1', kind: 'agent', label: 'Agent 1' },
+    { id: 'a2', kind: 'agent', label: 'Agent 2' },
+    { id: 'l1', kind: 'lead', label: 'Lead 1' },
+    { id: 'l2', kind: 'lead', label: 'Lead 2' },
+  ];
+  // Solo chain l1 -> l2 (no subagent into l2): l2 is inactive/skipped
+  const soloEdges = [
+    { from: 'lead', to: 'a1', type: 'prompt' },
+    { from: 'a1', to: 'l1', type: 'prompt' },
+    { from: 'l1', to: 'l2', type: 'prompt' },
+  ];
+  assert.deepEqual(Array.from(client.soloLeadNodeIds(nodes, soloEdges)), ['l2']);
+  const builtSolo = client.buildPlan(nodes, soloEdges);
+  assert.ok(!builtSolo.error);
+  assert.ok(builtSolo.plan.skipped.includes('Lead 2'));
+  assert.ok(!builtSolo.plan.nodes.some((n) => n.id === 'l2'));
+
+  // Mixed chain l1 -> l2 AND a2 -> l2: l2 has a subagent upstream so it is active
+  const mixedEdges = [
+    { from: 'lead', to: 'a1', type: 'prompt' },
+    { from: 'a1', to: 'l1', type: 'prompt' },
+    { from: 'l1', to: 'a2', type: 'prompt' },
+    { from: 'l1', to: 'l2', type: 'prompt' },
+    { from: 'a2', to: 'l2', type: 'prompt' },
+  ];
+  assert.equal(client.soloLeadNodeIds(nodes, mixedEdges).size, 0);
+  const builtMixed = client.buildPlan(nodes, mixedEdges);
+  assert.ok(!builtMixed.error);
+  assert.ok(builtMixed.plan.nodes.some((n) => n.id === 'l2'));
+});
+
 test('layoutGraph lays out DAG columns cleanly without overlapping nodes', () => {
   const nodes = [
     { id: 'lead', x: 0, y: 0 },

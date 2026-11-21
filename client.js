@@ -173,6 +173,7 @@ window.__ModuleLoader__.load({
         newBlankCanvas: '＋ 新建空白画布',
         clearedCanvas: '已清空画布（可用 ↶ 撤销）',
         cycleBlocked: '不能形成环，已阻止连线',
+        leadToLeadBlocked: 'Lead 节点不能直接连到另一个 Lead，请在中间放入子代理',
         builtinTemplates: '内置示例模板',
         myPresets: '我的预设',
         duplicatedNodes: '已复制节点',
@@ -184,7 +185,9 @@ window.__ModuleLoader__.load({
         fxVivid: '炫酷',
         tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
         stDeadEnd: '无出边',
-        tipDeadEnd: '该子代理节点没有下游连线：若需把产出交给后续节点或终审 Lead，请从右侧端口连出',
+        tipDeadEnd: '该子代理没有下游连线，运行时不生效；请连入下游节点或终审 Lead',
+        stSoloLead: '未接子代理',
+        tipSoloLead: '该 Lead 仅串联了其他 Lead，未连入任何子代理，运行时不生效',
         singleModelHint: '当前仅 1 个可用模型，暂无其它备用路由',
         importNone: '剪贴板里没有可识别的画布数据',
         importBad: '画布数据格式不对',
@@ -192,7 +195,7 @@ window.__ModuleLoader__.load({
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（跨运行及重启后可恢复）',
-        tipPreset: '能力范围（点一下切换）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
+        tipPreset: '能力范围（点一下切换，受主对话权限上限约束）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
         tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
         lang: 'ZH',
@@ -274,6 +277,7 @@ window.__ModuleLoader__.load({
         newBlankCanvas: '+ New blank canvas',
         clearedCanvas: 'Canvas cleared (use Undo to restore)',
         cycleBlocked: 'Cannot create a cycle',
+        leadToLeadBlocked: 'Cannot link a Lead directly to another Lead; place a subagent in between',
         builtinTemplates: 'Starter templates',
         myPresets: 'Saved presets',
         duplicatedNodes: 'Duplicated nodes',
@@ -285,7 +289,9 @@ window.__ModuleLoader__.load({
         fxVivid: 'Vivid',
         tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
         stDeadEnd: 'No out-link',
-        tipDeadEnd: 'This subagent has no outgoing link: wire it to a downstream node or Lead so its output is consumed',
+        tipDeadEnd: 'This subagent has no outgoing link and is skipped at run time; wire it into a downstream node or Lead',
+        stSoloLead: 'Needs agent',
+        tipSoloLead: 'This Lead only chains from another Lead with no subagent upstream, so it is skipped at run time',
         singleModelHint: 'Only 1 model available — no alternate fallback route',
         importNone: 'No canvas data found in the clipboard',
         importBad: 'Canvas data is malformed',
@@ -293,7 +299,7 @@ window.__ModuleLoader__.load({
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (persisted across runs and restarts)',
-        tipPreset: 'Capability (click to toggle): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
+        tipPreset: 'Capability (click to toggle; bounded by the main chat permission mode): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
         tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
         lang: 'EN',
@@ -725,132 +731,59 @@ window.__ModuleLoader__.load({
       return out.length === nodes.length ? out : null;
     }
 
-    function varOf(id) {
-      return 'n_' + String(id).replace(/[^a-zA-Z0-9_]/g, '_');
-    }
-
-    function buildWorkflowScript(nodes, edges) {
-      const entry = nodes.find((n) => n.id === 'lead');
-      if (!entry) return { error: '缺少入口 Lead 节点' };
-      const rest = nodes.filter((n) => n.id !== 'lead');
-      if (!rest.length) return { error: '画布上还没有可执行的节点' };
-      const task = String(entry.task || '').trim();
-      if (!task) return { error: '请先在 Lead 节点填写「本次任务」' };
-
-      const byIdAll = new Map(rest.map((n) => [n.id, n]));
-
-      const reachable = new Set([entry.id]);
-      let grew = true;
-      while (grew) {
-        grew = false;
-        for (const e of edges) {
-          if (reachable.has(e.from) && !reachable.has(e.to)) { reachable.add(e.to); grew = true; }
-        }
-      }
-      const orphan = rest.filter((n) => !reachable.has(n.id));
-      if (orphan.length) {
-        return { error: '这些节点没有从入口 Lead 连过来：' + orphan.map((n) => n.label).join('、') };
-      }
-
-      const dataEdgesAll = edges.filter((e) => e.from !== entry.id && byIdAll.has(e.from) && byIdAll.has(e.to));
-
-      // Lead-kind nodes are executed by the conversation itself, which can only
-      // happen after the script returns — so they must be terminal.
-      const leadNodes = rest.filter((n) => n.kind === 'lead');
-      for (const ln of leadNodes) {
-        if (dataEdgesAll.some((e) => e.from === ln.id)) {
-          return {
-            error: '中间 Lead 节点暂不支持（「' + ln.label + '」后面还有步骤）。'
-              + '把中间这一步换成子代理，或把它移到流程末尾。',
-          };
-        }
-      }
-
-      const agentNodes = rest.filter((n) => n.kind !== 'lead');
-      if (!agentNodes.length) return { error: '需要至少一个子代理节点来执行' };
-
-      const byId = new Map(agentNodes.map((n) => [n.id, n]));
-      const dataEdges = dataEdgesAll.filter((e) => byId.has(e.from) && byId.has(e.to));
-      const order = topoOrder(agentNodes, dataEdges);
-      if (!order) return { error: '存在环，无法生成有向无环图的脚本' };
-
-      const upstream = new Map(agentNodes.map((n) => [n.id, []]));
-      for (const e of dataEdges) upstream.get(e.to).push(e);
-      const hasDownstream = new Set(dataEdges.map((e) => e.from));
-
-      // Hand back everything a lead step consumes, plus every terminal agent.
-      const delivered = [];
-      const deliver = (id) => { if (byId.has(id) && !delivered.includes(id)) delivered.push(id); };
-      for (const ln of leadNodes) {
-        for (const e of dataEdgesAll) if (e.to === ln.id) deliver(e.from);
-      }
-      for (const n of agentNodes) if (!hasDownstream.has(n.id)) deliver(n.id);
-
-      const lines = [];
-      lines.push('// meta: ' + JSON.stringify({ name: 'workflow-canvas', description: 'Canvas-generated agent DAG', phases: [{ title: 'run' }] }));
-      for (const id of order) {
-        const node = byId.get(id);
-        const ups = upstream.get(id);
-        const isRoot = ups.length === 0;
-        const upsLabels = ups.map((e) => (byId.get(e.from) || {}).label).filter(Boolean);
-        const downs = dataEdgesAll.filter((e) => e.from === id).map((e) => (byIdAll.get(e.to) || {}).label).filter(Boolean);
-        const head = [];
-        head.push('【工作流节点】你在一个多步工作流里负责「' + node.label + '」这一步（子代理）。');
-        if (isRoot) head.push('【总任务】' + task);
-        head.push('【职责】' + (node.role || node.label || id));
-        if (upsLabels.length) head.push('【上游】' + upsLabels.join('、') + ' 已交付结果给你（见下文）。');
-        head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
-        head.push('【要求】只完成你这一步；输出要能被下游直接使用，不要重复上游已完成的工作。');
-        const pieces = [JSON.stringify(head.join('\n') + '\n')];
-        for (const e of ups) {
-          const from = byId.get(e.from);
-          pieces.push(JSON.stringify('\n## 来自【' + from.label + '】(' + (e.type || 'prompt') + ')\n'));
-          pieces.push(varOf(e.from));
-        }
-        // The label carries the canvas node id so the client can match the
-        // spawned subagent session back to its node through the catalog.
-        const opts = ["label: " + JSON.stringify((node.label || id) + '#' + id), "phase: 'run'"];
-        if (node.provider) opts.push('provider: ' + JSON.stringify(node.provider));
-        if (node.model) opts.push('model: ' + JSON.stringify(node.model));
-        lines.push('const ' + varOf(id) + ' = await agent(' + pieces.join(' + ') + ', { ' + opts.join(', ') + ' });');
-      }
-      lines.push('// 交付给 Lead：' + delivered.map((id) => byId.get(id).label).join('、'));
-      const rets = delivered.map((id) => JSON.stringify(byId.get(id).label) + ': ' + varOf(id));
-      lines.push('return { ' + rets.join(', ') + ' };');
-
-      // These run in the conversation after the script returns.
-      const leadSteps = leadNodes.map((ln) => ({
-        label: ln.label,
-        role: ln.role || ln.label,
-        needs: dataEdgesAll.filter((e) => e.to === ln.id).map((e) => (byIdAll.get(e.from) || {}).label).filter(Boolean),
-      }));
-
-      return { script: lines.join('\n'), leadSteps };
-    }
-
-    /** Ids reachable from the entry Lead; every other node is skipped at run time. */
+    /** Ids reachable from the entry Lead via O(V + E) BFS; every other node is skipped at run time. */
     function reachableFrom(nodes, edges) {
+      const adj = new Map();
+      for (const e of edges || []) {
+        if (!e || !e.from || !e.to) continue;
+        if (!adj.has(e.from)) adj.set(e.from, []);
+        adj.get(e.from).push(e.to);
+      }
       const set = new Set(['lead']);
-      let grew = true;
-      while (grew) {
-        grew = false;
-        for (const e of edges) {
-          if (set.has(e.from) && !set.has(e.to)) { set.add(e.to); grew = true; }
+      const queue = ['lead'];
+      for (let i = 0; i < queue.length; i += 1) {
+        const cur = queue[i];
+        for (const next of adj.get(cur) || []) {
+          if (!set.has(next)) { set.add(next); queue.push(next); }
         }
       }
       return set;
     }
 
     /**
+     * Reachable non-entry Lead nodes that have zero reachable subagent upstream
+     * (chained solely from another Lead). Rendered dashed and skipped at run time;
+     * connecting any subagent into them makes them active immediately.
+     */
+    function soloLeadNodeIds(nodes, edges) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const linkList = Array.isArray(edges) ? edges : [];
+      const reachable = reachableFrom(list, linkList);
+      const byId = new Map(list.map((n) => [n.id, n]));
+      const out = new Set();
+      for (const n of list) {
+        if (n.kind !== 'lead' || n.id === 'lead' || !reachable.has(n.id)) continue;
+        const hasAgentUp = linkList.some((e) => {
+          if (!e || e.to !== n.id || !reachable.has(e.from) || e.from === 'lead') return false;
+          const src = byId.get(e.from);
+          return Boolean(src && src.kind !== 'lead');
+        });
+        if (!hasAgentUp) out.add(n.id);
+      }
+      return out;
+    }
+
+    /**
      * Reachable agent nodes with zero outgoing edges when the graph has at least
-     * one reachable non-entry Lead that is NOT an ancestor of that agent (so the
-     * agent likely forgot to wire into a downstream or terminal Lead).
+     * one active downstream Lead that is NOT an ancestor of that agent (dangling
+     * branch whose output is never consumed). Rendered dashed and skipped at run time.
      */
     function deadEndNodeIds(nodes, edges) {
       const list = Array.isArray(nodes) ? nodes : [];
       const linkList = Array.isArray(edges) ? edges : [];
       const reachable = reachableFrom(list, linkList);
-      const downstreamLeads = list.filter((n) => n.kind === 'lead' && n.id !== 'lead' && reachable.has(n.id));
+      const soloLeads = soloLeadNodeIds(list, linkList);
+      const downstreamLeads = list.filter((n) => n.kind === 'lead' && n.id !== 'lead' && reachable.has(n.id) && !soloLeads.has(n.id));
       if (!downstreamLeads.length) return new Set();
       const hasOut = new Set(linkList.map((e) => e.from));
       const parents = new Map();
@@ -1104,21 +1037,23 @@ window.__ModuleLoader__.load({
       const task = String(entry.task || '').trim();
       const rest = nodes.filter((n) => n.id !== 'lead');
       if (!rest.length) return { error: '画布上还没有可执行的节点' };
-      // Nodes the entry Lead cannot reach are skipped rather than refused; the
-      // canvas marks them so the user can see what will not run.
+      // Unconnected nodes, solo Lead-to-Lead nodes, and dangling dead-end agents
+      // are shown dashed on the canvas and skipped at run time.
       const reachableIds = reachableFrom(nodes, edges);
+      const soloLeads = soloLeadNodeIds(nodes, edges);
+      const deadEnds = deadEndNodeIds(nodes, edges);
+      const isInactive = (n) => !reachableIds.has(n.id) || soloLeads.has(n.id) || deadEnds.has(n.id);
 
-      const ids = new Set(rest.map((n) => n.id));
-      const planEdges = edges
-        .filter((e) => (e.from === 'lead' || ids.has(e.from)) && ids.has(e.to))
-        .map((e) => ({ from: e.from, to: e.to, type: e.type || 'prompt' }));
-
-      // Unconnected nodes are left out of the plan instead of blocking the run.
-      const skipped = rest.filter((n) => !reachableIds.has(n.id));
-      const active = rest.filter((n) => reachableIds.has(n.id));
+      const skipped = rest.filter((n) => isInactive(n));
+      const active = rest.filter((n) => !isInactive(n));
       if (!active.length) {
-        return { error: '没有从入口 Lead 连通的节点，无法执行' };
+        return { error: '没有从入口 Lead 连通的有效节点，无法执行' };
       }
+
+      const activeIds = new Set(active.map((n) => n.id));
+      const planEdges = edges
+        .filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to))
+        .map((e) => ({ from: e.from, to: e.to, type: e.type || 'prompt' }));
 
       return {
         plan: {
@@ -1373,14 +1308,28 @@ window.__ModuleLoader__.load({
         saveDoc(sessionId, { nodes, edges, enabled }, stamp === null ? undefined : stamp);
       }, [sessionId, nodes, edges, enabled]);
 
+      const planSig = (nextEnabled, curNodes, curEdges) => {
+        const res = buildPlan(curNodes, curEdges);
+        const payload = res.error
+          ? { enabled: nextEnabled, error: res.error }
+          : { enabled: nextEnabled, plan: res.plan };
+        return JSON.stringify(payload);
+      };
+
       // Any structural edit after enabling leaves the Host copy stale,
-      // except when the update came directly from the Host itself.
+      // except pure position drags (same plan signature) or updates from Host.
       useEffect(() => {
         if (skipDirtyOnce.current) {
           skipDirtyOnce.current = false;
           return;
         }
-        if (enabled) setDirty(true);
+        if (!enabled) return;
+        const sig = planSig(true, nodes, edges);
+        if (lastSync.current && sig === lastSync.current) {
+          setDirty(false);
+          return;
+        }
+        setDirty(true);
       }, [nodes, edges]);
 
       // A disabled canvas shows no run status at all.
@@ -1430,12 +1379,8 @@ window.__ModuleLoader__.load({
           if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return; }
           const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
           const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
-          const res = buildPlan(curNodes, curEdges);
-          const payload = res.error
-            ? { enabled: nextEnabled, error: res.error }
-            : { enabled: nextEnabled, plan: res.plan };
-          const sig = JSON.stringify(payload);
-          if (sig === lastSync.current) { flash(t('upToDate')); return; }
+          const sig = planSig(nextEnabled, curNodes, curEdges);
+          if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return; }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
           face.command(line).then((ack) => {
             if (ack && ack.ok) {
@@ -2298,6 +2243,7 @@ window.__ModuleLoader__.load({
           const threshold = 12 / (viewRef.current.k || 1);
           const from = cutRef.current;
           const steps = Math.max(1, Math.ceil(Math.hypot(p.x - from.x, p.y - from.y) / 6));
+          const nodeMap = new Map(nodes.map((n) => [n.id, n]));
           for (let step = 1; step <= steps; step += 1) {
             const t = step / steps;
             const canvasSpot = {
@@ -2306,8 +2252,8 @@ window.__ModuleLoader__.load({
             };
             for (const edge of edges) {
               if (cutHits.current.has(edge.id)) continue;
-              const source = nodes.find((n) => n.id === edge.from);
-              const target = nodes.find((n) => n.id === edge.to);
+              const source = nodeMap.get(edge.from);
+              const target = nodeMap.get(edge.to);
               if (!source || !target) continue;
               if (distanceToEdge(canvasSpot, source, target, edge.type) <= threshold) {
                 cutHits.current.add(edge.id);
@@ -2769,6 +2715,7 @@ window.__ModuleLoader__.load({
       }
       const reachableIds = reachableFrom(nodes, edges);
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const soloLeadIds = soloLeadNodeIds(nodes, edges);
       const deadEndIds = deadEndNodeIds(nodes, edges);
 
       // Identify intermediate Lead nodes waiting for a decision ("Ready for Lead")
@@ -2785,7 +2732,7 @@ window.__ModuleLoader__.load({
           if (!upIds.length) continue;
           const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
           if (!upAgents.length) continue;
-          const allUpDone = upAgents.every((id) => statusById[id] === 'done');
+          const allUpDone = upAgents.every((id) => statusById[id] === 'done' || statusById[id] === 'failed');
           if (!allUpDone) continue;
           const downIds = edges.filter((e) => e.from === n.id).map((e) => e.to);
           if (!downIds.length) {
@@ -2794,6 +2741,7 @@ window.__ModuleLoader__.load({
           } else {
             const anyDownStarted = downIds.some((id) => Boolean(statusById[id]));
             if (!anyDownStarted) leadReadyIds.add(n.id);
+            else leadDoneIds.add(n.id);
           }
         }
       }
@@ -2810,18 +2758,27 @@ window.__ModuleLoader__.load({
         const toRunning = enabled && statusById[edge.to] === 'running';
         const fromReady = edge.from === 'lead'
           || from.kind === 'lead'
-          || statusById[edge.from] === 'done';
+          || statusById[edge.from] === 'done'
+          || statusById[edge.from] === 'failed';
         const isFlowing = enabled && !highlighted && (
           (toRunning && fromReady)
-          || (leadReadyIds.has(edge.to) && statusById[edge.from] === 'done')
+          || (leadReadyIds.has(edge.to) && (statusById[edge.from] === 'done' || statusById[edge.from] === 'failed'))
         );
-        const isCompletedLink = enabled && !highlighted && statusById[edge.from] === 'done'
-          && (statusById[edge.to] === 'done' || statusById[edge.to] === 'running' || leadReadyIds.has(edge.to));
+        const fromSettled = edge.from === 'lead'
+          || statusById[edge.from] === 'done'
+          || statusById[edge.from] === 'failed'
+          || leadDoneIds.has(edge.from);
+        const toSettled = statusById[edge.to] === 'done'
+          || statusById[edge.to] === 'running'
+          || statusById[edge.to] === 'failed'
+          || leadReadyIds.has(edge.to)
+          || leadDoneIds.has(edge.to);
+        const isCompletedLink = enabled && !highlighted && fromSettled && toSettled;
         const dimmed = hasSel && !linkedToSel && !highlighted && !isFlowing;
         const strokeColor = highlighted ? '#e5534b' : color;
         const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing ? 2.6 : 2);
         const baseOpacity = dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78));
-        const useGlow = fxLevel === 'vivid' && !dimmed && (highlighted || isFlowing || linkedToSel || edge.type !== 'prompt');
+        const useGlow = fxLevel === 'vivid' && !dimmed;
         const showDashFlow = isFlowing && fxLevel !== 'minimal';
         const showBead = isFlowing && fxLevel === 'vivid';
 
@@ -3209,7 +3166,9 @@ window.__ModuleLoader__.load({
                 }),
               );
               const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
+              const isSoloLead = soloLeadIds.has(node.id);
               const isDeadEnd = deadEndIds.has(node.id);
+              const isInactive = isOrphan || isSoloLead || isDeadEnd;
               const isSelected = selectedSet.has(node.id);
               const nodeStatus = enabled ? statusById[node.id] : undefined;
               const isLeadReady = leadReadyIds.has(node.id);
@@ -3245,10 +3204,10 @@ window.__ModuleLoader__.load({
                   left: node.x + WORLD_PAD,
                   top: node.y + WORLD_PAD,
                   ...(isLeadKind ? S.leadNode : null),
-                  ...(isOrphan ? S.orphanNode : null),
+                  ...(isInactive ? S.orphanNode : null),
                   ...(stateStyle || null),
                 },
-                title: isOrphan ? t('orphanTip') : undefined,
+                title: isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined)),
                 onMouseDown: (e) => onNodeDown(e, node.id),
               },
                 h('div', {
@@ -3281,12 +3240,13 @@ window.__ModuleLoader__.load({
                         ? 'rgba(63,185,80,0.14)'
                         : 'transparent';
                   const statusLabel = isOrphan ? t('stOrphan')
-                    : isLeadReady ? t('stLeadReady')
-                      : isLeadDone ? t('stDone')
-                        : isLeadKind ? t('stLead')
-                          : nodeStatus === 'running' ? t('stRunning')
-                            : nodeStatus === 'failed' ? t('stFailed')
-                              : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                    : isSoloLead ? t('stSoloLead')
+                      : isLeadReady ? t('stLeadReady')
+                        : isLeadDone ? t('stDone')
+                          : isLeadKind ? t('stLead')
+                            : nodeStatus === 'running' ? t('stRunning')
+                              : nodeStatus === 'failed' ? t('stFailed')
+                                : nodeStatus === 'done' ? t('stDone') : t('stPending');
                   const glyph = nodeStatus === 'running'
                     ? h('span', {
                         className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
@@ -3444,7 +3404,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, zoomAroundPoint, scrubZoom, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, zoomAroundPoint, scrubZoom, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });

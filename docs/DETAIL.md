@@ -9,14 +9,16 @@ are performed by the conversation itself.
 
 - **Subagent node** (green top bar): spawns a child agent with its own
   `provider` / `model` / `reasoning effort` / capability scope (`standard` or
-  `minimal`). Optional **Memory** reuses the node's child session; optional
-  **Fallback** retries once on another model.
+  `minimal`, bounded by the main chat permission mode). Optional **Memory** reuses
+  the node's child session; optional **Fallback** retries once on another model.
 - **Lead node** (blue top bar): performed by the conversation, never spawned. The
-  entry node carries the overall task; added Lead nodes carry a role.
+  entry node carries the overall task; intermediate Lead nodes pause for your
+  decision, and a terminal Lead finishes in one shot without an extra callback.
 - **Sockets are typed** (`prompt` / `structured` / `session`); a link only joins
   the same type (either direction), and cycles are blocked immediately. Drag a
   connected input away to detach.
-- Nodes the entry cannot reach are drawn dashed and skipped at run time.
+- Inactive nodes (unreachable from entry, solo chained Leads with no subagent
+  upstream, or dangling dead-end subagents) are drawn dashed and skipped at run time.
 - Wheel zooms around the cursor; middle-drag (or `Space` + drag) pans; `⊡ Fit`
   fits all nodes into the visible viewport; the percentage button resets to 100%
   on the Lead.
@@ -45,12 +47,13 @@ node positions survive.
 
 ## Running
 
-Subagent nodes run in parallel waves (up to 4) via `canvas_workflow`, which also
-supports `task` (override the entry task for template reuse) and `reset: true`
-(discard a paused run). The run stops at every Lead node with
-`status: "need-lead"` and returns the collected results, any unrecovered
-`failed` nodes, plus — for `session` links into that Lead — the upstream child
-session ids so the conversation can keep talking to those agents.
+Subagent nodes run in an event-driven concurrency pool (up to 4) via
+`canvas_workflow`, which supports `task` (override the entry task for template
+reuse), `reset: true` (discard a paused run), and `clearMemory: true` (forget
+saved `keepSession` memories). While enabled, a per-session runtime context
+notifies the agent automatically. Intermediate Lead nodes pause with
+`status: "need-lead"` and report `failed` / `emptyOutputs` plus `session`
+handovers; a terminal Lead completes directly with `status: "done"` and `finalLead`.
 
 ## Memory
 

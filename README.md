@@ -38,8 +38,8 @@ sidebar.
 ## Quick start (30 seconds)
 
 - **Zero-setup tryout**: open the right-sidebar `Workflow` tab → load a starter
-  template from `☰ Presets` → press **● ON** at top-left → ask in chat to run the
-  canvas.
+  template from `☰ Presets` → press **● ON** at top-left → send your task directly
+  in chat (active-canvas context triggers `canvas_workflow` automatically).
 - **Prompts you can copy right into chat**:
   - **Sketch from one sentence**: *"Build a parallel research workflow on the canvas: two subagents investigate competitors and technical feasibility in parallel, pause for me (Lead) to decide, then hand off to a writer subagent."*
   - **Patch in place**: *"Inspect the current canvas, turn Memory on for the feasibility node, and add a read-only cost-estimate node wired in parallel into plan synthesis."*
@@ -56,11 +56,11 @@ pipelines compiled to `ctx.workflows`, see
 ## Nodes
 
 - **Subagent node** (green top bar) — spawns a child agent. Each node sets its own
-  model, reasoning effort, capability scope (`standard` / `minimal`), fallback
-  model, memory and role.
+  model, reasoning effort, capability scope (`standard` / `minimal`, bounded by
+  the main chat's permission mode), fallback model, memory and role.
 - **Lead node** (blue top bar) — performed by the conversation, never spawned. The
-  entry Lead carries the overall task; the run stops at every Lead step and resumes
-  with your answer.
+  entry Lead carries the overall task; intermediate Lead nodes pause for your
+  decision, while a terminal Lead finishes in one shot without a redundant callback.
 
 ## Links
 
@@ -82,18 +82,20 @@ Drag from a right socket to a left socket, or from a left socket to a right one
 | Wheel / `⊡ Fit` / `100%` | Cursor-anchored zoom / fit all nodes in view / reset to 100% on Lead |
 | Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (preserving settings), or batch delete |
 | `Ctrl+Z` / `Esc` | Undo structural edits / close open popups and menus |
-| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout`, `⇧ Copy JSON`, and `Visual effects` (Minimal / Standard / Vivid) |
+| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout`, `✕ Clear canvas`, `⇧ Copy JSON`, and `Visual effects` (Minimal / Standard / Vivid) |
 
 ## Running
 
 1. Write the task in the entry Lead, and a role for each node (or leave the task
-   blank and pass `task` from chat when reusing a template).
-2. Connect the nodes — unlinked nodes are dashed and skipped.
-3. Press the **● ON / ○ OFF** pill at the top-left of the canvas, then ask in chat
-   to run it (pass `reset: true` to restart from scratch).
-4. The run proceeds in parallel waves (up to 4 at a time) and pauses at each Lead
-   node with the results collected so far. Click a subagent's status pill (e.g.
-   `Done ↗`) to jump straight to its live chat pane.
+   blank — while enabled, sending a task in chat passes it via `task` automatically).
+2. Connect the nodes — unreachable nodes, solo chained Leads without any subagent
+   upstream, and dangling dead-end subagents are drawn **dashed** and skipped at run time.
+3. Press the **● ON / ○ OFF** pill at the top-left of the canvas. While enabled,
+   a per-session dynamic prompt context notifies the agent automatically (supports
+   `reset: true` to restart and `clearMemory: true` to forget saved node memories).
+4. Subagents run in an **event-driven concurrency pool** (up to 4 at a time):
+   newly unblocked children start immediately without waiting for slower siblings.
+   Click a subagent's status pill (e.g. `Done ↗`) to jump straight to its live chat pane.
 
 ## Lead handover
 
