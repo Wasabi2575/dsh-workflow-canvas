@@ -222,8 +222,10 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     }
     try {
       if (activation && activation.childId) {
-        childByNode.set(childKey(node.id), activation.childId);
         liveChild.set(childKey(node.id), activation.childId);
+        // Only overwrite the persisted memory slot when Memory is ON, so a
+        // temporary keepSession=false experiment never destroys saved memory.
+        if (node.keepSession) childByNode.set(childKey(node.id), activation.childId);
       }
       let result;
       try {
@@ -257,19 +259,20 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     /* activation refused (e.g. cold session gone): fall through to a fresh session */
   }
 
-  // Memory: prefer the session created in this process, then the one persisted
-  // from an earlier run. A cold resume that the Host refuses is forgotten so the
-  // node simply starts fresh instead of failing.
+  // Memory: prefer an explicitly pinned `memoryChildId` from the node dropdown,
+  // then the saved memory slot (`childByNode`), then this process's live child.
+  // A cold resume that the Host refuses falls through to a fresh session.
   if (node.keepSession) {
+    const pinned = typeof node.memoryChildId === 'string' ? node.memoryChildId.trim() : '';
+    const saved = childByNode.get(childKey(node.id));
     const inProcess = liveChild.get(childKey(node.id));
-    const fromDisk = childByNode.get(childKey(node.id));
-    const previous = inProcess || fromDisk;
+    const previous = pinned || saved || inProcess;
     if (previous) {
       const resumed = await run(previous);
       if (resumed.ok) return resumed;
       if (resumed.reason === 'activation-failed') {
-        liveChild.delete(childKey(node.id));
-        childByNode.delete(childKey(node.id));
+        if (previous === inProcess) liveChild.delete(childKey(node.id));
+        if (previous === saved) childByNode.delete(childKey(node.id));
       } else {
         return resumed;
       }
@@ -560,7 +563,7 @@ function normalizeCanvas(args) {
 function applyPatch(plan, args) {
   const nodes = withoutEntry(plan.nodes).map((n) => ({ ...n }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'structured', 'fallbackModel', 'fallbackProvider'];
+  const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'memoryChildId', 'structured', 'fallbackModel', 'fallbackProvider'];
   const touched = [];
   for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
     // 'lead' is the reserved entry node and is never edited here.
@@ -755,7 +758,21 @@ function buildActiveCanvasContext(sid) {
   if (hasMemory) {
     lines.push('- 本会话已有开启「记忆」节点的历史子代理会话：若用户说「再跑一次 / 换个任务重跑」，请先简短询问用户是保留上次记忆继续（reset: true）还是清空记忆全新开跑（reset: true, clearMemory: true）。');
   }
+  const stdCount = nodes.filter((n) => n.kind !== 'lead' && n.preset !== 'minimal').length;
+  if (stdCount >= 2) {
+    lines.push('- 本画布包含 ' + stdCount + ' 个可写/命令型（standard）子代理，受主对话权限上限约束；若任务涉及改代码、写文件或跑终端命令且当前主对话权限偏严格，请先简短提醒用户放开主对话权限再调 `canvas_workflow`，避免中途报错白耗额度。');
+  }
   return lines.join('\n');
+}
+
+/** Detect permission / sandbox denial outcomes so we can circuit-break before burning downstream tokens. */
+const PERMISSION_ERR_RE = /permission denied|access is denied|sandbox-local|windows-acl|win32error|eacces|eperm|approval required|not permitted|拒绝访问|权限不足|无权执行|沙箱拒绝/i;
+function isPermissionFailure(outcome) {
+  if (!outcome) return false;
+  const text = String(outcome.text || '');
+  if (!outcome.ok && PERMISSION_ERR_RE.test(text)) return true;
+  if (text.includes('【未完全交付】') && PERMISSION_ERR_RE.test(text)) return true;
+  return false;
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -824,15 +841,18 @@ async function executePlan(scope, plan, args, exec) {
   const inFlight = new Map();
 
   const isAborted = () => Boolean(exec && exec.signal && exec.signal.aborted);
+  const permBlocked = [];
+  let activationFailCount = 0;
+  let haltedReason = '';
 
   const launchReadyAgents = () => {
-    if (isAborted() || inFlight.size >= MAX_PARALLEL) return;
+    if (isAborted() || haltedReason || inFlight.size >= MAX_PARALLEL) return;
     const candidates = runnable.filter((n) => n.kind !== 'lead'
       && !state.done.has(n.id)
       && !inFlight.has(n.id)
       && depsOf(n).every((id) => state.done.has(id)));
     for (const node of candidates) {
-      if (isAborted() || inFlight.size >= MAX_PARALLEL) break;
+      if (isAborted() || haltedReason || inFlight.size >= MAX_PARALLEL) break;
       const promise = spawnNode(scope, plan, node, state.results, agent, exec.signal, sid, state.failed)
         .then(
           (outcome) => ({ node, outcome }),
@@ -846,6 +866,19 @@ async function executePlan(scope, plan, args, exec) {
     if (isAborted()) {
       if (sid) runBySession.delete(sid);
       return { error: '工作流执行已取消。' };
+    }
+    if (haltedReason && inFlight.size === 0) {
+      if (sid) runBySession.delete(sid);
+      saveStore();
+      return {
+        status: 'halted',
+        error: haltedReason,
+        results: state.results,
+        labels: state.labels,
+        failed: Object.values(state.failed),
+        emptyOutputs: Object.values(state.emptyOutputs),
+        skipped,
+      };
     }
     const remaining = runnable.filter((n) => !state.done.has(n.id));
     if (!remaining.length) {
@@ -874,8 +907,16 @@ async function executePlan(scope, plan, args, exec) {
       state.labels[node.id] = node.label;
       if (!outcome.ok) {
         state.failed[node.id] = { id: node.id, label: node.label, reason: outcome.reason || 'unknown' };
+        if (outcome.reason === 'activation-failed') activationFailCount += 1;
       } else if (outcome.empty) {
         state.emptyOutputs[node.id] = { id: node.id, label: node.label };
+      }
+      if (isPermissionFailure(outcome)) {
+        permBlocked.push(node.label || node.id);
+        haltedReason = '检测到权限/沙箱受限导致节点失败（' + permBlocked.join('、')
+          + '），已熔断停止启动后续节点以防继续消耗额度。请先检查主对话左下角权限模式，放开后重新运行。';
+      } else if (activationFailCount >= 2 && !haltedReason) {
+        haltedReason = '连续 ' + activationFailCount + ' 个子代理启动失败，已熔断停止后续节点以防继续消耗额度。请检查模型配置或主对话权限后重试。';
       }
       state.done.add(node.id);
       continue;
@@ -1413,6 +1454,7 @@ export {
   inspectPlan,
   sessionIdFromContext,
   buildActiveCanvasContext,
+  isPermissionFailure,
   runPlan,
   executePlan,
 };

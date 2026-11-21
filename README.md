@@ -27,65 +27,69 @@ Once enabled, open the **`Workflow`** tab in the right sidebar.
 
 ---
 
-## How to use it (5-step visual guide)
+## Usage
 
-### 1. Place cards (or load a starter template)
+### 1. Node types
 
-There are only two card types:
-- **Subagent (green top bar)**: A real child agent that does a focused job.
-- **Lead (blue top bar)**: Your main chat conversation. The leftmost entry Lead holds the overall task; an intermediate Lead **pauses the run for your decision**; a terminal Lead delivers the final review in one shot.
+There are three node types on the canvas:
 
-Start fastest by loading a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere on the canvas to drop a new card (`⋯` also provides `⊞ Auto layout` and `✕ Clear canvas`):
+| Node | Description |
+|---|---|
+| <img src="docs/images/node-entry-en.png" width="220" alt="Entry Lead node" /> | **Entry Lead (start node, always present)**<br>• The starting point of the graph — **right-side output sockets only**.<br>• Write the overall goal in **Task**, or leave it blank and send your prompt directly in chat once the canvas is **● ON**.<br>• Every node that should run must be reachable from here. |
+| <img src="docs/images/node-subagent-en.png" width="220" alt="Subagent node" /> | **Subagent (green top bar — runs in an isolated child session)**<br>• **Model / Reasoning**: Configure model and reasoning effort per node.<br>• **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web), bounded by the main chat's permission mode.<br>• **Fallback**: Automatically retries once on another model if the primary one fails.<br>• **Memory**: Flip **on** and use the dropdown beside it to resume **Latest** or pin any past run (`#1 / #2`).<br>• **Role**: Click the pencil icon to describe what this node is responsible for. |
+| <img src="docs/images/node-lead-en.png" width="220" alt="Lead node" /> | **Lead (blue top bar — runs directly in the main conversation)**<br>• **Never spawned** — handled by your main chat itself.<br>• **Mid-flow** (e.g. `Lead Pick`): pauses with `⏸ Ready` once upstream finishes so you can decide before downstream starts.<br>• **End-of-flow** (e.g. `Lead Review`): delivers the final summary in one shot without an extra round-trip.<br>• Requires at least one subagent upstream (solo Lead-to-Lead nodes render dashed and are skipped). |
+
+Load a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere on the canvas to add a node (`⋯` also provides `⊞ Auto layout` and `✕ Clear canvas`):
 
 ![Add a node with Shift+A and connect it](docs/images/add-node-shift-a.gif)
 
 ---
 
-### 2. Wire the flow (left feeds right)
+### 2. Links and data flow
 
-**Drag from a right-side dot on an upstream card to a left-side dot on a downstream card** to pass results forward.
+**Drag from a right-side output socket on an upstream node to a left-side input socket on a downstream node** to pass results forward.
 
-Dot colour is the channel type — **only matching colours connect**:
-| Colour | Socket | Plain-English meaning |
+Socket colour indicates the channel type — **only matching colours connect**:
+| Colour | Type | Description |
 |---|---|---|
-| Grey | `prompt` | **Pass text**: sends the upstream summary as plain text |
-| Blue | `structured` | **Pass JSON**: automatically asks the upstream node for a JSON object |
-| Purple | `session` | **Continue the same chat**: the downstream step runs inside the upstream child session (no re-scanning context) |
+| Grey | `prompt` | Passes plain-text output downstream |
+| Blue | `structured` | Passes a JSON object; the upstream node is automatically asked for structured output |
+| Purple | `session` | Continues inside the upstream child session without reloading context |
 
-- **Disconnect a link**: **Hold right-click and sweep across any wire** to cut it (or drag a connected left dot away).
-- **Dashed cards = inactive (skipped)**: Unreachable nodes, solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents automatically turn **dashed** and are skipped at run time so you never waste tokens.
+- **Disconnect**: Hold **right-click and sweep across any wire** to cut it (or drag a connected left socket away).
+- **Dashed nodes (inactive)**: Unreachable nodes, solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents render **dashed** and are skipped at run time.
 
 ![Right-drag to cut a link and re-wire](docs/images/connect-and-cut.gif)
 
 ---
 
-### 3. Configure each card independently (optional)
+### 3. Per-node settings
 
-Every subagent card can carry its own settings:
-- **Model & Reasoning**: Pair fast models for routine tasks with stronger models for synthesis/review.
-- **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web). *Bounded by the main chat's permission mode.*
-- **Fallback**: Automatically retries once on another model if the primary one fails.
-- **Memory**: Reuses this node's previous child session across runs and restarts.
+Every subagent node can be configured independently:
+- **Model & Reasoning**: Assign different models and effort levels per step.
+- **Scope**: `standard` (all tools) or `minimal` (read-only thinking). *Bounded by the main chat's permission mode.*
+- **Fallback**: Retries once on another model when the primary model fails.
+- **Memory**: Reuses a past child session across runs and restarts, with a dropdown to pick **Latest** or a specific run.
 
 ![Configure model, reasoning, scope, fallback and memory per node](docs/images/node-config.gif)
 
 ---
 
-### 4. Toggle `● ON` and send your task in chat
+### 4. Enable and run
 
-Press **`● ON`** at the top-left of the canvas, then just send your task in chat — no magic phrasing needed (while enabled, a per-session runtime context automatically notifies the agent):
+Press **`● ON`** at the top-left of the canvas, then send your task in chat (while enabled, a per-session runtime context notifies the agent automatically):
 
-- You can leave the entry Lead's task blank: your chat message is passed automatically as `task`.
-- At an intermediate **Lead** card, the canvas lights up **`⏸ Ready`** and hands control to you in chat; once you reply with your choice, downstream nodes resume automatically through the final Lead review.
-- To run again in the same chat: pass `reset: true`; if any node has **Memory** enabled with prior history, the agent asks whether to keep memory or start fresh (`clearMemory: true`).
+- If the entry Lead's task is blank, your chat message is passed as `task`.
+- At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** and hands control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
+- Re-running in the same chat supports `reset: true`; if any node has saved **Memory**, the agent confirms whether to keep memory or clear it (`clearMemory: true`).
 
 ![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)
 
 ---
 
-### 5. Click any card to watch its live subagent chat
+### 5. Inspect live subagent runs
 
-Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-right of any subagent card** to jump straight into its own conversation pane:
+Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-right of any subagent node** to open its conversation pane:
 
 ![Parallel execution and clicking straight into a subagent chat](docs/images/parallel-and-inspect.gif)
 

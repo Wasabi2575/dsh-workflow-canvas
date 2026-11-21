@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -787,4 +787,74 @@ test('clearMemory forgets saved keepSession child sessions and active context pr
   // Run 3 with clearMemory: true starts a fresh session
   await executePlan(scope, plan, { reset: true, clearMemory: true }, { agent: { id: sid }, signal: new AbortController().signal });
   assert.equal(seenChildIds[2], null, 'clearMemory clears prior keepSession childId');
+});
+
+test('executePlan circuit-breaks before launching downstream waves on permission/sandbox failure', async () => {
+  const launched = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        launched.push(id);
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({
+            output: [{ type: 'text', text: '【未完全交付】Error: sandbox-local: windows-acl workspace grant failed (Access is denied)' }],
+            stopReason: 'completed',
+          }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  assert.equal(isPermissionFailure({ ok: false, text: 'Permission denied' }), true);
+  assert.equal(isPermissionFailure({ ok: true, text: 'normal output' }), false);
+
+  const plan = {
+    task: '熔断测试',
+    nodes: [
+      { id: 'w1', kind: 'agent', label: '第一波', role: '写文件' },
+      { id: 'w2', kind: 'agent', label: '第二波', role: '继续干活' },
+    ],
+    edges: [
+      { from: 'lead', to: 'w1', type: 'prompt' },
+      { from: 'w1', to: 'w2', type: 'prompt' },
+    ],
+  };
+
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-perm-halt' }, signal: new AbortController().signal });
+  assert.equal(res.status, 'halted');
+  assert.ok(res.error && res.error.includes('熔断'));
+  assert.deepEqual(launched, ['w1'], 'downstream wave w2 must not be launched after permission halt');
+});
+
+test('memoryChildId pins a specific past session and temporary keepSession=false runs preserve saved memory', async () => {
+  let seq = 0;
+  const seenChildIds = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        seenChildIds.push(spec.childId || null);
+        const assigned = spec.childId || ('kid-pick-' + (++seq));
+        return Promise.resolve({
+          childId: assigned,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const sid = 's-mem-pick';
+  const baseEdges = [{ from: 'lead', to: 'n1', type: 'prompt' }];
+
+  // Run 1: Memory ON -> saves kid-pick-1
+  await executePlan(scope, { task: 'r1', nodes: [{ id: 'n1', kind: 'agent', label: 'A', role: 'A', keepSession: true }], edges: baseEdges }, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  // Run 2: Temporarily Memory OFF -> creates kid-pick-2 without overwriting kid-pick-1
+  await executePlan(scope, { task: 'r2', nodes: [{ id: 'n1', kind: 'agent', label: 'A', role: 'A', keepSession: false }], edges: baseEdges }, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  // Run 3: Memory ON (latest) -> resumes saved kid-pick-1!
+  await executePlan(scope, { task: 'r3', nodes: [{ id: 'n1', kind: 'agent', label: 'A', role: 'A', keepSession: true }], edges: baseEdges }, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  // Run 4: Memory ON with explicit memoryChildId = kid-pick-2 -> resumes kid-pick-2!
+  await executePlan(scope, { task: 'r4', nodes: [{ id: 'n1', kind: 'agent', label: 'A', role: 'A', keepSession: true, memoryChildId: 'kid-pick-2' }], edges: baseEdges }, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+
+  assert.deepEqual(seenChildIds, [null, null, 'kid-pick-1', 'kid-pick-2']);
 });
