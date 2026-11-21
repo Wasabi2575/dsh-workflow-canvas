@@ -691,3 +691,100 @@ test('systemPrompt.context injects active canvas per session and stays silent fo
   syncHandler({ agent: { id: sid }, rawInput: encodeURIComponent(JSON.stringify({ enabled: false, plan })) });
   assert.equal(contextProvider.text({ agent: { id: sid } }), '');
 });
+
+test('solo chained Leads and dead-end subagents are warned and skipped cleanly at run time', async () => {
+  const spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = spec.label.split('#')[1];
+        spawned.push(id);
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const nodes = [
+    { id: 'lead', kind: 'lead', label: 'Lead' },
+    { id: 'a', kind: 'agent', label: 'A', role: 'A' },
+    { id: 'dead', kind: 'agent', label: '无出边', role: 'D' },
+    { id: 'l1', kind: 'lead', label: 'L1', role: '1' },
+    { id: 'l2', kind: 'lead', label: 'L2', role: '2' },
+  ];
+  const edges = [
+    { from: 'lead', to: 'a', type: 'prompt' },
+    { from: 'lead', to: 'dead', type: 'prompt' },
+    { from: 'a', to: 'l1', type: 'prompt' },
+    { from: 'l1', to: 'l2', type: 'prompt' },
+  ];
+  const warns = analyzeCanvasWarnings(nodes, edges);
+  assert.ok(warns.some((w) => w.includes('仅串联了其他 Lead') && w.includes('L2')));
+  assert.ok(warns.some((w) => w.includes('没有出边') && w.includes('无出边')));
+
+  const res = await executePlan(
+    scope,
+    { task: 't', nodes: withoutEntry(nodes), edges },
+    {},
+    { agent: { id: 's-l2l' }, signal: new AbortController().signal },
+  );
+  assert.equal(res.status, 'done');
+  assert.equal(res.finalLead.label, 'L1');
+  assert.deepEqual(spawned, ['a'], 'dead-end subagent is skipped without spawning');
+  assert.ok(res.skipped.includes('L2') && res.skipped.includes('无出边'));
+});
+
+test('clearMemory forgets saved keepSession child sessions and active context prompts memory confirmation', async () => {
+  let seq = 0;
+  const seenChildIds = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        seenChildIds.push(spec.childId || null);
+        const assigned = spec.childId || ('kid-mem-' + (++seq));
+        return Promise.resolve({
+          childId: assigned,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  let syncHandler = null;
+  apply({
+    inject(services, cb) {
+      if (services.includes('commands')) {
+        cb({
+          commands: { register(cmd) { if (cmd.name === 'canvas-sync') syncHandler = cmd.handler; } },
+          effect(fn) { fn(); },
+        });
+      }
+    },
+  });
+
+  const sid = 's-mem-confirm';
+  const plan = {
+    task: '记忆测试',
+    nodes: [{ id: 'm1', kind: 'agent', label: '记忆节点', role: '记住内容', keepSession: true }],
+    edges: [{ from: 'lead', to: 'm1', type: 'prompt' }],
+  };
+  syncHandler({ agent: { id: sid }, rawInput: encodeURIComponent(JSON.stringify({ enabled: true, plan })) });
+
+  // Before first run: no saved memory yet -> no memory confirmation line
+  assert.equal(buildActiveCanvasContext(sid).includes('clearMemory'), false);
+
+  // Run 1 creates kid-mem-1
+  await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(seenChildIds[0], null);
+  assert.equal(buildActiveCanvasContext(sid).includes('clearMemory'), true, 'active context now reminds agent to ask about keeping/clearing memory');
+
+  // Run 2 without clearMemory reuses kid-mem-1
+  await executePlan(scope, plan, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(seenChildIds[1], 'kid-mem-1');
+
+  // Run 3 with clearMemory: true starts a fresh session
+  await executePlan(scope, plan, { reset: true, clearMemory: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(seenChildIds[2], null, 'clearMemory clears prior keepSession childId');
+});

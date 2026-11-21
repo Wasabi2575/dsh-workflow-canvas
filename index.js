@@ -310,40 +310,51 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   return { ok: false, empty: false, reason, text: retry.text + '\n（重试仍失败：' + reason + '）' };
 }
 
-/** Ids reachable from the entry Lead; every other node is skipped at run time. */
+/** Ids reachable from the entry Lead via O(V + E) BFS; every other node is skipped at run time. */
 function reachableFrom(plan) {
+  const adj = new Map();
+  for (const e of (plan && plan.edges) || []) {
+    if (!e || !e.from || !e.to) continue;
+    if (!adj.has(e.from)) adj.set(e.from, []);
+    adj.get(e.from).push(e.to);
+  }
   const set = new Set(['lead']);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const e of plan.edges || []) {
-      if (set.has(e.from) && !set.has(e.to)) { set.add(e.to); grew = true; }
+  const queue = ['lead'];
+  for (let i = 0; i < queue.length; i += 1) {
+    const cur = queue[i];
+    for (const next of adj.get(cur) || []) {
+      if (!set.has(next)) { set.add(next); queue.push(next); }
     }
   }
   return set;
 }
 
 /**
- * Detect structural warnings on a canvas plan:
- *   1. Unreachable nodes (will be skipped at run time).
- *   2. Reachable non-Lead agent nodes with zero outgoing edges when the graph
- *      already has a downstream Lead node (likely forgot to wire into the Lead).
+ * Classify inactive nodes that are rendered dashed on the canvas and skipped at run time:
+ *   - unreachable orphans
+ *   - solo chained Leads (zero reachable subagent upstream)
+ *   - dangling dead-end subagents (zero outgoing edges while an active non-ancestor downstream Lead exists)
  */
-function analyzeCanvasWarnings(nodes, edges) {
+function inactiveNodeSets(nodes, edges) {
   const list = withoutEntry(nodes);
   const linkList = Array.isArray(edges) ? edges : [];
-  const warnings = [];
-  if (!list.length) return warnings;
-
   const reachable = reachableFrom({ edges: linkList });
-  const orphans = list.filter((n) => !reachable.has(n.id));
-  if (orphans.length) {
-    warnings.push('以下节点未从入口 Lead 连通，运行时会被跳过：'
-      + orphans.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+  const byId = new Map(list.map((n) => [n.id, n]));
+
+  const soloLeads = new Set();
+  for (const n of list) {
+    if (n.kind !== 'lead' || !reachable.has(n.id)) continue;
+    const hasAgentUp = linkList.some((e) => {
+      if (!e || e.to !== n.id || !reachable.has(e.from) || e.from === 'lead') return false;
+      const src = byId.get(e.from);
+      return Boolean(src && src.kind !== 'lead');
+    });
+    if (!hasAgentUp) soloLeads.add(n.id);
   }
 
-  const downstreamLeads = list.filter((n) => n.kind === 'lead' && reachable.has(n.id));
-  if (downstreamLeads.length) {
+  const deadEnds = new Set();
+  const activeLeads = list.filter((n) => n.kind === 'lead' && reachable.has(n.id) && !soloLeads.has(n.id));
+  if (activeLeads.length) {
     const hasOut = new Set(linkList.map((e) => e.from));
     const parents = new Map();
     for (const e of linkList) {
@@ -361,15 +372,43 @@ function analyzeCanvasWarnings(nodes, edges) {
       }
       return seen;
     };
-    const deadEnds = list.filter((n) => {
-      if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) return false;
+    for (const n of list) {
+      if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) continue;
       const anc = ancestorsOf(n.id);
-      return downstreamLeads.some((ln) => !anc.has(ln.id));
-    });
-    if (deadEnds.length) {
-      warnings.push('以下子代理节点没有出边，产出未显式连入下游或终审 Lead：'
-        + deadEnds.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+      if (activeLeads.some((ln) => !anc.has(ln.id))) deadEnds.add(n.id);
     }
+  }
+  return { reachable, soloLeads, deadEnds };
+}
+
+/**
+ * Detect structural warnings on a canvas plan (all three classes are rendered
+ * dashed on the canvas and skipped at run time):
+ *   1. Unreachable nodes.
+ *   2. Solo chained Lead nodes with zero subagent upstream.
+ *   3. Dangling dead-end subagent nodes with zero outgoing edges.
+ */
+function analyzeCanvasWarnings(nodes, edges) {
+  const list = withoutEntry(nodes);
+  const linkList = Array.isArray(edges) ? edges : [];
+  const warnings = [];
+  if (!list.length) return warnings;
+
+  const { reachable, soloLeads, deadEnds } = inactiveNodeSets(list, linkList);
+  const orphans = list.filter((n) => !reachable.has(n.id));
+  if (orphans.length) {
+    warnings.push('以下节点未从入口 Lead 连通，运行时会被跳过：'
+      + orphans.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+  }
+  const soloList = list.filter((n) => soloLeads.has(n.id));
+  if (soloList.length) {
+    warnings.push('以下 Lead 节点仅串联了其他 Lead、未连入子代理，运行时不生效：'
+      + soloList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
+  }
+  const deadList = list.filter((n) => deadEnds.has(n.id));
+  if (deadList.length) {
+    warnings.push('以下子代理节点没有出边，产出未连入下游或终审 Lead，运行时不生效：'
+      + deadList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
   }
   return warnings;
 }
@@ -702,7 +741,9 @@ function buildActiveCanvasContext(sid) {
     .map((n) => (n.kind === 'lead' ? '〔Lead〕' : '') + (n.label || n.id))
     .join(' → ') + (nodes.length > 8 ? ' …' : '');
   const hasTask = Boolean(String((plan && plan.task) || '').trim());
-  return [
+  const prefix = String(sid) + '::';
+  const hasMemory = nodes.some((n) => n.keepSession && (liveChild.has(prefix + n.id) || childByNode.has(prefix + n.id)));
+  const lines = [
     '[Workflow Canvas Active]',
     '当前会话的右侧工作流画布处于「● 已启用」状态（共 ' + nodes.length + ' 个执行节点：' + preview + '；入口总任务：' + (hasTask ? '已填写' : '未填写') + '）。',
     '- 若用户发出任务请求、布置工作或说「开始 / 执行 / 跑一次」：请直接调用 `canvas_workflow` 按画布编排执行（'
@@ -710,7 +751,11 @@ function buildActiveCanvasContext(sid) {
       + '），不要绕过画布直接自己完成。',
     '- 若用户在讨论或要求修改画布结构、模型、分工或连线：请先 `canvas_inspect` 再用 `canvas_patch` 就地修改，不要直接运行。',
     '- 仅当用户明确只是闲聊、问无关问题或要求先停用画布时，才无需调用 `canvas_workflow`。',
-  ].join('\n');
+  ];
+  if (hasMemory) {
+    lines.push('- 本会话已有开启「记忆」节点的历史子代理会话：若用户说「再跑一次 / 换个任务重跑」，请先简短询问用户是保留上次记忆继续（reset: true）还是清空记忆全新开跑（reset: true, clearMemory: true）。');
+  }
+  return lines.join('\n');
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -735,19 +780,24 @@ async function executePlan(scope, plan, args, exec) {
   const order = orderNodes(plan);
   if (!order) return { error: '存在环，无法执行有向无环图。' };
 
-  // Defense in depth: unreachable nodes are skipped, never spawned.
-  const reachable = new Set(['lead']);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const e of plan.edges || []) {
-      if (reachable.has(e.from) && !reachable.has(e.to)) { reachable.add(e.to); grew = true; }
-    }
-  }
-  const runnable = order.filter((n) => reachable.has(n.id));
-  const skipped = order.filter((n) => !reachable.has(n.id)).map((n) => n.label || n.id);
-  if (!runnable.length) return { error: '没有从入口 Lead 连通的节点，无法执行。' };
+  // Defense in depth: unreachable orphans, solo chained Leads, and dangling
+  // dead-end subagents are skipped instead of wasting tokens or stalling.
+  const { reachable, soloLeads, deadEnds } = inactiveNodeSets(plan.nodes, plan.edges);
+  const isInactive = (n) => !reachable.has(n.id) || soloLeads.has(n.id) || deadEnds.has(n.id);
+  const runnable = order.filter((n) => !isInactive(n));
+  const skipped = order.filter((n) => isInactive(n)).map((n) => n.label || n.id);
+  if (!runnable.length) return { error: '没有从入口 Lead 连通的有效节点，无法执行。' };
 
+  if (opts.clearMemory === true && sid) {
+    const prefix = String(sid) + '::';
+    for (const key of Array.from(childByNode.keys())) {
+      if (key.startsWith(prefix)) childByNode.delete(key);
+    }
+    for (const key of Array.from(liveChild.keys())) {
+      if (key.startsWith(prefix)) liveChild.delete(key);
+    }
+    saveStore();
+  }
   if (opts.reset === true && sid) {
     runBySession.delete(sid);
   }
@@ -1256,6 +1306,7 @@ export function apply(ctx) {
               leadResult: { type: 'string', description: 'Your own output for the Lead step that was just requested.' },
               task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
               reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
+              clearMemory: { type: 'boolean', description: 'Forget saved subagent sessions (keepSession memory) for this session before running so every node starts fresh.' },
             },
             additionalProperties: false,
           },
