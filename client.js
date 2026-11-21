@@ -128,6 +128,7 @@ window.__ModuleLoader__.load({
         savedPreset: '已保存预设', saveFailed: '保存失败（存储不可用）',
         loadedPreset: '已载入预设', invalidPreset: '预设内容无效', deletedPreset: '已删除预设',
         syncFailed: '同步失败', upToDate: '已是最新', syncedToHost: '已同步到 Host',
+        syncedWithStdWarn: '已同步（含可写/命令节点，请确认主对话权限已放开）',
         cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作',
         leadLocked: '入口 Lead 不能删除', modelsMissing: '模型列表未加载',
         tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
@@ -195,6 +196,11 @@ window.__ModuleLoader__.load({
         tipUndo: '撤销上一步结构改动', tipSave: '把当前画布保存为预设',
         tipPresets: '载入已保存的预设', tipModel: '推理等级（默认 = 该模型声明的 defaultEffort）',
         tipMemory: '记忆：复用这个节点上一次的会话（跨运行及重启后可恢复）',
+        memLatest: '最新',
+        memLatestOpt: '自动（最新记忆）',
+        memRunOpt: '第 {n} 次会话',
+        memEmpty: '运行后这里会列出可选的历史会话',
+        tipMemoryPick: '选择要续接的历史子会话（默认自动沿用最新记忆）',
         tipPreset: '能力范围（点一下切换，受主对话权限上限约束）：standard = 全部工具（读写文件、跑命令、子代理、工作流、网页、办公）；minimal = 只读思考（文件读写关闭，没有子代理/工作流/网页）',
         tipFallback: '失败重试：该节点出错时自动换一个模型再跑一次',
         tipStructured: 'JSON 输出：要求该节点返回 JSON 对象，structured 连线会把结果作为 JSON 传给下游',
@@ -232,6 +238,7 @@ window.__ModuleLoader__.load({
         savedPreset: 'Saved preset', saveFailed: 'Save failed (storage unavailable)',
         loadedPreset: 'Loaded preset', invalidPreset: 'Preset content is invalid', deletedPreset: 'Deleted preset',
         syncFailed: 'Sync failed', upToDate: 'Already up to date', syncedToHost: 'Synced to host',
+        syncedWithStdWarn: 'Synced (has write/tool nodes — check main chat permission mode)',
         cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo',
         leadLocked: 'The entry Lead cannot be deleted', modelsMissing: 'Model list is not loaded',
         tipLead: 'Lead steps run in the chat; the canvas does not track them',
@@ -299,6 +306,11 @@ window.__ModuleLoader__.load({
         tipUndo: 'Undo the last structural change', tipSave: 'Save this canvas as a preset',
         tipPresets: 'Load a saved preset', tipModel: 'Reasoning effort (default = the model\'s defaultEffort)',
         tipMemory: 'Memory: reuse this node\'s previous session (persisted across runs and restarts)',
+        memLatest: 'Latest',
+        memLatestOpt: 'Auto (latest)',
+        memRunOpt: 'Run #{n}',
+        memEmpty: 'Past runs appear here after running',
+        tipMemoryPick: 'Pick which past child session to resume (defaults to latest)',
         tipPreset: 'Capability (click to toggle; bounded by the main chat permission mode): standard = all tools (files, shells, subagents, workflow, web, office); minimal = read-only thinking (no file writes, no subagents/workflow/web)',
         tipFallback: 'Retry: when this node fails, rerun it once on another model',
         tipStructured: 'JSON output: require an object result; structured links pass it downstream as JSON',
@@ -1069,6 +1081,7 @@ window.__ModuleLoader__.load({
             reasoning: n.reasoning || '',
             preset: n.preset === 'minimal' ? 'minimal' : 'standard',
             keepSession: Boolean(n.keepSession),
+            memoryChildId: n.memoryChildId || '',
             // A structured link is the only thing that decides this: no separate switch.
             structured: planEdges.some((e) => e.from === n.id && e.type === 'structured'),
             fallbackModel: n.fallbackModel || '',
@@ -1382,12 +1395,13 @@ window.__ModuleLoader__.load({
           const sig = planSig(nextEnabled, curNodes, curEdges);
           if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return; }
           const line = '/canvas-sync ' + encodeURIComponent(sig);
+          const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && (n.preset || 'standard') !== 'minimal');
           face.command(line).then((ack) => {
             if (ack && ack.ok) {
               lastSync.current = sig;
               setDirty(false);
               snapshotStaleCatalog();
-              flash(t('syncedToHost'));
+              flash(hasStandardAgent ? t('syncedWithStdWarn') : t('syncedToHost'));
             } else {
               flash(t('syncFailed'));
             }
@@ -1473,11 +1487,17 @@ window.__ModuleLoader__.load({
             const timing = timingProj && timingProj.values && timingProj.values.subagentTiming;
             if (entry.id) {
               const prev = nextRuns[nodeId];
+              const prevHistory = prev && Array.isArray(prev.history) ? prev.history : [];
+              const exists = prevHistory.some((hItem) => hItem.childId === entry.id);
+              const history = exists
+                ? prevHistory
+                : prevHistory.concat([{ childId: entry.id, label, index: prevHistory.length + 1 }]);
               nextRuns[nodeId] = {
                 childId: entry.id,
                 label,
                 mode: entry.mode || 'continuable',
-                count: prev ? prev.count + 1 : 1,
+                count: history.length,
+                history,
               };
             }
             if (child && child.running) {
@@ -2617,13 +2637,66 @@ window.__ModuleLoader__.load({
           isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
         );
       };
-      const memoryToggle = (node) => h('button', {
-        style: node.keepSession ? S.toggleSwitchOn : S.toggleSwitch,
-        type: 'button',
-        title: t('tipMemory'),
-        onMouseDown: (e) => e.stopPropagation(),
-        onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
-      }, node.keepSession ? t('on') : t('off'));
+      const memoryToggle = (node) => {
+        const runInfo = runsById[node.id];
+        const history = (runInfo && Array.isArray(runInfo.history)) ? runInfo.history : [];
+        const showPicker = Boolean(node.keepSession);
+        const key = 'm:' + node.id;
+        const isOpen = openModelFor === key;
+        const pickedItem = node.memoryChildId
+          ? history.find((item) => item.childId === node.memoryChildId)
+          : undefined;
+        const pickLabel = !node.memoryChildId
+          ? t('memLatest')
+          : (pickedItem ? ('#' + pickedItem.index) : String(node.memoryChildId).slice(-6));
+        const toggleBtn = h('button', {
+          style: showPicker
+            ? { ...(node.keepSession ? S.toggleSwitchOn : S.toggleSwitch), flex: '0 0 34px', width: '34px' }
+            : (node.keepSession ? S.toggleSwitchOn : S.toggleSwitch),
+          type: 'button',
+          title: t('tipMemory'),
+          onMouseDown: (e) => e.stopPropagation(),
+          onClick: () => updateNode(node.id, { keepSession: !node.keepSession }),
+        }, node.keepSession ? t('on') : t('off'));
+        if (!showPicker) return toggleBtn;
+        const rows = [
+          h('div', {
+            key: 'latest',
+            style: !node.memoryChildId ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+            onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+            onMouseLeave: (e) => { e.currentTarget.style.background = !node.memoryChildId ? C.hover : 'transparent'; },
+            onClick: () => { updateNode(node.id, { memoryChildId: '' }); setOpenModelFor(null); },
+          }, t('memLatestOpt')),
+          ...history.map((item) => {
+            const selectedRow = node.memoryChildId === item.childId;
+            return h('div', {
+              key: item.childId,
+              style: selectedRow ? { ...S.menuRow, background: C.hover, color: C.accent } : S.menuRow,
+              title: item.childId,
+              onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+              onMouseLeave: (e) => { e.currentTarget.style.background = selectedRow ? C.hover : 'transparent'; },
+              onClick: () => { updateNode(node.id, { memoryChildId: item.childId }); setOpenModelFor(null); },
+            }, t('memRunOpt').replace('{n}', String(item.index)) + ' (' + String(item.childId).slice(-5) + ')');
+          }),
+          !history.length && h('div', { key: 'mem-empty', style: S.presetEmpty }, t('memEmpty')),
+        ];
+        return h('div', { style: { display: 'flex', alignItems: 'center', gap: '4px', flex: '1 1 auto', minWidth: 0 } },
+          toggleBtn,
+          h('div', { ref: isOpen ? dropdownRef : undefined, style: { position: 'relative', flex: '1 1 auto', minWidth: 0 } },
+            h('button', {
+              style: S.selectBtn,
+              type: 'button',
+              title: t('tipMemoryPick'),
+              onMouseDown: (e) => e.stopPropagation(),
+              onClick: () => setOpenModelFor(isOpen ? null : key),
+            },
+              h('span', { style: S.selectText }, pickLabel),
+              h('span', { style: S.caret }, '▾'),
+            ),
+            isOpen && h('div', { style: S.menu, onMouseDown: (e) => e.stopPropagation() }, rows),
+          ),
+        );
+      };
 
       const reasoningControl = (node) => {
         const key = 'r:' + node.id;
