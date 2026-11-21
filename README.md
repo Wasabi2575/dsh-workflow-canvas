@@ -132,27 +132,20 @@ fresh.
 - Saved presets live in browser storage and do not auto-sync between the Desktop
   app and `dsh web`, nor across machines (use `⋯ → ⇧ Copy JSON` and `⇩ Import`
   to move or share them).
-- Node status is read from the subagent catalog, so Lead steps show **Runs in chat**
-  instead of a tracked state.
+- A subagent's capability scope (`standard` / `minimal`) only narrows its toolset
+  within the main chat's permission/sandbox ceiling and cannot elevate privileges.
 - Up to 4 nodes run at a time.
 
-## Making the agent use this plugin
+## How the agent discovers and uses the canvas
 
-The bundled guide ships as a skill named `workflow-canvas`. DSH has no "auto-load"
-switch: the model sees each skill's **name and description** in its catalogue and
-loads the body on demand. Three things make it reliable:
-
-1. **A description that names the trigger words** — canvas, workflow, pipeline,
-   node graph, 画布, 工作流, 编排.
-2. **Pointers from the tools** — every `canvas_*` tool description tells the model
-   to load the skill first, and tools are always in context.
-3. **A line in your project's `AGENTS.md`** — the strongest option, because it is
-   always loaded:
-
-```markdown
-When a task involves the workflow canvas or the canvas_* tools, call the `skill`
-tool with name `workflow-canvas` first.
-```
+- **While enabled (zero-config)**: The plugin hooks into DSH's `systemPrompt.context`
+  to inject a lightweight per-session reminder only for the session whose canvas is
+  **● ON** (zero injection for disabled or subagent sessions). Sending a task
+  triggers `canvas_workflow` automatically, and replying at an intermediate Lead
+  resumes the run.
+- **When disabled (sketching from scratch)**: The bundled guide ships as the
+  `workflow-canvas` skill and is loaded on demand via trigger keywords and
+  `canvas_*` tool descriptions — no `AGENTS.md` boilerplate required.
 
 ## Development & internals
 
