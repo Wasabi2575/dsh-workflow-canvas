@@ -1347,6 +1347,7 @@ window.__ModuleLoader__.load({
       viewRef.current = view;
       const [statusById, setStatusById] = useState({});
       const [runsById, setRunsById] = useState({});
+      const [sessionRunning, setSessionRunning] = useState(false);
       const [presets, setPresets] = useState(loadPresets);
       const [presetOpen, setPresetOpen] = useState(null);
       const [presetName, setPresetName] = useState('');
@@ -1565,6 +1566,7 @@ window.__ModuleLoader__.load({
         const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
         let wasRunning = false;
         try { wasRunning = Boolean(face.getSnapshot().running); } catch (_e) { wasRunning = false; }
+        setSessionRunning(wasRunning);
         read();
         if (wasRunning) timer = setInterval(read, 700);
         const onSnapshot = () => {
@@ -1572,6 +1574,7 @@ window.__ModuleLoader__.load({
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
           const finished = !running && wasRunning;
           wasRunning = running;
+          setSessionRunning(running);
           if (running && !timer) { read(); timer = setInterval(read, 700); }
           if (!running && timer) { stop(); read(); }
           if (finished && typeof sessions.refreshProjections === 'function') {
@@ -2768,9 +2771,11 @@ window.__ModuleLoader__.load({
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
       const deadEndIds = deadEndNodeIds(nodes, edges);
 
-      // Identify intermediate/final Lead nodes whose upstream subagents are all
-      // finished and whose downstream has not started yet ("Ready for Lead").
+      // Identify intermediate Lead nodes waiting for a decision ("Ready for Lead")
+      // and terminal Lead nodes: a terminal Lead glows only while the conversation
+      // is still streaming its final review; once the turn finishes it settles to Done.
       const leadReadyIds = new Set();
+      const leadDoneIds = new Set();
       if (enabled) {
         for (const n of nodes) {
           if (n.kind !== 'lead' || n.id === 'lead' || !reachableIds.has(n.id)) continue;
@@ -2781,9 +2786,15 @@ window.__ModuleLoader__.load({
           const upAgents = upIds.filter((id) => nodeById.get(id).kind !== 'lead');
           if (!upAgents.length) continue;
           const allUpDone = upAgents.every((id) => statusById[id] === 'done');
+          if (!allUpDone) continue;
           const downIds = edges.filter((e) => e.from === n.id).map((e) => e.to);
-          const anyDownStarted = downIds.some((id) => Boolean(statusById[id]));
-          if (allUpDone && !anyDownStarted) leadReadyIds.add(n.id);
+          if (!downIds.length) {
+            if (sessionRunning) leadReadyIds.add(n.id);
+            else leadDoneIds.add(n.id);
+          } else {
+            const anyDownStarted = downIds.some((id) => Boolean(statusById[id]));
+            if (!anyDownStarted) leadReadyIds.add(n.id);
+          }
         }
       }
 
@@ -3202,8 +3213,9 @@ window.__ModuleLoader__.load({
               const isSelected = selectedSet.has(node.id);
               const nodeStatus = enabled ? statusById[node.id] : undefined;
               const isLeadReady = leadReadyIds.has(node.id);
+              const isLeadDone = leadDoneIds.has(node.id);
               const isRunning = !isLeadKind && nodeStatus === 'running';
-              const isDone = !isLeadKind && nodeStatus === 'done';
+              const isDone = (!isLeadKind && nodeStatus === 'done') || isLeadDone;
               const isFailed = !isLeadKind && nodeStatus === 'failed';
               const isPulsing = (isRunning || isLeadReady) && fxLevel !== 'minimal';
               const nodeClass = 'dsh-wc-node'
@@ -3256,30 +3268,32 @@ window.__ModuleLoader__.load({
                 (() => {
                   const latestRun = !isLeadKind ? runsById[node.id] : null;
                   const statusColor = isLeadReady ? '#2f81f7'
-                    : isLeadKind ? C.dim
-                      : nodeStatus === 'running' ? '#2f81f7'
-                        : nodeStatus === 'failed' ? '#e5534b'
-                          : nodeStatus === 'done' ? '#3fb950' : C.dim;
+                    : isLeadDone ? '#3fb950'
+                      : isLeadKind ? C.dim
+                        : nodeStatus === 'running' ? '#2f81f7'
+                          : nodeStatus === 'failed' ? '#e5534b'
+                            : nodeStatus === 'done' ? '#3fb950' : C.dim;
                   const statusTint = isLeadReady || nodeStatus === 'running'
                     ? 'rgba(47,129,247,0.14)'
                     : nodeStatus === 'failed'
                       ? 'rgba(229,83,75,0.14)'
-                      : nodeStatus === 'done'
+                      : isDone
                         ? 'rgba(63,185,80,0.14)'
                         : 'transparent';
                   const statusLabel = isOrphan ? t('stOrphan')
                     : isLeadReady ? t('stLeadReady')
-                      : isLeadKind ? t('stLead')
-                        : nodeStatus === 'running' ? t('stRunning')
-                          : nodeStatus === 'failed' ? t('stFailed')
-                            : nodeStatus === 'done' ? t('stDone') : t('stPending');
+                      : isLeadDone ? t('stDone')
+                        : isLeadKind ? t('stLead')
+                          : nodeStatus === 'running' ? t('stRunning')
+                            : nodeStatus === 'failed' ? t('stFailed')
+                              : nodeStatus === 'done' ? t('stDone') : t('stPending');
                   const glyph = nodeStatus === 'running'
                     ? h('span', {
                         className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined,
                         style: { width: '6px', height: '6px', borderRadius: '50%', background: statusColor, flex: '0 0 auto' },
                       })
                     : isLeadReady ? h('span', { className: fxLevel !== 'minimal' ? 'dsh-wc-dot-live' : undefined }, '⏸')
-                      : nodeStatus === 'done' ? '✓'
+                      : isDone ? '✓'
                         : nodeStatus === 'failed' ? '✕' : null;
                   if (latestRun) {
                     const label = enabled ? statusLabel : t('openChat');
