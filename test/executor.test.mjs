@@ -427,6 +427,22 @@ test('analyzeCanvasWarnings flags dead-end subagents when a downstream Lead exis
     [{ from: 'lead', to: 'a' }],
   );
   assert.equal(noWarn.length, 0);
+
+  // No false warning when the only downstream Lead is already an ancestor of the terminal agent
+  const afterLead = analyzeCanvasWarnings(
+    [
+      { id: 'lead', kind: 'lead', label: 'Lead' },
+      { id: 'a', kind: 'agent', label: '方案' },
+      { id: 'pick', kind: 'lead', label: 'Lead 拍板' },
+      { id: 'exec', kind: 'agent', label: '执行落地' },
+    ],
+    [
+      { from: 'lead', to: 'a' },
+      { from: 'a', to: 'pick' },
+      { from: 'pick', to: 'exec' },
+    ],
+  );
+  assert.equal(afterLead.length, 0);
 });
 
 test('briefFor forbids process monologue and requires incomplete delivery marker', () => {

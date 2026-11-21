@@ -169,6 +169,9 @@ window.__ModuleLoader__.load({
         exportFail: '复制失败（剪贴板不可用）',
         autoLayoutBtn: '⊞ 自动排版',
         layoutDone: '已自动整理布局',
+        clearCanvasBtn: '✕ 清空画布',
+        newBlankCanvas: '＋ 新建空白画布',
+        clearedCanvas: '已清空画布（可用 ↶ 撤销）',
         cycleBlocked: '不能形成环，已阻止连线',
         builtinTemplates: '内置示例模板',
         myPresets: '我的预设',
@@ -267,6 +270,9 @@ window.__ModuleLoader__.load({
         exportFail: 'Copy failed (clipboard unavailable)',
         autoLayoutBtn: '⊞ Auto layout',
         layoutDone: 'Layout tidied',
+        clearCanvasBtn: '✕ Clear canvas',
+        newBlankCanvas: '+ New blank canvas',
+        clearedCanvas: 'Canvas cleared (use Undo to restore)',
         cycleBlocked: 'Cannot create a cycle',
         builtinTemplates: 'Starter templates',
         myPresets: 'Saved presets',
@@ -835,6 +841,43 @@ window.__ModuleLoader__.load({
       return set;
     }
 
+    /**
+     * Reachable agent nodes with zero outgoing edges when the graph has at least
+     * one reachable non-entry Lead that is NOT an ancestor of that agent (so the
+     * agent likely forgot to wire into a downstream or terminal Lead).
+     */
+    function deadEndNodeIds(nodes, edges) {
+      const list = Array.isArray(nodes) ? nodes : [];
+      const linkList = Array.isArray(edges) ? edges : [];
+      const reachable = reachableFrom(list, linkList);
+      const downstreamLeads = list.filter((n) => n.kind === 'lead' && n.id !== 'lead' && reachable.has(n.id));
+      if (!downstreamLeads.length) return new Set();
+      const hasOut = new Set(linkList.map((e) => e.from));
+      const parents = new Map();
+      for (const e of linkList) {
+        if (!parents.has(e.to)) parents.set(e.to, []);
+        parents.get(e.to).push(e.from);
+      }
+      const ancestorsOf = (id) => {
+        const seen = new Set();
+        const stack = [id];
+        while (stack.length) {
+          const cur = stack.pop();
+          for (const p of parents.get(cur) || []) {
+            if (!seen.has(p)) { seen.add(p); stack.push(p); }
+          }
+        }
+        return seen;
+      };
+      const out = new Set();
+      for (const n of list) {
+        if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) continue;
+        const anc = ancestorsOf(n.id);
+        if (downstreamLeads.some((ln) => !anc.has(ln.id))) out.add(n.id);
+      }
+      return out;
+    }
+
     /** True when adding `fromId -> toId` would create a cycle or point into entry Lead. */
     function wouldCycle(nodes, edges, fromId, toId) {
       if (!fromId || !toId || fromId === toId || toId === 'lead') return true;
@@ -1022,6 +1065,7 @@ window.__ModuleLoader__.load({
         { id: 'n_b', kind: 'agent', label: en ? 'Option B (Bold)' : '方案 B（创新）', provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false, role: en ? 'Propose a high-leverage alternative with better long-term payoff.' : '提出上限更高、长期收益更大的进阶方案。' },
         { id: 'n_pick', kind: 'lead', label: en ? 'Lead Pick' : 'Lead 拍板', provider: '', model: '', role: en ? 'Compare both options and pick the direction to execute.' : '对比两份方案，选定最终路线并补充约束。' },
         { id: 'n_exec', kind: 'agent', label: en ? 'Execute' : '执行落地', provider: '', model: '', reasoning: '', preset: 'standard', keepSession: false, role: en ? 'Deliver the chosen solution end to end.' : '按照拍板路线完成最终交付。' },
+        { id: 'n_review', kind: 'lead', label: en ? 'Lead Review' : 'Lead 验收', provider: '', model: '', role: en ? 'Verify the deliverable matches the chosen direction and sign off.' : '核对最终产出是否符合拍板方向，确认无误后交付。' },
       ];
       const abEdges = [
         { id: 'a1', from: 'lead', to: 'n_a', type: 'prompt' },
@@ -1029,6 +1073,7 @@ window.__ModuleLoader__.load({
         { id: 'a3', from: 'n_a', to: 'n_pick', type: 'prompt' },
         { id: 'a4', from: 'n_b', to: 'n_pick', type: 'prompt' },
         { id: 'a5', from: 'n_pick', to: 'n_exec', type: 'prompt' },
+        { id: 'a6', from: 'n_exec', to: 'n_review', type: 'prompt' },
       ];
       return [
         {
@@ -1045,7 +1090,7 @@ window.__ModuleLoader__.load({
         },
         {
           id: 'tpl-ab',
-          name: en ? 'Parallel Options → Decide → Execute' : '并行方案对比 → 拍板 → 执行',
+          name: en ? 'Parallel Options → Decide → Execute → Review' : '并行方案对比 → 拍板 → 执行 → 验收',
           nodes: layoutGraph(abNodes, abEdges),
           edges: abEdges,
         },
@@ -1854,6 +1899,22 @@ window.__ModuleLoader__.load({
         setNodes(next);
         setTimeout(() => fitView(next), 0);
         flash(t('layoutDone'));
+      };
+
+      const clearCanvas = () => {
+        const blank = [{ id: 'lead', kind: 'lead', x: 40, y: 203, label: 'Lead', task: '', provider: '', model: '', role: '' }];
+        pushSnapshot();
+        setNodes(blank);
+        setEdges([]);
+        setSelectedIds([]);
+        setRoleEditFor(null);
+        setOpenModelFor(null);
+        setPresetOpen(null);
+        setMenuOpen(false);
+        snapshotStaleCatalog();
+        setRunsById({});
+        setTimeout(() => centerOn(40 + NODE_W / 2, 203 + NODE_H / 2, 1), 0);
+        flash(t('clearedCanvas'));
       };
 
       const exportToClipboard = () => {
@@ -2687,11 +2748,7 @@ window.__ModuleLoader__.load({
       }
       const reachableIds = reachableFrom(nodes, edges);
       const nodeById = new Map(nodes.map((n) => [n.id, n]));
-      const hasDownstreamLead = nodes.some((n) => n.kind === 'lead' && n.id !== 'lead' && reachableIds.has(n.id));
-      const hasOutNode = new Set(edges.map((e) => e.from));
-      const deadEndIds = new Set(hasDownstreamLead
-        ? nodes.filter((n) => n.kind !== 'lead' && reachableIds.has(n.id) && !hasOutNode.has(n.id)).map((n) => n.id)
-        : []);
+      const deadEndIds = deadEndNodeIds(nodes, edges);
 
       // Identify intermediate/final Lead nodes whose upstream subagents are all
       // finished and whose downstream has not started yet ("Ready for Lead").
@@ -2732,6 +2789,7 @@ window.__ModuleLoader__.load({
         const isCompletedLink = enabled && !highlighted && statusById[edge.from] === 'done'
           && (statusById[edge.to] === 'done' || statusById[edge.to] === 'running' || leadReadyIds.has(edge.to));
         const dimmed = hasSel && !linkedToSel && !highlighted && !isFlowing;
+        const strokeColor = highlighted ? '#e5534b' : color;
         const baseWidth = highlighted ? 3 : (linkedToSel || isFlowing ? 2.6 : 2);
         const baseOpacity = dimmed ? 0.26 : (isFlowing || linkedToSel ? 1 : (isCompletedLink ? 0.92 : 0.78));
         const useGlow = fxLevel === 'vivid' && !dimmed && (highlighted || isFlowing || linkedToSel || edge.type !== 'prompt');
@@ -2739,13 +2797,39 @@ window.__ModuleLoader__.load({
         const showBead = isFlowing && fxLevel === 'vivid';
 
         return h('g', { key: edge.id, style: { pointerEvents: 'none' } },
+          // Vector halo layers instead of an SVG objectBoundingBox <filter>, which
+          // Chromium clips to 0px height on strictly horizontal links (from.y === to.y).
+          useGlow && h('path', {
+            d,
+            stroke: strokeColor,
+            strokeWidth: baseWidth + 7,
+            strokeOpacity: showDashFlow ? 0.1 : 0.16,
+            strokeLinecap: 'round',
+            fill: 'none',
+          }),
+          useGlow && h('path', {
+            d,
+            stroke: strokeColor,
+            strokeWidth: baseWidth + 3.2,
+            strokeOpacity: showDashFlow ? 0.18 : 0.3,
+            strokeLinecap: 'round',
+            fill: 'none',
+          }),
           h('path', {
             d,
-            stroke: highlighted ? '#e5534b' : color,
+            stroke: strokeColor,
             strokeWidth: baseWidth,
             strokeOpacity: showDashFlow ? 0.35 : baseOpacity,
             fill: 'none',
-            filter: useGlow ? 'url(#dsh-wc-glow)' : undefined,
+          }),
+          showDashFlow && fxLevel === 'vivid' && h('path', {
+            d,
+            className: 'dsh-wc-edge-flow',
+            stroke: color,
+            strokeWidth: 6.4,
+            strokeOpacity: 0.28,
+            strokeLinecap: 'round',
+            fill: 'none',
           }),
           showDashFlow && h('path', {
             d,
@@ -2754,13 +2838,10 @@ window.__ModuleLoader__.load({
             strokeWidth: fxLevel === 'vivid' ? 2.8 : 2.4,
             strokeLinecap: 'round',
             fill: 'none',
-            filter: fxLevel === 'vivid' ? 'url(#dsh-wc-glow)' : undefined,
           }),
-          showBead && h('circle', {
-            r: 3.3,
-            fill: color,
-            filter: 'url(#dsh-wc-glow)',
-          },
+          showBead && h('g', null,
+            h('circle', { r: 6.5, fill: color, fillOpacity: 0.28 }),
+            h('circle', { r: 3.3, fill: color }),
             h('animateMotion', {
               dur: '1.25s',
               repeatCount: 'indefinite',
@@ -2893,6 +2974,12 @@ window.__ModuleLoader__.load({
                 onClick: () => { setMenuOpen(false); autoLayout(); },
               }, t('autoLayoutBtn')),
               h('div', {
+                style: { ...S.moreRow, color: '#e5534b' },
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => { clearCanvas(); },
+              }, t('clearCanvasBtn')),
+              h('div', {
                 style: S.moreRow,
                 onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
                 onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
@@ -2949,6 +3036,12 @@ window.__ModuleLoader__.load({
               const names = Object.keys(presets);
               const templates = builtinTemplates(lang);
               return h('div', { style: S.presetMenu, onMouseDown: (e) => e.stopPropagation() },
+                h('div', {
+                  style: { ...S.presetRow, color: C.accent, fontWeight: 500, borderBottom: '1px solid ' + C.border, marginBottom: '4px', paddingBottom: '6px', borderRadius: '4px 4px 0 0' },
+                  onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                  onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                  onClick: () => clearCanvas(),
+                }, h('span', { style: S.presetRowText }, t('newBlankCanvas'))),
                 h('div', { style: S.menuHead }, t('builtinTemplates')),
                 templates.map((tpl) => h('div', {
                   key: tpl.id,
@@ -3048,15 +3141,6 @@ window.__ModuleLoader__.load({
             },
           },
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
-              fxLevel === 'vivid' && h('defs', null,
-                h('filter', { id: 'dsh-wc-glow', x: '-30%', y: '-30%', width: '160%', height: '160%' },
-                  h('feGaussianBlur', { stdDeviation: '2.2', result: 'blur' }),
-                  h('feMerge', null,
-                    h('feMergeNode', { in: 'blur' }),
-                    h('feMergeNode', { in: 'SourceGraphic' }),
-                  ),
-                ),
-              ),
               h('g', null, edgeEls),
               cutPath.length > 1 && h('polyline', {
                 points: cutPath.map((pt) => (pt.x + WORLD_PAD) + ',' + (pt.y + WORLD_PAD)).join(' '),
@@ -3328,7 +3412,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, nextEffectLevel, zoomAroundPoint, scrubZoom, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
+      __test: { topoOrder, wouldCycle, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, zoomAroundPoint, scrubZoom, buildWorkflowScript, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, distanceToEdge, edgeCurve },
     };
   },
 });

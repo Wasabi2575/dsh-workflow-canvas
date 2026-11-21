@@ -342,10 +342,30 @@ function analyzeCanvasWarnings(nodes, edges) {
       + orphans.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
   }
 
-  const hasDownstreamLead = list.some((n) => n.kind === 'lead' && reachable.has(n.id));
-  if (hasDownstreamLead) {
+  const downstreamLeads = list.filter((n) => n.kind === 'lead' && reachable.has(n.id));
+  if (downstreamLeads.length) {
     const hasOut = new Set(linkList.map((e) => e.from));
-    const deadEnds = list.filter((n) => n.kind !== 'lead' && reachable.has(n.id) && !hasOut.has(n.id));
+    const parents = new Map();
+    for (const e of linkList) {
+      if (!parents.has(e.to)) parents.set(e.to, []);
+      parents.get(e.to).push(e.from);
+    }
+    const ancestorsOf = (id) => {
+      const seen = new Set();
+      const stack = [id];
+      while (stack.length) {
+        const cur = stack.pop();
+        for (const p of parents.get(cur) || []) {
+          if (!seen.has(p)) { seen.add(p); stack.push(p); }
+        }
+      }
+      return seen;
+    };
+    const deadEnds = list.filter((n) => {
+      if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) return false;
+      const anc = ancestorsOf(n.id);
+      return downstreamLeads.some((ln) => !anc.has(ln.id));
+    });
     if (deadEnds.length) {
       warnings.push('以下子代理节点没有出边，产出未显式连入下游或终审 Lead：'
         + deadEnds.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
