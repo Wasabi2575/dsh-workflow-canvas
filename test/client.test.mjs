@@ -105,8 +105,43 @@ test('builtinTemplates returns valid acyclic templates and buildPlan accepts bla
       assert.ok(client.topoOrder(tpl.nodes, tpl.edges), tpl.id + ' is acyclic');
       const built = client.buildPlan(tpl.nodes, tpl.edges);
       assert.ok(!built.error, tpl.id + ' builds cleanly even when task is blank: ' + built.error);
+      assert.equal(client.deadEndNodeIds(tpl.nodes, tpl.edges).size, 0, tpl.id + ' has no dead-end warnings');
     }
+    const ab = templates.find((t) => t.id === 'tpl-ab');
+    assert.ok(ab && ab.nodes.some((n) => n.id === 'n_review' && n.kind === 'lead'), 'AB template ends with a terminal Lead');
   }
+});
+
+test('deadEndNodeIds warns on unlinked agents before/beside a Lead, but not on terminal agents after a Lead', () => {
+  const withDeadEnd = client.deadEndNodeIds(
+    [
+      { id: 'lead', kind: 'lead' },
+      { id: 'a', kind: 'agent' },
+      { id: 'b', kind: 'agent' },
+      { id: 'final', kind: 'lead' },
+    ],
+    [
+      { from: 'lead', to: 'a' },
+      { from: 'lead', to: 'b' },
+      { from: 'a', to: 'final' },
+    ],
+  );
+  assert.deepEqual(Array.from(withDeadEnd), ['b']);
+
+  const leafAfterLead = client.deadEndNodeIds(
+    [
+      { id: 'lead', kind: 'lead' },
+      { id: 'a', kind: 'agent' },
+      { id: 'pick', kind: 'lead' },
+      { id: 'exec', kind: 'agent' },
+    ],
+    [
+      { from: 'lead', to: 'a' },
+      { from: 'a', to: 'pick' },
+      { from: 'pick', to: 'exec' },
+    ],
+  );
+  assert.equal(leafAfterLead.size, 0, 'terminal agent strictly downstream of an intermediate Lead is not a dead-end');
 });
 
 test('nextEffectLevel cycles minimal -> standard -> vivid -> minimal', () => {
@@ -156,4 +191,15 @@ test('scrubZoom scales smoothly right/left around viewport center and stays clam
   assert.ok(Math.abs(zoomedIn.y + worldY * zoomedIn.k - cy) < 1e-6);
   assert.equal(client.scrubZoom(start, cx, cy, 2000).k, 3);
   assert.equal(client.scrubZoom(start, cx, cy, -2000).k, 0.2);
+});
+
+test('vivid edge glow does not use an objectBoundingBox SVG filter (which clips horizontal edges to 0px)', () => {
+  const src = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /url\(#dsh-wc-glow\)/, 'edges must not depend on an objectBoundingBox SVG filter');
+  const swe = client.builtinTemplates('zh').find((t) => t.id === 'tpl-swe');
+  const byId = new Map(swe.nodes.map((n) => [n.id, n]));
+  const blue = swe.edges.find((e) => e.type === 'structured');
+  assert.ok(blue, 'SWE template has a structured blue edge');
+  const curve = client.edgeCurve(byId.get(blue.from), byId.get(blue.to), blue.type);
+  assert.equal(curve.y1, curve.y2, 'horizontal structured edge exists and must remain visible');
 });
