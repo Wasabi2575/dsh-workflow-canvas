@@ -6,151 +6,118 @@
 
 English | [中文](README.zh.md) | [Mechanism & Architecture](docs/MECHANISM.md)
 
-Orchestrate subagent workflows from the DSH sidebar. Draw each step as a node, wire
-the data flow with three link types, enable it, and run it from chat — subagent nodes
-are spawned for real, Lead nodes pause the run and are performed by the conversation
-itself.
+Turn multi-agent orchestration in DSH into a visual node graph: each card is an AI role, each wire defines who feeds whom, and pressing **● ON** lets you run the whole pipeline straight from chat.
 
-Describe a workflow in one sentence and the agent sketches the whole canvas for you;
-tweak it in place afterwards with `canvas_patch`. Links make the flow obvious at a
-glance — grey carries text, blue carries JSON, purple continues the upstream session.
+- **Real parallelism**: Independent nodes run concurrently (up to 4 at once), and newly unblocked downstream nodes start the instant their inputs finish.
+- **Human-in-the-loop**: Drop a **Lead** card anywhere in the flow to pause automatically for your decision before continuing.
+- **Zero black box**: Click any subagent card to open its live chat transcript and inspect its exact output.
+- **Don't want to draw by hand?** Describe the workflow in one sentence in chat — the agent sketches the graph for you and can patch it in place anytime.
 
-![workflow canvas](docs/images/canvas-demo.png)
+![Workflow canvas overview](docs/images/canvas-demo.png)
 
 ## Installation
 
-Requires DeepSeek Harness **0.2.2** or newer (the package declares
-`engines.dsh: ">=0.2.2-rc.1 <0.3.0-0"`).
+Requires DeepSeek Harness **0.2.2** or newer (`engines.dsh: ">=0.2.2-rc.1 <0.3.0-0"`).
 
-- **From the plugin market** — open **Plugins → Discover**, search
-  *"workflow canvas"*, and install. The dshmarket entry is still awaiting
-  review; see the
-  [catalog PR](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180).
-- **From npm** — install the published package `dsh-workflow-canvas` from the
-  **Plugins** panel, or via the `plugin_manager` tool / `dsh` CLI with
-  `install_bundle` and `target: dsh-workflow-canvas`.
-- **From source** — clone the repository and install it as a local directory
-  with **Plugins → Add plugin**, pointing at the checkout.
+- **From the plugin market** — open **Plugins → Discover**, search *"workflow canvas"*, and install ([catalog PR #17180](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/17180)).
+- **From npm** — install `dsh-workflow-canvas` from the **Plugins** panel or via `plugin_manager` / `dsh` CLI (`install_bundle`).
+- **From source** — clone this repo and install it via **Plugins → Add plugin** pointing at the local folder.
 
-After installing, enable the plugin and the `workflow` tab appears in the right
-sidebar.
+Once enabled, open the **`Workflow`** tab in the right sidebar.
 
-## Quick start (30 seconds)
+---
 
-- **Zero-setup tryout**: open the right-sidebar `Workflow` tab → load a starter
-  template from `☰ Presets` → press **● ON** at top-left → send your task directly
-  in chat (active-canvas context triggers `canvas_workflow` automatically).
-- **Prompts you can copy right into chat**:
-  - **Sketch from one sentence**: *"Build a parallel research workflow on the canvas: two subagents investigate competitors and technical feasibility in parallel, pause for me (Lead) to decide, then hand off to a writer subagent."*
-  - **Patch in place**: *"Inspect the current canvas, turn Memory on for the feasibility node, and add a read-only cost-estimate node wired in parallel into plan synthesis."*
-  - **Reuse a template with a new task**: *"Run the current canvas with the task: evaluate adding a local knowledge base to this project."*
+## How to use it (5-step visual guide)
 
-## How this differs from other canvas plugins
+### 1. Place cards (or load a starter template)
 
-DSH has more than one "workflow canvas". This one orchestrates **subagents** from
-the sidebar, performs Lead steps in the conversation itself, and lets the agent
-sketch a whole canvas from one sentence. For tool-call / condition / output
-pipelines compiled to `ctx.workflows`, see
-[`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
+There are only two card types:
+- **Subagent (green top bar)**: A real child agent that does a focused job.
+- **Lead (blue top bar)**: Your main chat conversation. The leftmost entry Lead holds the overall task; an intermediate Lead **pauses the run for your decision**; a terminal Lead delivers the final review in one shot.
 
-## Nodes
+Start fastest by loading a built-in template from **`☰ Presets`**, or press **`Shift+A`** anywhere on the canvas to drop a new card (`⋯` also provides `⊞ Auto layout` and `✕ Clear canvas`):
 
-- **Subagent node** (green top bar) — spawns a child agent. Each node sets its own
-  model, reasoning effort, capability scope (`standard` / `minimal`, bounded by
-  the main chat's permission mode), fallback model, memory and role.
-- **Lead node** (blue top bar) — performed by the conversation, never spawned. The
-  entry Lead carries the overall task; intermediate Lead nodes pause for your
-  decision, while a terminal Lead finishes in one shot without a redundant callback.
+![Add a node with Shift+A and connect it](docs/images/add-node-shift-a.gif)
 
-## Links
+---
 
-| Type | Colour | Carries |
+### 2. Wire the flow (left feeds right)
+
+**Drag from a right-side dot on an upstream card to a left-side dot on a downstream card** to pass results forward.
+
+Dot colour is the channel type — **only matching colours connect**:
+| Colour | Socket | Plain-English meaning |
 |---|---|---|
-| `prompt` | grey | plain text |
-| `structured` | blue | a JSON object; the upstream node is asked for structured output automatically |
-| `session` | purple | the upstream child session, so the downstream runs **inside it** |
+| Grey | `prompt` | **Pass text**: sends the upstream summary as plain text |
+| Blue | `structured` | **Pass JSON**: automatically asks the upstream node for a JSON object |
+| Purple | `session` | **Continue the same chat**: the downstream step runs inside the upstream child session (no re-scanning context) |
 
-Drag from a right socket to a left socket, or from a left socket to a right one
-(cycles are blocked immediately). Drag a connected left socket away to detach.
+- **Disconnect a link**: **Hold right-click and sweep across any wire** to cut it (or drag a connected left dot away).
+- **Dashed cards = inactive (skipped)**: Unreachable nodes, solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents automatically turn **dashed** and are skipped at run time so you never waste tokens.
 
-## Canvas controls & shortcuts
+![Right-drag to cut a link and re-wire](docs/images/connect-and-cut.gif)
+
+---
+
+### 3. Configure each card independently (optional)
+
+Every subagent card can carry its own settings:
+- **Model & Reasoning**: Pair fast models for routine tasks with stronger models for synthesis/review.
+- **Scope**: `standard` (all tools) or `minimal` (read-only thinking — disables file edits and web). *Bounded by the main chat's permission mode.*
+- **Fallback**: Automatically retries once on another model if the primary one fails.
+- **Memory**: Reuses this node's previous child session across runs and restarts.
+
+![Configure model, reasoning, scope, fallback and memory per node](docs/images/node-config.gif)
+
+---
+
+### 4. Toggle `● ON` and send your task in chat
+
+Press **`● ON`** at the top-left of the canvas, then just send your task in chat — no magic phrasing needed (while enabled, a per-session runtime context automatically notifies the agent):
+
+- You can leave the entry Lead's task blank: your chat message is passed automatically as `task`.
+- At an intermediate **Lead** card, the canvas lights up **`⏸ Ready`** and hands control to you in chat; once you reply with your choice, downstream nodes resume automatically through the final Lead review.
+- To run again in the same chat: pass `reset: true`; if any node has **Memory** enabled with prior history, the agent asks whether to keep memory or start fresh (`clearMemory: true`).
+
+![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)
+
+---
+
+### 5. Click any card to watch its live subagent chat
+
+Active nodes glow blue with animated flow wires and turn green when done. **Click the status badge (`Running ↗` / `Done ↗`) at the bottom-right of any subagent card** to jump straight into its own conversation pane:
+
+![Parallel execution and clicking straight into a subagent chat](docs/images/parallel-and-inspect.gif)
+
+---
+
+## Let the agent draw or edit the canvas from chat
+
+- **Sketch from one sentence** (`canvas_generate`): *"Build a parallel research workflow on the canvas: two subagents investigate competitors and feasibility, pause for me to decide, then write the plan."*
+- **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Inspect the current canvas, turn Memory on for feasibility, and add a read-only cost-estimate node wired into plan synthesis."* (Preserves your layout.)
+
+## Shortcuts & controls
 
 | Control / Shortcut | Action |
 |---|---|
-| `Shift+A` | Open the Add Node menu at the cursor (`1` / `2` to drop immediately) |
-| Middle-drag / `Space` + left-drag | Pan the canvas (works even when starting over a node) |
-| Wheel / `⊡ Fit` / `100%` | Cursor-anchored zoom / fit all nodes in view / reset to 100% on Lead |
-| Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (preserving settings), or batch delete |
-| `Ctrl+Z` / `Esc` | Undo structural edits / close open popups and menus |
-| Right-drag across links | Cut swept links (toggle under `⋯`); `⋯` also has `⊞ Auto layout`, `✕ Clear canvas`, `⇧ Copy JSON`, and `Visual effects` (Minimal / Standard / Vivid) |
+| `Shift+A` | Add a node at the cursor (`1` = Subagent, `2` = Lead) |
+| Middle-drag / `Space` + left-drag | Pan the canvas |
+| Wheel / `⊡ Fit` / `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
+| Marquee drag + `Ctrl+D` / `Delete` | Multi-select move, duplicate (with settings), or batch delete |
+| Right-drag across wires | Cut links (toggle under `⋯`) |
+| `Ctrl+Z` / `Esc` | Undo structural edit / close popups |
+| `⋯` menu | Import / Copy JSON, Auto layout, Clear canvas, Visual effects (Minimal / Standard / Vivid) |
 
-## Running
+## Presets, sharing & limits
 
-1. Write the task in the entry Lead, and a role for each node (or leave the task
-   blank — while enabled, sending a task in chat passes it via `task` automatically).
-2. Connect the nodes — unreachable nodes, solo chained Leads without any subagent
-   upstream, and dangling dead-end subagents are drawn **dashed** and skipped at run time.
-3. Press the **● ON / ○ OFF** pill at the top-left of the canvas. While enabled,
-   a per-session dynamic prompt context notifies the agent automatically (supports
-   `reset: true` to restart and `clearMemory: true` to forget saved node memories).
-4. Subagents run in an **event-driven concurrency pool** (up to 4 at a time):
-   newly unblocked children start immediately without waiting for slower siblings.
-   Click a subagent's status pill (e.g. `Done ↗`) to jump straight to its live chat pane.
-
-## Lead handover
-
-When a `session` link points into a Lead node, the run reports that child session
-id at the Lead step, so the conversation can keep talking to that agent instead of
-only receiving its text.
-
-## Inspecting, generating and editing the canvas from chat
-
-- `canvas_inspect` — read the current canvas (enabled state, task, node ids/models/roles
-  and links), so the agent can safely patch manually edited or preset graphs.
-- `canvas_generate` — build a whole canvas from a node/edge sketch (replaces it).
-- `canvas_patch` — edit it in place: update nodes by id, add or remove nodes and
-  links, leaving positions and everything else untouched.
-
-Generate and patch both write the canvas to the workspace, and the panel picks it
-up within ~1.5s.
-
-## Presets & sharing
-
-`☰ Presets` ships with ready-to-run starter templates; name any canvas and press
-`☆ Save` to keep your own. Presets live in browser storage; to share across
-machines or between Desktop and `dsh web`, use `⋯ → ⇧ Copy JSON` and `⇩ Import`.
-
-## Memory
-
-A node with memory on reuses its child session: within a run, across runs in the
-same session, and — through the persisted child id — after a restart, where the
-Host cold-resumes it. A resume the Host refuses is forgotten and the node starts
-fresh.
-
-## Limits
-
-- Saved presets live in browser storage and do not auto-sync between the Desktop
-  app and `dsh web`, nor across machines (use `⋯ → ⇧ Copy JSON` and `⇩ Import`
-  to move or share them).
-- A subagent's capability scope (`standard` / `minimal`) only narrows its toolset
-  within the main chat's permission/sandbox ceiling and cannot elevate privileges.
-- Up to 4 nodes run at a time.
-
-## How the agent discovers and uses the canvas
-
-- **While enabled (zero-config)**: The plugin hooks into DSH's `systemPrompt.context`
-  to inject a lightweight per-session reminder only for the session whose canvas is
-  **● ON** (zero injection for disabled or subagent sessions). Sending a task
-  triggers `canvas_workflow` automatically, and replying at an intermediate Lead
-  resumes the run.
-- **When disabled (sketching from scratch)**: The bundled guide ships as the
-  `workflow-canvas` skill and is loaded on demand via trigger keywords and
-  `canvas_*` tool descriptions — no `AGENTS.md` boilerplate required.
+- **Presets & sharing**: `☰ Presets` includes 3 starter templates plus **New blank canvas**; save your own with `☆ Save`. Custom presets live in browser storage — use `⋯ → ⇧ Copy JSON` and `⇩ Import` to share across devices.
+- **How this differs from other canvas plugins**: Built for **multi-subagent orchestration + conversation Lead gates**; for `ctx.workflows` tool/condition pipelines, see [`@piedpiper911/dsh-workflow-canvas`](https://github.com/PiedPiper911/dsh-workflow-canvas).
+- **Limits**: Up to 4 subagents run concurrently; per-node `Scope` only narrows tools within the main chat's permission/sandbox ceiling.
 
 ## Development & internals
 
-- For the full architecture, Client ↔ Host sync bridge, DAG wave execution, runtime link semantics, cold resume, and live status tracking, see [**Mechanism & Architecture**](docs/MECHANISM.md) ([中文](docs/MECHANISM.zh.md)).
-- Edit `client.js` / `index.js` and reload the app; client changes hot-reload, Host changes need a restart. Run `npm test` for the test suite. See [docs/DETAIL.md](docs/DETAIL.md) for the compact plugin detail page.
+- See [**Mechanism & Architecture**](docs/MECHANISM.md) ([中文](docs/MECHANISM.zh.md)) for the Client ↔ Host bridge, event-driven concurrency pool, link semantics, and cold resume.
+- Edit `client.js` / `index.js` and reload (Host changes require restart). Run `npm test` for the test suite. Compact plugin page: [docs/DETAIL.md](docs/DETAIL.md).
 
 ## License
 
