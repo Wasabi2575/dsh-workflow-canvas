@@ -63,7 +63,8 @@ are performed by the conversation itself.
 
 | Tool | Effect |
 |---|---|
-| `canvas_inspect` | reads the current session canvas (enabled state, task, nodes, links) |
+| `canvas_inspect` | reads the current session canvas (enabled state, active preset name, task, nodes, links) |
+| `canvas_preset` | lists saved user presets & built-in templates (`list`), switches the canvas to a preset/template (`apply`), or enables/disables the canvas in place (`toggle`) — works even while disabled |
 | `canvas_generate` | replaces the canvas with a node/edge sketch |
 | `canvas_patch` | edits in place: update nodes by id, add/remove nodes and links |
 

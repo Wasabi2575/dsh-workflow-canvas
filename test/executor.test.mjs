@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, orderNodes, upstreamOf, downstreamLabels, parsePayload, clipUpstreamOutput, briefFor, normalizeMaxIterations, extractJsonObjects, parseStrictJsonObject, parseStrictConditionJson, parseConditionDecision, clipSafeSlice, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, isTransientFailure, safeSessionFileBase, writeFileAtomic, pruneMapLRU, touchMapLRU, cleanupStaleCanvasFiles, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, parsePayload, clipUpstreamOutput, briefFor, normalizeMaxIterations, extractJsonObjects, parseStrictJsonObject, parseStrictConditionJson, parseConditionDecision, clipSafeSlice, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, syncPresetsCatalog, handleCanvasPreset, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, isTransientFailure, safeSessionFileBase, writeFileAtomic, pruneMapLRU, touchMapLRU, cleanupStaleCanvasFiles, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -3244,4 +3244,149 @@ test('input validation & classifier hardening: null/blank defaults, self-loop, e
   assert.ok(emptyFrom.error && emptyFrom.error.includes('非空字符串数组'));
   const badItemFrom = await executePlan(scope, basePlan, { fromNodes: ['  ', 123] }, { agent: { id: 's-bad-fn' } });
   assert.ok(badItemFrom.error && badItemFrom.error.includes('非字符串或空白项'));
+});
+
+test('canvas_preset (#14): syncs user presets via /canvas-sync, lists/applies presets & built-in templates, toggles enabled in place, and guards paused runs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-preset-'));
+  try {
+    const commands = new Map();
+    const tools = new Map();
+    const fakeCtx = {
+      inject(_names, fn) {
+        const scope = {
+          effect: (cb) => cb(),
+          commands: { register: (c) => { commands.set(c.name, c); return () => {}; } },
+          tools: { register: (t) => { tools.set(t.name, t); return () => {}; } },
+          sessions: { get: () => ({ header: { cwd: dir } }) },
+          subagents: {
+            startActivation() {
+              return Promise.resolve({
+                childId: 'kid-preset-1',
+                result: Promise.resolve({ output: [{ type: 'text', text: 'step ok' }], stopReason: 'completed' }),
+                dispose: () => Promise.resolve(),
+              });
+            },
+          },
+        };
+        fn(scope);
+      },
+    };
+    apply(fakeCtx);
+    const syncCmd = commands.get('canvas-sync');
+    const presetTool = tools.get('canvas_preset');
+    const wfTool = tools.get('canvas_workflow');
+    assert.ok(presetTool, 'canvas_preset tool is registered');
+
+    const sid = 's-preset-' + Date.now();
+    // 1) Sync canvas + user presets catalog via /canvas-sync
+    const syncPayload = encodeURIComponent(JSON.stringify({
+      enabled: true,
+      presetName: '代码审查流',
+      plan: {
+        task: '旧任务',
+        nodes: [{ id: 'a', kind: 'agent', label: '扫描', role: 'scan' }],
+        edges: [{ from: 'lead', to: 'a', type: 'prompt' }],
+      },
+      presets: {
+        '代码审查流': {
+          direction: 'tb',
+          nodes: [
+            { id: 'lead', kind: 'lead', task: '审查 PR' },
+            { id: 'r1', kind: 'agent', label: '安全审计', role: 'audit', preset: 'minimal' },
+            { id: 'r2', kind: 'lead', label: 'Lead 终审', role: 'review' },
+          ],
+          edges: [
+            { from: 'lead', to: 'r1', type: 'prompt' },
+            { from: 'r1', to: 'r2', type: 'prompt' },
+          ],
+        },
+        '代码发布流': {
+          direction: 'lr',
+          nodes: [
+            { id: 'lead', kind: 'lead', task: '发布版本' },
+            { id: 'p1', kind: 'agent', label: '打包检查', role: 'pack' },
+          ],
+          edges: [{ from: 'lead', to: 'p1', type: 'prompt' }],
+        },
+      },
+    }));
+    assert.equal(syncCmd.handler({ agent: { id: sid }, rawInput: syncPayload }).kind, 'success');
+
+    // Active context includes active preset name and mismatch guidance
+    const ctxText = buildActiveCanvasContext(sid);
+    assert.ok(ctxText.includes('预设「代码审查流」'), 'active context surfaces preset name');
+    assert.ok(ctxText.includes('canvas_preset'), 'active context guides mismatch handling via canvas_preset');
+    assert.equal(inspectPlan(sid).presetName, '代码审查流');
+
+    // 2) action="list" returns current state + 2 user presets + 5 built-in templates
+    const listed = presetTool.execute({ action: 'list' }, { agent: { id: sid } });
+    assert.equal(listed.current.enabled, true);
+    assert.equal(listed.current.presetName, '代码审查流');
+    assert.equal(listed.userPresets.length, 2);
+    assert.equal(listed.builtinTemplates.length, 5);
+    const listRendered = presetTool.output.render({}, listed)[0].text;
+    assert.ok(listRendered.includes('代码审查流') && listRendered.includes('tpl-cond'));
+
+    // 3) Ambiguous substring rejected with candidate list
+    const amb = presetTool.execute({ action: 'apply', name: '代码' }, { agent: { id: sid } });
+    assert.ok(amb.error && amb.error.includes('代码审查流') && amb.error.includes('代码发布流'));
+
+    // 4) Apply user preset by unique substring + task override; verify .dsh/canvas/<sid>.json written
+    const appliedUser = presetTool.execute({ action: 'apply', name: '发布流', task: '发 v1.7.0' }, { agent: { id: sid } });
+    assert.equal(appliedUser.source, 'user');
+    assert.equal(appliedUser.name, '代码发布流');
+    assert.equal(appliedUser.enabled, true);
+    assert.equal(appliedUser.delivered, true);
+    const published = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.json'), 'utf8'));
+    assert.equal(published.canvas.presetName, '代码发布流');
+    assert.equal(published.canvas.direction, 'lr', 'user preset preserves its saved direction');
+    assert.equal(published.canvas.enabled, true);
+    assert.equal(published.canvas.nodes.find((n) => n.id === 'lead').task, '发 v1.7.0');
+
+    // 5) Toggle disabled in place (preserves nodes, publishes merge toggle)
+    const disabledRes = presetTool.execute({ action: 'toggle', enabled: false }, { agent: { id: sid } });
+    assert.equal(disabledRes.enabled, false);
+    assert.equal(disabledRes.delivered, true);
+    assert.equal(inspectPlan(sid).enabled, false);
+    assert.equal(buildActiveCanvasContext(sid), '', 'disabled canvas injects empty context');
+    const toggleDoc = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.json'), 'utf8'));
+    assert.equal(toggleDoc.canvas.mode, 'merge');
+    assert.equal(toggleDoc.canvas.nodes.length, 0);
+    assert.equal(toggleDoc.canvas.enabled, false);
+
+    // 6) Works even while disabled: apply built-in template by id (`tpl-cond`) and auto-enable
+    const appliedBuiltin = presetTool.execute({ action: 'apply', name: 'tpl-cond' }, { agent: { id: sid } });
+    assert.equal(appliedBuiltin.source, 'builtin');
+    assert.equal(appliedBuiltin.enabled, true);
+    assert.equal(inspectPlan(sid).enabled, true);
+    assert.ok(inspectPlan(sid).nodes.some((n) => n.kind === 'condition'));
+    const builtinPublished = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.json'), 'utf8'));
+    assert.equal(builtinPublished.canvas.direction, undefined, 'built-in template omits direction so user lr/tb preference is respected');
+
+    // 7) Guard: refuses switching preset or disabling while paused at an intermediate Lead gate
+    const syncPaused = encodeURIComponent(JSON.stringify({
+      enabled: true,
+      plan: {
+        task: '暂停保护测试',
+        nodes: [
+          { id: 'a', kind: 'agent', label: 'A', role: 'r1' },
+          { id: 'l1', kind: 'lead', label: '拍板', role: 'confirm' },
+          { id: 'b', kind: 'agent', label: 'B', role: 'r2' },
+        ],
+        edges: [
+          { from: 'lead', to: 'a', type: 'prompt' },
+          { from: 'a', to: 'l1', type: 'prompt' },
+          { from: 'l1', to: 'b', type: 'prompt' },
+        ],
+      },
+    }));
+    syncCmd.handler({ agent: { id: sid }, rawInput: syncPaused });
+    const paused = await wfTool.execute({}, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(paused.status, 'need-lead');
+    assert.ok(handleCanvasPreset(null, sid, { action: 'apply', name: 'tpl-swe' }).error.includes('待拍板'));
+    assert.ok(handleCanvasPreset(null, sid, { action: 'toggle', enabled: false }).error.includes('待拍板'));
+    syncPresetsCatalog({});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -71,9 +71,19 @@ import {
   cleanupStaleCanvasFiles,
   buildRunSummarySnapshot,
 } from './lib/telemetry.js';
+import {
+  MAX_STORED_PRESETS,
+  BUILTIN_TEMPLATES,
+  sanitizePresetCatalog,
+  summarizePresetNodes,
+  resolvePresetByName,
+  presetToPlanAndCanvas,
+} from './lib/presets.js';
 
 /** Latest canvas payload per Session id (LRU-bounded). */
 const canvasBySession = new Map();
+/** Profile-wide user workflow presets synced from the canvas client (`name -> { nodes, edges, direction }`). */
+const presetsByName = new Map();
 /** Read a session canvas and refresh its LRU recency so active old sessions are never evicted. */
 function getCanvasLRU(sid) {
   if (!sid) return undefined;
@@ -124,6 +134,13 @@ function loadStore() {
         touchMapLRU(childByNode, node, child, MAX_CHILD_SLOTS);
       }
     }
+    if (doc && doc.presets && typeof doc.presets === 'object') {
+      const cleanPresets = sanitizePresetCatalog(doc.presets);
+      presetsByName.clear();
+      for (const [name, preset] of Object.entries(cleanPresets)) {
+        touchMapLRU(presetsByName, name, preset, MAX_STORED_PRESETS);
+      }
+    }
     lastSavedStorePath = path;
     lastSavedStoreJson = raw;
   } catch (_e) {
@@ -137,9 +154,11 @@ function saveStore() {
   try {
     pruneMapLRU(canvasBySession, MAX_STORED_SESSIONS);
     pruneMapLRU(childByNode, MAX_CHILD_SLOTS);
+    pruneMapLRU(presetsByName, MAX_STORED_PRESETS);
     const json = JSON.stringify({
       canvas: Object.fromEntries(canvasBySession),
       children: Object.fromEntries(childByNode),
+      presets: Object.fromEntries(presetsByName),
     });
     if (path === lastSavedStorePath && json === lastSavedStoreJson) return;
     writeFileAtomic(path, json);
@@ -795,6 +814,9 @@ function inspectPlan(sid) {
     warnings: analyzeCanvasWarnings(nodes, edges),
     paused: Boolean(sid && runBySession.get(sid) && runBySession.get(sid).waitingLead),
   };
+  if (typeof payload.presetName === 'string' && payload.presetName.trim()) {
+    out.presetName = payload.presetName.trim();
+  }
   if (planRefs) out.refs = planRefs;
   // Never attach `error: undefined`: DSH's lossless JSON validator rejects keys with undefined values.
   if (payload.error) out.error = String(payload.error);
@@ -847,10 +869,14 @@ function buildActiveCanvasContext(sid) {
   const globalRefs = normalizeRefs(plan && plan.refs) || [];
   const prefix = String(sid) + '::';
   const hasMemory = nodes.some((n) => n.keepSession && (liveChild.has(prefix + n.id) || childByNode.has(prefix + n.id)));
-  const metaParts = [
+  const metaParts = [];
+  if (typeof payload.presetName === 'string' && payload.presetName.trim()) {
+    metaParts.push('预设「' + payload.presetName.trim() + '」');
+  }
+  metaParts.push(
     nodes.length + ' 节点：' + preview,
     '总任务' + (hasTask ? '已填' : '未填'),
-  ];
+  );
   if (loopCount > 0) metaParts.push(loopCount + ' 条受控回环（自动按条件重试与超限熔断）');
   if (globalRefs.length > 0) metaParts.push('全局参考 ×' + globalRefs.length);
   const lines = [
@@ -859,8 +885,8 @@ function buildActiveCanvasContext(sid) {
     '- 用户布置任务或说「开始/执行/跑一次」：直接调 `canvas_workflow`（'
       + (hasTask ? '沿用入口任务，有新任务则传 task' : '传入 task 参数')
       + '），勿绕过画布直接手做。',
-    '- 修改画布结构/模型/分工/参考清单、条件分支、回环或连线：先 `canvas_inspect` 再 `canvas_patch`，勿直接运行。',
-    '- 仅闲聊、无关问题或要求停用画布时不调 `canvas_workflow`。',
+    '- 若画布与本轮需求明显不符，先确认再用 `canvas_preset` 切换或禁用；修改节点/参考清单、条件分支、回环先 `canvas_inspect` 再 `canvas_patch`。',
+    '- 仅闲聊或无关问题时不调 `canvas_workflow`。',
   ];
   if (hasMemory) {
     lines.push('- 已有开启「记忆」的子代理会话：若用户要求重跑，先问保留记忆（`reset: true`）或清空记忆（`reset: true, clearMemory: true`）。');
@@ -881,6 +907,149 @@ function buildActiveCanvasContext(sid) {
     }
   }
   return lines.join('\n');
+}
+
+/** Replace the profile-wide preset catalog with sanitized entries from the client. */
+function syncPresetsCatalog(rawPresets) {
+  const clean = sanitizePresetCatalog(rawPresets);
+  presetsByName.clear();
+  for (const [name, preset] of Object.entries(clean)) {
+    touchMapLRU(presetsByName, name, preset, MAX_STORED_PRESETS);
+  }
+  return presetsByName.size;
+}
+
+/**
+ * Core handler for `canvas_preset`: list presets/templates, switch the current session
+ * canvas to a named preset/template, or enable/disable the current session canvas.
+ */
+function handleCanvasPreset(scope, sid, args) {
+  const opts = args && typeof args === 'object' ? args : {};
+  const action = typeof opts.action === 'string' ? opts.action.trim().toLowerCase() : '';
+  if (action !== 'list' && action !== 'apply' && action !== 'toggle') {
+    return { error: '参数 action 必须是 "list"、"apply" 或 "toggle"。' };
+  }
+
+  const key = sid ? String(sid) : '';
+  const payload = key ? getCanvasLRU(key) : undefined;
+  const isRunning = Boolean(key && activeRunBySession.has(key));
+  const isPaused = Boolean(key && runBySession.get(key) && runBySession.get(key).waitingLead);
+
+  if (action === 'list') {
+    const curNodes = payload && payload.plan && Array.isArray(payload.plan.nodes) ? payload.plan.nodes : [];
+    const curSum = summarizePresetNodes(curNodes);
+    const current = {
+      hasCanvas: Boolean(payload && payload.plan),
+      enabled: Boolean(payload && payload.enabled),
+      presetName: (payload && typeof payload.presetName === 'string') ? payload.presetName : '',
+      task: String((payload && payload.plan && payload.plan.task) || ''),
+      nodeCount: curSum.nodeCount,
+      preview: curSum.preview,
+      running: isRunning,
+      paused: isPaused,
+    };
+    const compactPresets = presetsByName.size > 20;
+    const userPresets = Array.from(presetsByName.entries()).map(([name, preset]) => {
+      const sum = summarizePresetNodes(preset.nodes);
+      return compactPresets
+        ? { name, direction: preset.direction || 'lr', nodeCount: sum.nodeCount }
+        : { name, direction: preset.direction || 'lr', nodeCount: sum.nodeCount, preview: sum.preview };
+    });
+    const builtinTemplates = BUILTIN_TEMPLATES.map((tpl) => {
+      const sum = summarizePresetNodes(tpl.nodes);
+      return {
+        id: tpl.id,
+        name: tpl.name,
+        nameEn: tpl.nameEn,
+        nodeCount: sum.nodeCount,
+        preview: sum.preview,
+      };
+    });
+    return { action: 'list', current, userPresets, builtinTemplates };
+  }
+
+  if (!key) {
+    return { error: '无法识别当前会话 ID，无法操作画布预设或开关。' };
+  }
+
+  if (action === 'toggle') {
+    if (typeof opts.enabled !== 'boolean') {
+      return { error: 'action="toggle" 必须传入布尔参数 enabled（true 启用 / false 禁用）。' };
+    }
+    if (!opts.enabled && (isRunning || isPaused)) {
+      return { error: '当前会话有正在运行或待拍板的工作流，请先调用 canvas_workflow({ cancel: true }) 终止后再禁用画布。' };
+    }
+    if (!payload || !payload.plan) {
+      if (opts.enabled) {
+        return { error: '当前会话还没有画布数据，请先用 canvas_preset({ action: "apply", name: "..." }) 载入预设，或用 canvas_generate 生成画布。' };
+      }
+      return { action: 'toggle', enabled: false, delivered: false, presetName: '' };
+    }
+    const nextPayload = { ...payload, enabled: opts.enabled };
+    touchMapLRU(canvasBySession, key, nextPayload, MAX_STORED_SESSIONS);
+    const delivered = publishCanvas(scope, key, {
+      mode: 'merge',
+      nodes: [],
+      edges: [],
+      enabled: opts.enabled,
+    });
+    saveStore();
+    return {
+      action: 'toggle',
+      enabled: opts.enabled,
+      delivered,
+      presetName: typeof nextPayload.presetName === 'string' ? nextPayload.presetName : '',
+    };
+  }
+
+  // action === 'apply'
+  if (isRunning || isPaused) {
+    return { error: '当前会话有正在运行或待拍板的工作流，请先调用 canvas_workflow({ cancel: true }) 终止后再切换预设。' };
+  }
+  const query = typeof opts.name === 'string' ? opts.name.trim() : '';
+  if (!query) {
+    return { error: 'action="apply" 必须传入要切换的预设名称或内置模板 ID（可先调 action="list" 查看）。' };
+  }
+  const match = resolvePresetByName(query, presetsByName);
+  if (match.ambiguous) {
+    return { error: '名称「' + query + '」匹配到多个预设，请指定更准确的名称：' + match.ambiguous.join('、') };
+  }
+  if (match.notFound || !match.preset) {
+    const avail = [
+      ...Array.from(presetsByName.keys()),
+      ...BUILTIN_TEMPLATES.map((t) => t.id),
+    ];
+    return { error: '未找到名为「' + query + '」的预设或内置模板。可用项：' + avail.join('、') };
+  }
+  const nextEnabled = typeof opts.enabled === 'boolean' ? opts.enabled : true;
+  const converted = presetToPlanAndCanvas(match.preset, {
+    task: opts.task,
+    enabled: nextEnabled,
+    presetName: match.name,
+    preserveDirection: match.source === 'user',
+  });
+  if (converted.error) return { error: converted.error };
+  const { canvasDoc, plan, warnings } = converted;
+  const delivered = publishCanvas(scope, key, canvasDoc);
+  touchMapLRU(canvasBySession, key, {
+    enabled: nextEnabled,
+    presetName: match.name,
+    plan,
+  }, MAX_STORED_SESSIONS);
+  runBySession.delete(key);
+  lastRunBySession.delete(key);
+  publishRunState(scope, key, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
+  saveStore();
+  return {
+    action: 'apply',
+    name: match.name,
+    source: match.source,
+    enabled: nextEnabled,
+    delivered,
+    nodeCount: plan.nodes.length,
+    edgeCount: plan.edges.length,
+    warnings,
+  };
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -1956,7 +2125,7 @@ async function executePlan(scope, plan, args, exec) {
 
 /** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
 const SKILL_NAME = 'workflow-canvas';
-const SKILL_DESCRIPTION = 'Workflow canvas (画布 / 工作流 / 编排 / 条件分支 / 回环重试): inspect, draw, edit, run or cancel a node graph of DSH subagents, condition judges, Lead gates, controlled retry loops, reference lists, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.';
+const SKILL_DESCRIPTION = 'Workflow canvas (画布/工作流/预设/条件分支/回环): inspect, switch presets, toggle, draw, edit, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow.';
 function skillPath() {
   try {
     return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));
@@ -2037,6 +2206,10 @@ export function apply(ctx) {
               if (!id) return { kind: 'error', text: 'no session' };
               const prev = canvasBySession.get(id);
               const next = parsePayload(rawInput);
+              if (next && next.presets && typeof next.presets === 'object' && !Array.isArray(next.presets)) {
+                syncPresetsCatalog(next.presets);
+                delete next.presets;
+              }
               touchMapLRU(canvasBySession, id, next, MAX_STORED_SESSIONS);
               const curRun = runBySession.get(id);
               const sameActivePlan = Boolean(
@@ -2079,21 +2252,21 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_generate',
-          description: 'Build a workflow canvas for this session from a node/edge sketch. Entry Lead (id="lead") is created automatically with the top-level task — do NOT add a separate entry Lead node; wire first-wave nodes from "lead". Only downstream non-entry Lead nodes pause for need-lead. Load the `workflow-canvas` skill first for node fields and link semantics.',
+          description: 'Build a workflow canvas from a node/edge sketch. Entry Lead (id="lead") is auto-created for task — wire first-wave nodes from "lead". Only non-entry Leads pause. Load `workflow-canvas` skill for full field/link rules.',
           parameters: {
             type: 'object',
             properties: {
-              task: { type: 'string', description: 'Overall task written into the auto-created entry Lead node (id="lead").' },
-              refs: { type: 'array', description: 'Optional global reference files, URLs, or rules attached to the entry Lead and injected into all subagents.', items: { type: 'string' } },
+              task: { type: 'string', description: 'Top-level task on entry Lead.' },
+              refs: { type: 'array', description: 'Global reference paths/URLs/rules.', items: { type: 'string' } },
               nodes: {
                 type: 'array',
-                description: 'Nodes in any order (do not include an entry Lead — wire from "lead" instead). Give each an id or ref so edges can point at it.',
+                description: 'Non-entry nodes (give each id or ref).',
                 items: {
                   type: 'object',
                   properties: {
                     id: { type: 'string' },
-                    ref: { type: 'string', description: 'Temporary handle for edges; the tool assigns the real id.' },
-                    entry: { type: 'boolean', description: 'Optional: set true only if customizing the entry Lead node itself.' },
+                    ref: { type: 'string' },
+                    entry: { type: 'boolean' },
                     kind: { type: 'string', enum: ['agent', 'lead', 'condition'] },
                     label: { type: 'string' },
                     role: { type: 'string' },
@@ -2106,20 +2279,9 @@ export function apply(ctx) {
                     keepSession: { type: 'boolean' },
                     fallbackModel: { type: 'string' },
                     fallbackProvider: { type: 'string' },
-                    refs: {
-                      type: 'array',
-                      description: 'Optional reference files, paths, or rules attached to this node and injected into its brief.',
-                      items: { type: 'string' },
-                    },
-                    branches: {
-                      type: 'array',
-                      description: 'Optional (condition nodes only): custom switch/case branch names (strings or { id, label }, 2 or more). Omit for default true/false.',
-                      items: {},
-                    },
-                    multiMatch: {
-                      type: 'boolean',
-                      description: 'Optional (condition nodes only): true to allow matching multiple branches in parallel; false (default) picks at most 1 branch (or none if unmatched).',
-                    },
+                    refs: { type: 'array', items: { type: 'string' } },
+                    branches: { type: 'array', description: 'Condition switch/case branches (2+).', items: {} },
+                    multiMatch: { type: 'boolean', description: 'Condition: match multiple branches.' },
                   },
                 },
               },
@@ -2131,9 +2293,9 @@ export function apply(ctx) {
                     from: { type: 'string' },
                     to: { type: 'string' },
                     type: { type: 'string', enum: ['prompt', 'structured', 'session-ref'] },
-                    branch: { type: 'string', description: 'For edges leaving a condition node: "true" / "false" (default binary) or one of the condition node branch ids.' },
-                    loop: { type: 'boolean', description: 'Optional (condition outgoing edge only): set true to mark a controlled retry back-edge pointing to a strict ancestor node.' },
-                    maxIterations: { type: 'integer', minimum: 1, maximum: 10, description: 'Optional (loop edges only): max retry loops before circuit-breaking (1–10, default 3).' },
+                    branch: { type: 'string', description: 'Condition branch id ("true"/"false" or custom).' },
+                    loop: { type: 'boolean', description: 'Condition retry back-edge to strict ancestor.' },
+                    maxIterations: { type: 'integer', minimum: 1, maximum: 10 },
                   },
                   required: ['from', 'to'],
                 },
@@ -2221,16 +2383,16 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_patch',
-          description: 'Edit the current canvas in place: update the given nodes by id, add new ones, remove some, and add or remove links. Everything else, including node positions, is left alone. Prefer this over canvas_generate for edits; load the `workflow-canvas` skill first if unsure.',
+          description: 'Edit the current canvas in place (keeps layout): update/add/remove nodes and links. Prefer over canvas_generate for edits.',
           parameters: {
             type: 'object',
             properties: {
-              task: { type: 'string', description: 'Optional: update the overall task in the entry Lead node.' },
-              refs: { type: 'array', description: 'Optional: replace global reference files/rules on the entry Lead node.', items: { type: 'string' } },
-              nodes: { type: 'array', description: 'Nodes to update or add. Existing ids are merged field by field.', items: { type: 'object' } },
-              removeNodes: { type: 'array', description: 'Node ids to delete.', items: { type: 'string' } },
-              edges: { type: 'array', description: 'Links to add.', items: { type: 'object' } },
-              removeEdges: { type: 'array', description: 'Links to delete, matched by from/to.', items: { type: 'object' } },
+              task: { type: 'string', description: 'Entry Lead task.' },
+              refs: { type: 'array', description: 'Replace global refs.', items: { type: 'string' } },
+              nodes: { type: 'array', description: 'Nodes to merge by id or add.', items: { type: 'object' } },
+              removeNodes: { type: 'array', items: { type: 'string' } },
+              edges: { type: 'array', items: { type: 'object' } },
+              removeEdges: { type: 'array', description: 'Match by from/to.', items: { type: 'object' } },
             },
           },
           output: {
@@ -2296,7 +2458,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_inspect',
-          description: 'Read the current session workflow canvas (enabled status, overall task, nodes with ids/models/roles, links, and whether a run is paused at a Lead step). Call this before canvas_patch when the user edited the canvas manually or loaded a preset.',
+          description: 'Read current session canvas (enabled, presetName, task, nodes, links, paused). Call before canvas_patch.',
           parameters: {
             type: 'object',
             properties: {},
@@ -2308,6 +2470,7 @@ export function apply(ctx) {
               properties: {
                 hasCanvas: { type: 'boolean' },
                 enabled: { type: 'boolean' },
+                presetName: { type: 'string' },
                 task: { type: 'string' },
                 refs: { type: 'array', items: { type: 'string' } },
                 nodes: { type: 'array' },
@@ -2323,7 +2486,9 @@ export function apply(ctx) {
                 return [{ type: 'text', text: '当前会话尚未同步画布。请让用户在右侧 Workflow 画布点「启用」或「同步」，或直接用 canvas_generate 生成新画布。' }];
               }
               const head = [
-                '画布状态：' + (v.enabled ? '● 已启用' : '○ 已禁用') + (v.paused ? '（当前暂停在 Lead 步骤）' : ''),
+                '画布状态：' + (v.enabled ? '● 已启用' : '○ 已禁用')
+                  + (v.presetName ? '（预设：' + v.presetName + '）' : '')
+                  + (v.paused ? '（当前暂停在 Lead 步骤）' : ''),
                 '总任务：' + (v.task || '（未填写，运行时可通过 task 参数指定）'),
               ];
               if (Array.isArray(v.refs) && v.refs.length) {
@@ -2376,22 +2541,113 @@ export function apply(ctx) {
       }
     });
 
+    ctx.inject(['tools', 'sessions'], (scope) => {
+      try {
+        scope.effect(() => scope.tools.register({
+          name: 'canvas_preset',
+          description: 'List/apply workflow presets or templates, or toggle the session canvas on/off (works when disabled; confirm before switching mismatched workflows).',
+          parameters: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: ['list', 'apply', 'toggle'] },
+              name: { type: 'string', description: 'Preset name or template id (for apply).' },
+              enabled: { type: 'boolean', description: 'Enable/disable state (required for toggle; default true for apply).' },
+              task: { type: 'string', description: 'Optional entry task override (for apply).' },
+            },
+            required: ['action'],
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                action: { type: 'string' },
+                current: { type: 'object' },
+                userPresets: { type: 'array' },
+                builtinTemplates: { type: 'array' },
+                name: { type: 'string' },
+                source: { type: 'string' },
+                enabled: { type: 'boolean' },
+                delivered: { type: 'boolean' },
+                presetName: { type: 'string' },
+                nodeCount: { type: 'number' },
+                edgeCount: { type: 'number' },
+                warnings: { type: 'array', items: { type: 'string' } },
+                error: { type: 'string' },
+              },
+            },
+            render: (_args, value) => {
+              const v = value || {};
+              if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
+              if (v.action === 'list') {
+                const cur = v.current || {};
+                const curLine = cur.hasCanvas
+                  ? ((cur.enabled ? '● 已启用' : '○ 已禁用')
+                    + (cur.presetName ? ' · 预设「' + cur.presetName + '」' : '')
+                    + ' · ' + (cur.nodeCount || 0) + ' 节点'
+                    + (cur.preview ? '（' + cur.preview + '）' : '')
+                    + (cur.running ? ' [运行中]' : (cur.paused ? ' [待拍板]' : '')))
+                  : '当前会话尚未同步画布';
+                const uList = Array.isArray(v.userPresets) && v.userPresets.length
+                  ? v.userPresets.map((p) => '- ' + p.name + '（' + p.nodeCount + ' 节点' + (p.preview ? '：' + p.preview : '') + '）').join('\n')
+                  : '（暂无已同步的用户预设；在右侧画布保存预设并同步一次后即可跨会话列出）';
+                const bList = Array.isArray(v.builtinTemplates)
+                  ? v.builtinTemplates.map((t) => '- [' + t.id + '] ' + t.name + '（' + t.nodeCount + ' 节点）').join('\n')
+                  : '';
+                return [{
+                  type: 'text',
+                  text: '当前画布：' + curLine
+                    + '\n\n用户预设（' + ((v.userPresets && v.userPresets.length) || 0) + '）：\n' + uList
+                    + '\n\n内置示例模板（' + ((v.builtinTemplates && v.builtinTemplates.length) || 0) + '）：\n' + bList,
+                }];
+              }
+              if (v.action === 'toggle') {
+                return [{
+                  type: 'text',
+                  text: (v.enabled ? '已启用当前会话画布' : '已禁用当前会话画布')
+                    + (v.presetName ? '（预设：' + v.presetName + '）' : '')
+                    + (v.delivered ? '（右侧画布已同步）' : '（已更新后端状态）'),
+                }];
+              }
+              const warnBlock = Array.isArray(v.warnings) && v.warnings.length
+                ? '\n⚠ 结构提示：\n' + v.warnings.map((w) => '- ' + w).join('\n')
+                : '';
+              return [{
+                type: 'text',
+                text: '已切换到' + (v.source === 'builtin' ? '内置模板' : '用户预设')
+                  + '「' + v.name + '」（' + v.nodeCount + ' 个节点、' + v.edgeCount + ' 条连线，状态：'
+                  + (v.enabled ? '● 已启用' : '○ 已禁用') + '）'
+                  + (v.delivered ? '，右侧画布已自动更新。' : '。')
+                  + warnBlock,
+              }];
+            },
+          },
+          execute: (args, exec) => {
+            const agent = exec && exec.agent;
+            const sid = agent && agent.id !== undefined ? String(agent.id) : '';
+            return handleCanvasPreset(scope, sid, args || {});
+          },
+        }), 'workflow-canvas: preset tool');
+      } catch (_e) {
+        /* tool registry unavailable */
+      }
+    });
+
     ctx.inject(['tools', 'subagents', 'sessions'], (scope) => {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_workflow',
-          description: 'Run, resume, or cancel the workflow canvas of the current session. Executes subagent and condition nodes in parallel waves with automatic branch pruning and controlled retry loops; pauses with status "need-lead" at intermediate Lead nodes (resume via leadResult, or abort via cancel: true). Also supports task override, reset, retryFailed, fromNodes, clearMemory, and maxParallel (1–8). Load the `workflow-canvas` skill first when unsure.',
+          description: 'Run, resume (leadResult), or cancel the session workflow canvas. Executes parallel waves, condition pruning & retry loops; pauses at intermediate Lead nodes with status "need-lead".',
           parameters: {
             type: 'object',
             properties: {
-              leadResult: { type: 'string', description: 'Your own output for the Lead step that was just requested.' },
-              task: { type: 'string', description: 'Optional overall task overriding the entry Lead task for this run (useful for reusing a preset).' },
-              cancel: { type: 'boolean', description: 'Stop and cancel any active or paused (waitingLead) workflow run cleanly.' },
-              reset: { type: 'boolean', description: 'Discard any paused run progress and start from the beginning.' },
-              retryFailed: { type: 'boolean', description: 'Reuse succeeded nodes from the previous run and re-run only failed, empty, or unfinished nodes along with their downstream.' },
-              fromNodes: { type: 'array', items: { type: 'string' }, description: 'Re-run only the specified node ids (or labels) and their downstream, reusing all other succeeded nodes from the previous run.' },
-              clearMemory: { type: 'boolean', description: 'Forget saved subagent sessions (keepSession memory) for this session before running so every node starts fresh.' },
-              maxParallel: { type: 'integer', minimum: 1, maximum: 8, description: 'Optional concurrency limit override (1–8, default 4).' },
+              leadResult: { type: 'string', description: 'Your output to resume a paused Lead step.' },
+              task: { type: 'string', description: 'Optional task override for this run.' },
+              cancel: { type: 'boolean', description: 'Abort active or paused run.' },
+              reset: { type: 'boolean', description: 'Discard paused state and restart.' },
+              retryFailed: { type: 'boolean', description: 'Reuse succeeded nodes; re-run failed/unfinished + downstream.' },
+              fromNodes: { type: 'array', items: { type: 'string' }, description: 'Re-run specified node ids/labels + downstream.' },
+              clearMemory: { type: 'boolean', description: 'Reset saved keepSession child sessions.' },
+              maxParallel: { type: 'integer', minimum: 1, maximum: 8 },
             },
             additionalProperties: false,
           },
@@ -2572,6 +2828,8 @@ export {
   normalizeCanvas,
   applyPatch,
   inspectPlan,
+  syncPresetsCatalog,
+  handleCanvasPreset,
   sessionIdFromContext,
   buildActiveCanvasContext,
   isPermissionFailure,

@@ -3331,6 +3331,9 @@ window.__ModuleLoader__.load({
       // poll during the 250ms window can never clobber an unflushed local edit.
       const pendingSaveRef = useRef(null);
       const didInitSaveRef = useRef(false);
+      const activePresetRef = useRef((initial && typeof initial.presetName === 'string') ? initial.presetName : '');
+      const lastSyncedPresetsRef = useRef('');
+      const lastSyncedPresetNameRef = useRef('');
       const lastLocalEditAtRef = useRef(initial && typeof initial.at === 'number' ? initial.at : 0);
       useEffect(() => {
         if (!didInitSaveRef.current) {
@@ -3339,7 +3342,7 @@ window.__ModuleLoader__.load({
         }
         const stamp = applyStamp.current;
         applyStamp.current = null;
-        const payload = { nodes, edges, enabled, direction };
+        const payload = { nodes, edges, enabled, direction, presetName: activePresetRef.current || '' };
         if (pendingSaveRef.current && pendingSaveRef.current.timer) {
           clearTimeout(pendingSaveRef.current.timer);
         }
@@ -3468,12 +3471,24 @@ window.__ModuleLoader__.load({
           const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
           const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
           const sig = planSig(nextEnabled, curNodes, curEdges, overrideParallel);
-          if (sig === lastSync.current) { setDirty(false); flash(t('upToDate')); return Promise.resolve(true); }
-          const line = '/canvas-sync ' + encodeURIComponent(sig);
+          const curPresets = loadPresets();
+          const presetsSig = JSON.stringify(curPresets);
+          const curPresetName = activePresetRef.current || '';
+          if (sig === lastSync.current && presetsSig === lastSyncedPresetsRef.current && curPresetName === lastSyncedPresetNameRef.current) {
+            setDirty(false);
+            flash(t('upToDate'));
+            return Promise.resolve(true);
+          }
+          const wireObj = JSON.parse(sig);
+          if (curPresetName) wireObj.presetName = curPresetName;
+          wireObj.presets = curPresets;
+          const line = '/canvas-sync ' + encodeURIComponent(JSON.stringify(wireObj));
           const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && n.kind !== 'condition' && (n.preset || 'standard') !== 'minimal');
           return face.command(line).then((ack) => {
             if (ack && ack.ok) {
               lastSync.current = sig;
+              lastSyncedPresetsRef.current = presetsSig;
+              lastSyncedPresetNameRef.current = curPresetName;
               setDirty(false);
               setRunState(null);
               setDecisionViewFor(null);
@@ -4441,6 +4456,7 @@ window.__ModuleLoader__.load({
       const clearCanvas = () => {
         const blank = [{ id: 'lead', kind: 'lead', x: 40, y: 203, label: 'Lead', task: '', provider: '', model: '', role: '' }];
         pushSnapshot();
+        activePresetRef.current = '';
         if (enabled) {
           skipDirtyOnce.current = true;
           setEnabled(false);
@@ -5266,6 +5282,7 @@ window.__ModuleLoader__.load({
           [name]: { nodes: savedNodes, edges: savedEdges, direction: directionRef.current },
         };
         if (!savePresets(next)) { flash(t('saveFailed')); return; }
+        activePresetRef.current = name;
         setPresets(next);
         setPresetName('');
         flash(t('savedPreset') + ': ' + name);
@@ -5281,6 +5298,22 @@ window.__ModuleLoader__.load({
           || !doc.edges.every((e) => e && typeof e === 'object' && typeof e.from === 'string' && typeof e.to === 'string'))) {
           return false;
         }
+        // Pure remote enable/disable toggle (`canvas_preset({ action: "toggle" })`):
+        // flip enabled state in place without pushing an undo entry or wiping node run badges.
+        const isPureRemoteToggle = merge && fromRemote
+          && doc.nodes.length === 0
+          && (!Array.isArray(doc.edges) || doc.edges.length === 0)
+          && (!Array.isArray(doc.removeNodes) || doc.removeNodes.length === 0)
+          && (!Array.isArray(doc.removeEdges) || doc.removeEdges.length === 0)
+          && doc.task === undefined && doc.refs === undefined
+          && typeof doc.enabled === 'boolean';
+        if (isPureRemoteToggle) {
+          applyStamp.current = typeof remoteAt === 'number' ? remoteAt : null;
+          setEnabled(doc.enabled);
+          lastSync.current = planSig(doc.enabled, nodesRef.current, edgesRef.current);
+          setDirty(false);
+          return 'toggled';
+        }
         const normalizedDoc = merge
           ? doc
           : ensureEntry({ ...doc, nodes: doc.nodes.map((n) => ({ ...n })) });
@@ -5289,6 +5322,11 @@ window.__ModuleLoader__.load({
         // imports/presets must stamp Date.now() so an older workspace file never clobbers them.
         const stamp = fromRemote && typeof remoteAt === 'number' ? remoteAt : null;
         applyStamp.current = stamp;
+        if (!merge) {
+          activePresetRef.current = typeof normalizedDoc.presetName === 'string' ? normalizedDoc.presetName : '';
+        } else if (typeof normalizedDoc.presetName === 'string') {
+          activePresetRef.current = normalizedDoc.presetName;
+        }
         if (fromRemote) {
           skipDirtyOnce.current = true;
           syncAfterRemoteRef.current = true;
@@ -5356,7 +5394,9 @@ window.__ModuleLoader__.load({
             return { ...prev, ...n, x, y };
           });
           if (!merge) {
-            return (isTB && !(hasExplicitDir && allHaveCoords)) ? layoutGraph(incoming, rawIncomingEdges, 'tb') : incoming;
+            return (!allHaveCoords || (isTB && !hasExplicitDir))
+              ? layoutGraph(incoming, rawIncomingEdges, directionRef.current)
+              : incoming;
           }
           const touched = new Set(incoming.map((n) => n.id));
           const kept = existing
@@ -5582,8 +5622,11 @@ window.__ModuleLoader__.load({
                   const valid = canvas && Array.isArray(canvas.nodes)
                     && (canvas.mode === 'merge' || canvas.nodes.length > 0)
                     && canvas.nodes.every((n) => n && typeof n.id === 'string');
-                  if (valid && applyCanvasDoc(canvas, doc.at, true)) {
-                    flash(t('generated'));
+                  const applied = valid ? applyCanvasDoc(canvas, doc.at, true) : false;
+                  if (applied) {
+                    flash(applied === 'toggled'
+                      ? (canvas.enabled ? t('enabled') : t('disabled'))
+                      : (canvas.presetName ? (t('loadedPreset') + ': ' + canvas.presetName) : t('generated')));
                     setSyncNote(t('syncApplied'));
                     setTimeout(() => setSyncNote(''), 4000);
                   }
@@ -5709,6 +5752,7 @@ window.__ModuleLoader__.load({
         }).nodes;
         const clonedEdges = preset.edges.map((e) => ({ ...e }));
         pushSnapshot();
+        activePresetRef.current = name;
         if (preset.direction === 'tb' || preset.direction === 'lr') {
           directionRef.current = preset.direction;
           setDirection(preset.direction);
@@ -5732,6 +5776,7 @@ window.__ModuleLoader__.load({
         const clonedNodes = tpl.nodes.map((n) => ({ ...n }));
         const clonedEdges = tpl.edges.map((e) => ({ ...e }));
         pushSnapshot();
+        activePresetRef.current = tpl.name || tpl.id || '';
         if (enabled) {
           skipDirtyOnce.current = true;
           pushPlan(true, clonedNodes, clonedEdges);

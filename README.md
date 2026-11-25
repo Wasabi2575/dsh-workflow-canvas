@@ -125,6 +125,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 - **Sketch from one sentence** (`canvas_generate`): *"Build a parallel research workflow on the canvas: two subagents investigate competitors and feasibility, pause for me to decide, then write the plan."*
 - **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Upgrade the condition node to 3 branches (Pass / Minor Fix / Rewrite) and re-wire downstream."* (Updates in place while preserving your layout.)
+- **Switch presets or toggle on/off** (`canvas_preset`): *"List my saved presets and switch to the SWE Delivery workflow"* or *"Disable the canvas for now"* (works even when the canvas is disabled; also alerts you when an enabled workflow doesn't match your request).
 
 ![In-place canvas editing from chat via canvas_patch](docs/images/chat-patch-canvas.gif)
 

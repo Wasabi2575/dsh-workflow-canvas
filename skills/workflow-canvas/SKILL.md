@@ -1,6 +1,6 @@
 ---
 name: workflow-canvas
-description: Workflow canvas (画布 / 工作流 / 编排 / 条件分支 / 回环重试): inspect, draw, edit, run or cancel a node graph of DSH subagents, condition judges, Lead gates, controlled retry loops, reference lists, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.
+description: Workflow canvas (画布/工作流/预设/条件分支/回环): inspect, switch presets, toggle, draw, edit, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow.
 ---
 
 # Workflow canvas
@@ -21,6 +21,7 @@ A canvas is a DAG of agents the user can see and edit.
 | The user asks for | Call |
 |---|---|
 | inspecting or editing a manually drawn / preset canvas | `canvas_inspect` first to read node ids, models and links |
+| listing presets/templates, switching workflows, or enabling/disabling the canvas | `canvas_preset` (`action: "list" \| "apply" \| "toggle"`, works even when disabled) |
 | a visual workflow, pipeline, or graph of agents | `canvas_generate` (replaces the canvas) |
 | a change to the existing canvas | `canvas_patch` (edits in place, keeps the layout) |
 | running the canvas | `canvas_workflow` (supports `leadResult`, `task` override, `reset: true`, `cancel: true`) |
