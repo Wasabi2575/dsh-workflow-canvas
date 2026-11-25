@@ -42,12 +42,12 @@ flowchart LR
 
 ### 双向同步与防覆盖机制
 1. **画布 → Host（`pushPlan` → `/canvas-sync`）**：
-   - 用户点击 **● 已启用**、手动点击 `↥ 同步`，或在已启用且有未同步改动（`dirty`）时发送新消息触发轮次切换，客户端会把当前有效执行计划编码后通过 `/canvas-sync` 推送给 Host；
-   - Host 存入按会话隔离的 `canvasBySession`，并通过写 `.tmp` 再 `renameSync` 的方式**原子落盘**到 `<DSH_PROFILE_DIR>/.workflow-canvas-state.json`，因此重启 Host 后画布计划与节点记忆都不会丢失。
-2. **Host → 画布（工作区桥接文件 + 1.5s 轮询）**：
-   - 当对话调用 `canvas_generate` 或 `canvas_patch` 时，Host 一方面直接更新 `canvasBySession`，另一方面把文档写入 `<workspace>/.dsh/canvas/<sessionId>.json`（携带时间戳 `at`）；
-   - 客户端面板每 1.5 秒通过 `remote.workspaceFiles.read` 读取该文件；
-   - **本地优先防覆盖**：每次手动编辑都会给 `localStorage` 记上时间戳 `at`，若本地时间晚于远端文件，旧文件不会覆盖用户的最新改动；
+   - 用户点击 **● 已启用**、手动点击 `↥ 同步`，或在已启用且有未同步改动（`dirty`）且当前未处于运行/等待 Lead 拍板状态时发送新消息触发轮次切换，客户端会把当前有效执行计划编码后通过 `/canvas-sync` 推送给 Host；
+   - Host 存入 LRU 封顶的 `canvasBySession`，并通过唯一临时文件 `writeFileAtomic` **原子落盘**到 `<DSH_PROFILE_DIR>/.workflow-canvas-state.json`（若推送的计划与当前一致且正暂停在 Lead 步骤，则保留暂停进度）。
+2. **Host → 画布（原子桥接文件 + 可见性感知 `stat` 轮询）**：
+   - 当对话调用 `canvas_generate` 或 `canvas_patch` 时，Host 更新 `canvasBySession` 并通过 `writeFileAtomic` 原子写入 `<workspace>/.dsh/canvas/<safeSessionId>.json`（单调递增时间戳 `at`）；
+   - 客户端面板先通过 `remote.workspaceFiles.stat` 比对不透明 `version` 指纹（未变更或不存在时 0 次 `read` 与 `JSON.parse`），且在右侧边栏折叠、切 Tab 或切会话时依据 `[data-dockkit-content]` 的 `aria-hidden`/`inert` 完全暂停轮询、展开第 0 帧通过 `MutationObserver` 立即唤醒，启用/运行态 1.5s、空闲禁用态 4s；
+   - **本地优先防覆盖**：本地编辑同步记录 `lastLocalEditAtRef` 并 250ms 防抖写入 `localStorage.at`，若本地时间不早于远端文件（`>=`），旧文件不会重复覆盖或清空节点状态；
    - **就地合并（`merge` 模式）**：`canvas_patch` 下发 `mode: "merge"` 与 `removeNodes` / `removeEdges`，客户端按节点 ID 就地合并字段，**完整保留用户手摆坐标与当前视角**，仅给新增节点按上游位置智能排布。
 
 ---
@@ -104,15 +104,15 @@ sequenceDiagram
 ## 4. 记忆冷恢复、备用模型与失败隔离
 
 ### 记忆（`keepSession`）与冷恢复
-- Host 维护两层映射：`liveChild`（当前进程内活跃会话）和 `childByNode`（随 `.workflow-canvas-state.json` 落盘，按 `sessionId::nodeId` 隔离）。
-- 节点开启记忆后，再次运行时按 `liveChild → childByNode` 顺序尝试复用旧 `childId`。
+- Host 维护两层 LRU 封顶映射：`liveChild`（当前进程内活跃会话）和 `childByNode`（随 `.workflow-canvas-state.json` 原子落盘，按 `sessionId::nodeId` 隔离）。
+- 节点开启记忆后，再次运行时按 **`memoryChildId`（节点下拉显式钉选）→ `childByNode`（持久化记忆槽）→ `liveChild`（进程内最近会话）** 顺序尝试复用旧 `childId`，确保临时关闭记忆的实验不会覆盖已存记忆。
 - **Host 重启后的冷恢复**：重启后 `liveChild` 为空，执行器会用落盘的 `childByNode` 尝试冷恢复；如果 Host 拒绝激活（`activation-failed`），插件会自动清除过期记录并无缝改开新会话，不会卡死工作流。
 
-### 备用模型降级与失败透传
-- 任意子代理出现启动失败（`activation-failed`）、运行异常（`run-failed`）或 `stopReason !== 'completed'` 时：
-  1. 若配置了 `fallbackModel` / `fallbackProvider`，自动用备用模型重试一次；
-  2. 若未配置备用模型或重试仍失败，**不中断整张图的其他分支**，而是把该节点记入 `failed: [{ id, label, reason }]`；
-  3. 同时在下游节点的 `briefFor` 上游段落头部插入显式警告，提示下游不要把报错文本当作正常结论继续编造，并在最终返回及 Lead 暂停输出中高亮列出所有失败节点。
+### 失败恢复、瞬态重试与熔断隔离
+- 执行器严格对齐 DSH 0.2.2 `SubagentResult.diagnostic` 与 `stopReason` 契约：
+  1. **首轮严格 JSON 救援**：当条件或 `structured` 节点已输出严格合法的 JSON 文本但未调用 `structured_output` 工具、被宿主改写为 `error`（无 `diagnostic`）时，直接从输出中救援合法 JSON，零额外重试成本；
+  2. **只读瞬态重试与无 Schema 降级**：仅对 `minimal` / `condition` 只读节点在 `429/502/503/504/超时` 等瞬态错误时执行 1 次可中断退避重试（`600ms`），或在非 `max-tokens`/`refusal` 的 Schema 报错时降级无 Schema 重试一次；**永不自动重跑可写 `standard` 节点**；
+  3. **备用模型降级与熔断**：若配置了 `fallbackModel` / `fallbackProvider` 则用备用模型重试一次；检测到权限/沙箱拒绝或连续 2 次 `activation-failed` 时主动熔断防白耗额度；其余单点失败记入 `failed` 并在下游 prompt 头部插入警告，不中断无关分支。
 
 ---
 

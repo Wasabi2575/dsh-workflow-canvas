@@ -1,6 +1,6 @@
 ---
 name: workflow-canvas
-description: Workflow canvas (画布 / 工作流 / 编排): inspect, draw, edit or run a node graph of DSH subagents — add or re-role nodes, wire typed links, run in parallel waves, handle Lead steps, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.
+description: Workflow canvas (画布 / 工作流 / 编排 / 条件分支 / 回环重试): inspect, draw, edit, run or cancel a node graph of DSH subagents, condition judges, Lead gates, controlled retry loops, reference lists, presets and memory. Load before using canvas_inspect, canvas_generate, canvas_patch or canvas_workflow.
 ---
 
 # Workflow canvas
@@ -29,7 +29,7 @@ Prefer `canvas_patch` for edits: it merges by node id, so renamed, re-roled or r
 
 ## Node fields
 
-`id` (stable handle, never reuse it for a different node), `kind` (`lead`, `agent`, or `condition`), `label` (display name), `role` (what this step must do, or for `condition` nodes the routing rule), `refs` (optional up to 16 reference paths/URLs/rules; also accepted at top level for Entry Lead), `branches` (optional for `condition` nodes: 2–16 branch names for `switch/case`), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
+`id` (stable handle, never reuse it for a different node), `kind` (`lead`, `agent`, or `condition`), `label` (display name), `role` (what this step must do, or for `condition` nodes the routing rule), `refs` (optional up to 16 reference paths/URLs/rules; also accepted at top level for Entry Lead), `branches` (optional for `condition` nodes: 2–16 branch names for `switch/case`), `multiMatch` (optional boolean for `condition` nodes to allow parallel multi-branch matching), `provider` / `model`, `reasoning` (an effort id declared by that model), `preset` (`standard` or `minimal`), `keepSession`, `fallbackModel` / `fallbackProvider`.
 
 Fill `role` for every node. A node with an empty role still runs, but it invents its own task and may wander.
 
@@ -56,7 +56,7 @@ Output sockets determine link type; every non-entry node has a single universal 
 2. You may pass `task` to override the entry Lead's task (handy when reusing a preset), `reset: true` to discard a paused run and start from scratch, `cancel: true` to cleanly terminate an active or paused (`need-lead`) run, `retryFailed: true` to reuse succeeded nodes and re-run only failed/empty/unfinished nodes plus their downstream, `fromNodes: [...]` to re-run from specific node ids/labels, `clearMemory: true` to forget saved `keepSession` child sessions, and `maxParallel` (1–8) to adjust concurrency.
 3. Chained Lead nodes with **both** zero subagent upstream **and** an empty `role` — as well as dangling dead-end subagents (zero outgoing edges while an active downstream Lead exists) — are rendered dashed on the canvas and skipped at run time. Chained `Lead → Lead` stages with a non-empty `role` (or Lead + Subagent → Lead) are valid and active.
 4. Subagent capability (`preset: standard | minimal`) narrows the toolset within the main chat's permission ceiling; it cannot elevate past the parent session's sandbox/approval mode.
-5. Subagent nodes run in a dynamic concurrency pool of up to four: as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
+5. Subagent nodes run in a dynamic concurrency pool (default 4, configurable 1–8 via `maxParallel`): as soon as any node finishes, newly unblocked downstream subagents start immediately without waiting for slower siblings.
 6. Intermediate downstream Lead nodes pause the run (`status: "need-lead"`). Complete that Lead step yourself, then call `canvas_workflow` again with `leadResult` to resume downstream nodes — do not spawn an agent for it. If the user asks to cancel/abort instead, call `canvas_workflow({ cancel: true })`.
 7. A **terminal** Lead node (zero remaining downstream nodes) finishes directly with `status: "done"` and `finalLead`: complete the review/summary and reply directly to the user — no extra `canvas_workflow` callback is needed.
 8. When a `session-ref` link points into that Lead node the result lists `sessions: [{ label, childId }]`; you may message those agents directly to follow up.

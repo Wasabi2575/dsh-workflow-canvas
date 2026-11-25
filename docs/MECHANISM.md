@@ -45,12 +45,12 @@ flowchart LR
 
 ### Sync & Conflict-Free Editing
 1. **Canvas → Host (`pushPlan` → `/canvas-sync`)**:
-   - Triggered when pressing **● ON**, clicking `↥ Sync`, or starting a chat turn while `enabled && dirty`.
-   - The Host stores the plan per session in `canvasBySession` and persists it **atomically** (write `.tmp` → `renameSync`) to `<DSH_PROFILE_DIR>/.workflow-canvas-state.json`, so plans and node memory survive Host restarts.
-2. **Host → Canvas (Workspace Bridge + 1.5s Polling)**:
-   - `canvas_generate` and `canvas_patch` update `canvasBySession` immediately and publish `<workspace>/.dsh/canvas/<sessionId>.json` stamped with `at`.
-   - The client polls via `remote.workspaceFiles.read` every 1.5s.
-   - **Local-wins timestamp guard**: every local edit updates `localStorage.at`; a stale bridge file with `doc.at < local.at` is ignored so manual edits are never clobbered.
+   - Triggered when pressing **● ON**, clicking `↥ Sync`, or starting a chat turn while `enabled && dirty` (suppressed while `runState.status` is `running` or `need-lead` so replying at a Lead gate never wipes paused progress).
+   - The Host stores the plan per session in LRU-bounded `canvasBySession` and persists it via `writeFileAtomic` (unique temp file → `renameSync`) to `<DSH_PROFILE_DIR>/.workflow-canvas-state.json` (identical re-syncs preserve any active `waitingLead`).
+2. **Host → Canvas (Atomic Bridge + Visibility-Aware `stat` Polling)**:
+   - `canvas_generate` and `canvas_patch` update `canvasBySession` immediately and atomically publish `<workspace>/.dsh/canvas/<safeSessionId>.json` with a monotonic `at` timestamp.
+   - The client probes `remote.workspaceFiles.stat` first and skips `read` when `value.version` is unchanged or absent (`workspace-file/not-found`). Polling pauses completely while collapsed or hidden (`[data-dockkit-content]` `aria-hidden`/`inert`), wakes on frame 0 via `MutationObserver` on expand, and adapts between 1.5s (active) and 4s (idle disabled).
+   - **Local-wins timestamp guard**: local edits record `lastLocalEditAtRef` synchronously and debounce `localStorage` writes (250ms); any bridge file with `effectiveLocalAt >= doc.at` is skipped so manual edits and live node statuses are never clobbered.
    - **In-place `merge` mode**: `canvas_patch` publishes `mode: "merge"` together with `removeNodes` and `removeEdges`, so existing node coordinates and the current viewport remain untouched while newly added nodes are placed neatly relative to their upstream parent.
 
 ---
@@ -107,15 +107,15 @@ The three link types are distinct runtime channels, not just visual colour codin
 ## 4. Memory Cold-Resume, Fallback Retry & Failure Isolation
 
 ### Memory (`keepSession`) & Cold Resume
-- The Host keeps two maps keyed by `<sessionId>::<nodeId>`: `liveChild` (current process) and `childByNode` (persisted in `.workflow-canvas-state.json`).
-- A node with `keepSession: true` resumes `liveChild || childByNode`.
+- The Host keeps two LRU-bounded maps keyed by `<sessionId>::<nodeId>`: `liveChild` (current process) and `childByNode` (atomically persisted in `.workflow-canvas-state.json`).
+- A node with `keepSession: true` resolves its previous session in priority order: **explicitly pinned `memoryChildId` → persisted `childByNode` → in-process `liveChild`**, so temporary `keepSession=false` runs never clobber saved memory.
 - After a Host restart, `childByNode` enables **cold resume**; if the Host refuses activation (`activation-failed`), the stale ID is dropped and the node starts a fresh child session automatically.
 
-### Fallback Model & Failure Reporting
-- If a subagent fails to start (`activation-failed`), throws (`run-failed`), or stops with `stopReason !== 'completed'`:
-  1. When `fallbackModel` / `fallbackProvider` is configured, it retries once on the fallback route.
-  2. Unrecovered failures do **not** abort unrelated branches — they are recorded in `failed: [{ id, label, reason }]`.
-  3. Downstream prompts built by `briefFor` receive an explicit upstream-failure warning so downstream agents do not hallucinate on error text, and `canvas_workflow` highlights failed nodes prominently in its rendered summary.
+### Recovery, Transient Retry & Failure Isolation
+- Aligned with DSH 0.2.2 `SubagentResult.diagnostic` and `stopReason`:
+  1. **1-shot strict JSON rescue**: when a condition or `structured` node replies with valid JSON text without calling `structured_output` (causing DSH to rewrite `completed → error` with no `diagnostic`), the strict JSON payload is rescued on attempt #1 with zero extra LLM calls.
+  2. **Read-only transient & plain-JSON retry**: strictly read-only (`minimal` / `condition`) nodes perform 1 abort-aware backoff retry (`600ms`) on transient 429/502/503/504/timeout errors, or 1 `noSchema` retry on schema errors (never on `max-tokens` / `refusal`); **writable `standard` nodes are never auto-retried**.
+  3. **Fallback model & circuit breaking**: nodes with `fallbackModel` / `fallbackProvider` retry once on the fallback route; permission denials or 2 consecutive `activation-failed` errors circuit-break downstream waves; remaining single-node failures are recorded in `failed` with explicit downstream warnings without aborting unrelated branches.
 
 ---
 

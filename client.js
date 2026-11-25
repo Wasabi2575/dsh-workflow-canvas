@@ -14,37 +14,41 @@ window.__ModuleLoader__.load({
     /** Isolated 1s elapsed timer so live ticks never re-render the full canvas tree. */
     function LiveElapsedText({ active, startedAt, endedAt, style }) {
       const [now, setNow] = useState(() => Date.now());
+      const spanRef = useRef(null);
       useEffect(() => {
         if (!active) return undefined;
         setNow(Date.now());
         const id = setInterval(() => {
-          if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
-            setNow(Date.now());
-          }
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          if (isDockElementHidden(spanRef.current)) return;
+          setNow(Date.now());
         }, 1000);
         return () => clearInterval(id);
       }, [active, startedAt]);
       if (typeof startedAt !== 'number') return null;
       const ms = Math.max(0, (typeof endedAt === 'number' ? endedAt : now) - startedAt);
-      return h('span', { style }, ' · ' + formatDurationMs(ms));
+      return h('span', { ref: spanRef, style }, ' · ' + formatDurationMs(ms));
     }
 
     /**
      * Source-verified DSH 0.2.2-rc.5 panel visibility check:
-     * - Tab/session switches set `hidden` (`display: none` -> `offsetParent === null`),
-     * - Collapsing the right sidebar uses `transform + visibility: hidden` (`offsetParent !== null`),
-     *   while `[data-dockkit-content]` sets `aria-hidden="true"` and `inert = true` across ALL 3 hidden states.
+     * - `[data-dockkit-content]` is unique and non-nested per tab, and toggles `aria-hidden="true"`
+     *   and `inert = true` on frame 0 across ALL 3 hidden states (tab switch, session switch, collapsed sidebar).
+     * - Trusting `dockHost` directly avoids `checkVisibility()`'s 0.3s CSS slide-transition lag on collapse.
+     * - Fall back to `offsetParent` / `checkVisibility` only outside a dockkit host container.
      */
     function isDockElementHidden(el) {
       if (!el) return false;
-      if (el.offsetParent === null) return true;
       if (typeof el.closest === 'function') {
         const dockHost = el.closest('[data-dockkit-content]');
         if (dockHost) {
           if (typeof dockHost.getAttribute === 'function' && dockHost.getAttribute('aria-hidden') === 'true') return true;
           if (dockHost.inert === true) return true;
+          if (dockHost.hidden === true) return true;
+          return false;
         }
       }
+      if (el.offsetParent === null) return true;
       if (typeof el.checkVisibility === 'function') {
         try {
           if (!el.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })) return true;
@@ -213,7 +217,7 @@ window.__ModuleLoader__.load({
         syncedWithStdWarn: '已同步（含可写/命令节点，请确认主对话权限已放开）',
         cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作', redoDone: '已重做', redoNone: '没有可重做的操作',
         leadLocked: '入口 Lead 不能删除',
-        tipLead: 'Lead 步骤在对话里执行，画布不追踪其状态',
+        tipLead: 'Lead 步骤在主对话执行（暂停待拍板 / 终审完成状态会同步显示在画布上）',
         tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
         tipResetZoom: '点击回到 100% 并聚焦 Lead；左右拖拽可连续缩放',
         tipLocate: '自适应缩放并居中，让所有节点完整显示在视野内',
@@ -227,12 +231,13 @@ window.__ModuleLoader__.load({
         cutLinks: '右键划断连线',
         linkCut: '已断开一条连线',
         tipToggle: '启用/禁用此画布（启用后我才能执行它）',
+        clearShortcut: '清除快捷键',
         helpBody: [
           '1. 在入口 Lead 里写「本次任务」，这是整张图的总目标。',
           '2. 点「+ 子代理 / + Lead / + 条件」加节点，从右侧输出口拖到另一个节点左侧输入口即可连线。',
           '3. 输出口决定连线类型：prompt（灰，纯文本）、structured（蓝，JSON）、session（紫，复用上游会话）；条件节点支持多路分支，并可将分支连回上游（或多选节点右键「↺ 设为回环」）实现带反馈的受控重试（点 ↺ 徽章可调 1–10 次，超限自动交 Lead 熔断）。',
           '4. 节点左侧为统一通用输入口，可直接接收任意颜色的连线；拖已连接的左口可断开最近一条连线。',
-          '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
+          '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；右上角「+ 参考」可挂载参考文件/规则清单（入口 Lead 为全局参考，其他节点为局部参考）；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
           '6. 连好后点左上角「● 已启用」，可直接点入口节点「▶ 运行」或在对话说「跑一次」开跑；运行中或停在「⏸ 待拍板」时，点左上角或入口节点旁的「⏹ 终止」即可一键中止全部子代理并解除等待状态。',
           '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续（或在对话里说「取消」即可结束流程）。',
           '8. 没连线的节点显示为虚线，运行时会被跳过。',
@@ -437,7 +442,7 @@ window.__ModuleLoader__.load({
         syncedWithStdWarn: 'Synced (has write/tool nodes — check main chat permission mode)',
         cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo', redoDone: 'Redone', redoNone: 'Nothing to redo',
         leadLocked: 'The entry Lead cannot be deleted',
-        tipLead: 'Lead steps run in the chat; the canvas does not track them',
+        tipLead: 'Lead steps run in the main chat (paused / completed Lead status syncs to the canvas)',
         tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
         tipResetZoom: 'Click to reset to 100% on Lead; drag left/right to scrub zoom',
         tipLocate: 'Fit all nodes into the visible canvas',
@@ -451,12 +456,13 @@ window.__ModuleLoader__.load({
         cutLinks: 'Right-drag to cut links',
         linkCut: 'Link cut',
         tipToggle: 'Enable or disable this canvas (I can only run it while enabled)',
+        clearShortcut: 'Clear shortcut',
         helpBody: [
           '1. Write the overall task in the entry Lead node.',
           '2. Add nodes with + Subagent / + Lead / + Condition, then drag from a right socket to a left socket.',
           '3. Output sockets choose channel type: prompt (grey text), structured (blue JSON), session (purple warm session), or multi-way condition branches; wire a condition branch back upstream (or right-click selected nodes → ↺ Create loop) for bounded feedback retries (click the ↺ pill for 1–10 retries).',
           '4. Every node has one universal left input that accepts any incoming wire; drag a connected input away to detach the latest wire.',
-          '5. Each node sets model, reasoning, capability scope, fallback model and memory; click ⤢ to expand a larger editor for long text.',
+          '5. Each node sets model, reasoning, capability scope, fallback model and memory; use top-right + Refs to attach reference files/rules (global on Entry Lead, local on other nodes); click ⤢ to expand a larger editor for long text.',
           '6. Press ● ON, then click ▶ Run on the Entry Lead or ask in chat to start; while running or paused at a Lead gate, click ⏹ Stop beside ● ON (or on the Entry card) to abort all running subagents and clear the pause.',
           '7. The run pauses at intermediate Lead nodes for your decision (reply to continue, or ask to cancel / click ⏹ Stop).',
           '8. Unlinked nodes are dashed and skipped at run time.',
@@ -641,7 +647,7 @@ window.__ModuleLoader__.load({
 
     const S = {
       root: {
-        boxSizing: 'border-box', height: '100%', width: '100%',
+        position: 'relative', boxSizing: 'border-box', height: '100%', width: '100%',
         display: 'flex', flexDirection: 'column',
         background: C.base, color: C.text, fontSize: '13px',
       },
@@ -974,16 +980,16 @@ window.__ModuleLoader__.load({
         position: 'absolute', left: '10px', right: '10px', top: '103px', height: '16px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '4px',
       },
-      condBtnGroup: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+      condBtnGroup: { display: 'inline-flex', alignItems: 'center', gap: '3px', flex: '0 0 auto' },
       condAddBtn: {
-        padding: '0 5px', height: '16px', borderRadius: '4px',
+        padding: '0 4px', height: '16px', borderRadius: '4px',
         border: '1px solid ' + C.border, background: C.base, color: C.dim,
-        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none',
+        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none', whiteSpace: 'nowrap',
       },
       condModeBtnOn: {
-        padding: '0 5px', height: '16px', borderRadius: '4px',
+        padding: '0 4px', height: '16px', borderRadius: '4px',
         border: '1px solid ' + C.accent, background: C.hover, color: C.accent,
-        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none',
+        fontSize: '9px', lineHeight: '14px', cursor: 'pointer', outline: 'none', whiteSpace: 'nowrap',
       },
       condArea: {
         position: 'absolute', left: '10px', right: '10px', top: '121px', height: '46px',
@@ -1438,9 +1444,13 @@ window.__ModuleLoader__.load({
           else if (status === 'need-lead' && waitingLead && waitingLead.id === n.id) st = 'waiting';
           else if (dec && dec.failed) st = 'failed';
           else if (doneSet.has(n.id)) st = 'done';
+          const branchText = dec
+            ? (Array.isArray(dec.branchLabels) && dec.branchLabels.length
+              ? dec.branchLabels.join(', ')
+              : (dec.branchLabel || ''))
+            : '';
           const reason = dec
-            ? ((Array.isArray(dec.branchLabels) && dec.branchLabels.length ? dec.branchLabels.join(', ') : (dec.branchLabel || ''))
-              + (dec.reason ? ' — ' + dec.reason : ''))
+            ? (branchText && dec.reason ? (branchText + ' — ' + dec.reason) : (branchText || dec.reason || ''))
             : '';
           return {
             id: n.id,
@@ -1448,7 +1458,7 @@ window.__ModuleLoader__.load({
             kind: n.kind || 'agent',
             status: st,
             durationMs: null,
-            runs: doneSet.has(n.id) ? 1 : 0,
+            runs: (!prunedSet.has(n.id) && doneSet.has(n.id)) ? 1 : 0,
             model: n.model || '',
             fallbackUsed: false,
             sessionContinued: false,
@@ -1707,6 +1717,7 @@ window.__ModuleLoader__.load({
     }
 
     function normalizeMaxIterationsUI(val) {
+      if (val === null || val === undefined || val === '' || typeof val === 'boolean') return DEFAULT_LOOP_ITERATIONS;
       const n = Number(val);
       if (!Number.isFinite(n)) return DEFAULT_LOOP_ITERATIONS;
       return Math.max(1, Math.min(MAX_LOOP_ITERATIONS, Math.floor(n)));
@@ -2478,8 +2489,8 @@ window.__ModuleLoader__.load({
           label: en ? 'Quality Gate' : '质量门禁',
           provider: '', model: '', reasoning: '', preset: 'minimal', keepSession: false,
           branches: [
-            { id: 'true', label: en ? 'Pass' : '通过', when: en ? 'All tests and security checks passed' : '单测与安全核验全部通过' },
-            { id: 'false', label: en ? 'Fix Loop' : '打回修复', when: en ? 'Any test failed or defect remains' : '存在测试失败或未解决缺陷' },
+            { id: 'true', label: en ? 'Pass' : '通过' },
+            { id: 'false', label: en ? 'Fix Loop' : '打回修复' },
           ],
           role: en
             ? 'Verify test results and security checklist; route to Pass only when clean, otherwise return actionable fix feedback.'
@@ -2590,8 +2601,9 @@ window.__ModuleLoader__.load({
           return item;
         });
 
-      const maxParallel = opts && Number.isFinite(Number(opts.maxParallel))
-        ? Math.max(1, Math.min(8, Math.floor(Number(opts.maxParallel))))
+      const rawMaxP = opts ? opts.maxParallel : undefined;
+      const maxParallel = rawMaxP !== null && rawMaxP !== undefined && rawMaxP !== '' && typeof rawMaxP !== 'boolean' && Number.isFinite(Number(rawMaxP))
+        ? Math.max(1, Math.min(8, Math.floor(Number(rawMaxP))))
         : 4;
 
       const entryRefs = normalizeRefsUI(entry.refs);
@@ -2879,6 +2891,75 @@ window.__ModuleLoader__.load({
       }
     }
 
+    const WINDOWS_RESERVED_FILE_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+    function sanitizeSessionFileBaseUI(raw) {
+      const cleaned = String(raw || '').trim()
+        .replace(/[^A-Za-z0-9._-]/g, '_')
+        .replace(/\.\.+/g, '_')
+        .replace(/^\.+/, '_')
+        .slice(0, 180);
+      if (!cleaned) return '';
+      if (WINDOWS_RESERVED_FILE_RE.test(cleaned)) return ('_' + cleaned).slice(0, 180);
+      return cleaned;
+    }
+
+    /** Extract a canvas JSON document from clipboard text (fenced json block first, else balanced `{...}` scan). */
+    function extractCanvasJsonFromText(text) {
+      if (!text || typeof text !== 'string') return null;
+      const isCanvasCandidate = (obj) => {
+        if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+        const payload = obj.canvas && typeof obj.canvas === 'object' ? obj.canvas : obj;
+        return Array.isArray(payload.nodes);
+      };
+      const fencedRe = /```(?:json(?:\s+canvas)?)?\s*\r?\n([\s\S]*?)```/gi;
+      const fencedMatches = [];
+      let m;
+      while ((m = fencedRe.exec(text)) !== null) {
+        fencedMatches.push(m[1]);
+      }
+      for (let i = fencedMatches.length - 1; i >= 0; i -= 1) {
+        try {
+          const parsed = JSON.parse(fencedMatches[i].trim());
+          if (isCanvasCandidate(parsed)) return parsed;
+        } catch (_e) { /* keep scanning */ }
+      }
+      // Scan balanced `{...}` spans (skipping string literals & escapes) and pick the last valid canvas object.
+      const candidates = [];
+      let depth = 0;
+      let start = -1;
+      let inStr = false;
+      let escaped = false;
+      for (let i = 0; i < text.length; i += 1) {
+        const ch = text[i];
+        if (inStr) {
+          if (escaped) { escaped = false; continue; }
+          if (ch === '\\') { escaped = true; continue; }
+          if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === '{') {
+          if (depth === 0) start = i;
+          depth += 1;
+        } else if (ch === '}') {
+          if (depth > 0) {
+            depth -= 1;
+            if (depth === 0 && start !== -1) {
+              candidates.push(text.slice(start, i + 1));
+              start = -1;
+            }
+          }
+        }
+      }
+      for (let i = candidates.length - 1; i >= 0; i -= 1) {
+        try {
+          const parsed = JSON.parse(candidates[i]);
+          if (isCanvasCandidate(parsed)) return parsed;
+        } catch (_e) { /* keep scanning */ }
+      }
+      return null;
+    }
+
     function storageKey(sessionId) {
       return STORAGE_PREFIX + (sessionId || '__global__');
     }
@@ -2898,6 +2979,7 @@ window.__ModuleLoader__.load({
     const MAX_STORED_CANVAS_SESSIONS = 80;
     const RESERVED_STORAGE_SUFFIXES = new Set(['presets', 'direction', 'shortcuts', 'lang', 'cut', 'fx', 'maxParallel']);
     let storagePrunedOnce = false;
+    let lastStoragePruneAt = 0;
 
     /** Evict oldest session canvas entries from localStorage so months of chats never fill quota. */
     function pruneSessionStorage(keepKey, maxSessions = MAX_STORED_CANVAS_SESSIONS) {
@@ -2936,14 +3018,18 @@ window.__ModuleLoader__.load({
       const serialized = JSON.stringify({ ...doc, at: typeof stamp === 'number' ? stamp : Date.now() });
       try {
         const ls = window.localStorage;
-        if (!storagePrunedOnce || (ls && typeof ls.length === 'number' && ls.length > MAX_STORED_CANVAS_SESSIONS + 16)) {
+        const now = Date.now();
+        const isNewKey = Boolean(ls && typeof ls.getItem === 'function' && ls.getItem(key) === null);
+        if (!storagePrunedOnce || isNewKey || (now - lastStoragePruneAt > 5 * 60 * 1000)) {
           storagePrunedOnce = true;
+          lastStoragePruneAt = now;
           pruneSessionStorage(key);
         }
         ls.setItem(key, serialized);
       } catch (_e) {
         // Retry once after evicting older sessions in case QuotaExceededError triggered.
         try {
+          lastStoragePruneAt = Date.now();
           pruneSessionStorage(key, 30);
           window.localStorage.setItem(key, serialized);
         } catch (_retryErr) {
@@ -3142,6 +3228,7 @@ window.__ModuleLoader__.load({
       const selectedIdsRef = useRef(selectedIds);
       selectedIdsRef.current = selectedIds;
       const skipDirtyOnce = useRef(false);
+      const syncAfterRemoteRef = useRef(false);
       const staleChildIds = useRef(new Set());
 
       // Debounce localStorage persistence so high-frequency node drags & typing do not
@@ -3219,6 +3306,10 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (skipDirtyOnce.current) {
           skipDirtyOnce.current = false;
+          if (syncAfterRemoteRef.current) {
+            syncAfterRemoteRef.current = false;
+            lastSync.current = planSig(enabled, nodes, edges);
+          }
           return;
         }
         if (!enabled || nodeDrag.current) return;
@@ -3590,23 +3681,47 @@ window.__ModuleLoader__.load({
         const sessions = hostCtx && hostCtx.sessions;
         const face = sessionFace(sessionId);
         if (!sessions || !sessionId || !face || typeof face.subscribe !== 'function') return undefined;
+        let alive = true;
         let timer = null;
+        const shallowEqualStatus = (a, b) => {
+          const ka = Object.keys(a);
+          const kb = Object.keys(b);
+          if (ka.length !== kb.length) return false;
+          for (const k of ka) {
+            if (a[k] !== b[k]) return false;
+          }
+          return true;
+        };
+        const shallowEqualRuns = (a, b) => {
+          const ka = Object.keys(a);
+          const kb = Object.keys(b);
+          if (ka.length !== kb.length) return false;
+          for (const k of ka) {
+            const va = a[k];
+            const vb = b[k];
+            if (!va || !vb || va.childId !== vb.childId || va.mode !== vb.mode || va.label !== vb.label) return false;
+          }
+          return true;
+        };
         const read = () => {
+          if (!alive) return;
           const { status: nextStatus, runs: nextRuns } = readCatalog();
-          if (nextStatus) setStatusById(nextStatus);
-          if (nextRuns) setRunsById(nextRuns);
+          if (nextStatus) setStatusById((prev) => (shallowEqualStatus(prev, nextStatus) ? prev : nextStatus));
+          if (nextRuns) setRunsById((prev) => (shallowEqualRuns(prev, nextRuns) ? prev : nextRuns));
         };
         const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
         let wasRunning = false;
         try { wasRunning = Boolean(face.getSnapshot().running); } catch (_e) { wasRunning = false; }
         const readIfVisible = () => {
           if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          if (isDockElementHidden(canvasWrapRef.current)) return;
           read();
         };
         setSessionRunning(wasRunning);
         read();
         if (wasRunning) timer = setInterval(readIfVisible, 700);
         const onSnapshot = () => {
+          if (!alive) return;
           let running = false;
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
           const finished = !running && wasRunning;
@@ -3615,12 +3730,13 @@ window.__ModuleLoader__.load({
           if (running && !timer) { read(); timer = setInterval(readIfVisible, 700); }
           if (!running && timer) { stop(); read(); }
           if (finished && typeof sessions.refreshProjections === 'function') {
-            Promise.resolve(sessions.refreshProjections(sessionId)).then(read, () => {});
+            Promise.resolve(sessions.refreshProjections(sessionId)).then(() => { if (alive) read(); }, () => {});
           }
         };
         let unsub;
         try { unsub = face.subscribe(onSnapshot); } catch (_e) { unsub = undefined; }
         return () => {
+          alive = false;
           stop();
           if (typeof unsub === 'function') { try { unsub(); } catch (_e) { /* ignore */ } }
         };
@@ -3908,7 +4024,7 @@ window.__ModuleLoader__.load({
           }
         }
         if (!run && fallbackChildId) {
-          run = { childId: fallbackChildId, mode: 'local', label: node.label || node.id };
+          run = { childId: fallbackChildId, mode: 'continuable', label: node.label || node.id };
         }
         if (!run) { flash(t('cannotOpen')); return; }
         openRun(node, run);
@@ -4574,6 +4690,7 @@ window.__ModuleLoader__.load({
           if (ev.button === 1 && inside(ev)) ev.preventDefault();
         };
         const onKeyDown = (ev) => {
+          if (ev.isComposing || ev.keyCode === 229 || isDockElementHidden(rootElRef.current)) return;
           if (ev.code === 'Space' && !isEditable(ev.target)) {
             spaceDown.current = true;
             setSpaceHeld(true);
@@ -4616,7 +4733,11 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         if (!summaryIsLive || !summaryOpen) return undefined;
         setSummaryNow(Date.now());
-        const timer = setInterval(() => setSummaryNow(Date.now()), 1000);
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          if (isDockElementHidden(rootElRef.current)) return;
+          setSummaryNow(Date.now());
+        }, 1000);
         return () => clearInterval(timer);
       }, [summaryIsLive, summaryOpen]);
       useEffect(() => {
@@ -4626,8 +4747,9 @@ window.__ModuleLoader__.load({
           return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
         };
         const onKey = (ev) => {
-          // Ignore IME composition events (e.g. pressing Escape/Enter while selecting Chinese candidates).
-          if (ev.isComposing || ev.keyCode === 229) return;
+          // Ignore IME composition events (e.g. pressing Escape/Enter while selecting Chinese candidates)
+          // and ignore shortcuts while this keepMounted session tab is hidden.
+          if (ev.isComposing || ev.keyCode === 229 || isDockElementHidden(rootElRef.current)) return;
           const act = keyActionsRef.current;
           if (!act) return;
           if (act.recordingAction) {
@@ -4957,7 +5079,8 @@ window.__ModuleLoader__.load({
             flash(t('linkCut') + ' ×' + victims.length + (removedCount > 0 ? t('loopPrunedNotice') : ''));
           }
         }
-        if (cutPath.length) { setCutPath([]); setCutVictims([]); }
+        setCutPath((p) => (p.length ? [] : p));
+        setCutVictims((v) => (v.length ? [] : v));
         // Recompute drop coordinates directly from the mouseup event so a fast <16ms flick
         // whose final mousemove was just flushed synchronously never reads stale React state.
         const endPt = (ev && typeof ev.clientX === 'number' && (marquee || pending)) ? pointTo(ev) : null;
@@ -5043,6 +5166,14 @@ window.__ModuleLoader__.load({
         if (!doc || !Array.isArray(doc.nodes)) return false;
         const merge = doc.mode === 'merge';
         if (!merge && !doc.nodes.length) return false;
+        if (!doc.nodes.every((n) => n && typeof n === 'object' && typeof n.id === 'string' && n.id.trim())) return false;
+        if (doc.edges !== undefined && (!Array.isArray(doc.edges)
+          || !doc.edges.every((e) => e && typeof e === 'object' && typeof e.from === 'string' && typeof e.to === 'string'))) {
+          return false;
+        }
+        const normalizedDoc = merge
+          ? doc
+          : ensureEntry({ ...doc, nodes: doc.nodes.map((n) => ({ ...n })) });
         pushSnapshot();
         // Only preserve remote timestamp when applying a Host bridge file; local JSON
         // imports/presets must stamp Date.now() so an older workspace file never clobbers them.
@@ -5050,25 +5181,26 @@ window.__ModuleLoader__.load({
         applyStamp.current = stamp;
         if (fromRemote) {
           skipDirtyOnce.current = true;
+          syncAfterRemoteRef.current = true;
           setDirty(false);
         }
-        if (typeof doc.enabled === 'boolean') {
-          setEnabled(doc.enabled);
+        if (typeof normalizedDoc.enabled === 'boolean') {
+          setEnabled(normalizedDoc.enabled);
         }
-        const hasExplicitDir = !merge && (doc.direction === 'tb' || doc.direction === 'lr');
-        const allHaveCoords = !merge && doc.nodes.every((n) => n && typeof n.x === 'number' && typeof n.y === 'number');
+        const hasExplicitDir = !merge && (normalizedDoc.direction === 'tb' || normalizedDoc.direction === 'lr');
+        const allHaveCoords = !merge && normalizedDoc.nodes.every((n) => n && typeof n.x === 'number' && typeof n.y === 'number');
         if (hasExplicitDir) {
-          directionRef.current = doc.direction;
-          setDirection(doc.direction);
+          directionRef.current = normalizedDoc.direction;
+          setDirection(normalizedDoc.direction);
         }
-        const removedNodes = new Set(doc.removeNodes || []);
-        const rawIncomingEdges = Array.isArray(doc.edges) ? doc.edges : [];
+        const removedNodes = new Set(normalizedDoc.removeNodes || []);
+        const rawIncomingEdges = Array.isArray(normalizedDoc.edges) ? normalizedDoc.edges : [];
         setNodes((existing) => {
           const byId = new Map(existing.map((n) => [n.id, n]));
           const placed = new Map(existing.map((n) => [n.id, { x: n.x, y: n.y }]));
           let addedCount = 0;
           const isTB = directionRef.current === 'tb';
-          const incoming = doc.nodes.map((n, i) => {
+          const incoming = normalizedDoc.nodes.map((n, i) => {
             const prev = byId.get(n.id) || {};
             let x = typeof n.x === 'number' ? n.x : prev.x;
             let y = typeof n.y === 'number' ? n.y : prev.y;
@@ -5203,20 +5335,15 @@ window.__ModuleLoader__.load({
         if (!sessionId) { setSyncNote(t('syncNoSession')); return undefined; }
         // The Host names the file after the sanitized agent id (session-<uuid>); the
         // pane prop may carry either form, so try them until one hits, then cache it.
-        const sanitizeId = (s) => String(s || '').trim().replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.\.+/g, '_').replace(/^\.+/, '_').slice(0, 180);
-        const safeSid = sanitizeId(sessionId);
-        const bare = String(sessionId).replace(/^session-/, '');
-        const safeBare = sanitizeId(bare);
-        const paths = [
-          '.dsh/canvas/' + safeSid + '.json',
-          '.dsh/canvas/session-' + safeBare + '.json',
-          '.dsh/canvas/' + safeBare + '.json',
-        ].filter((v, i, all) => v && all.indexOf(v) === i);
-        const runPaths = [
-          '.dsh/canvas/' + safeSid + '.run.json',
-          '.dsh/canvas/session-' + safeBare + '.run.json',
-          '.dsh/canvas/' + safeBare + '.run.json',
-        ].filter((v, i, all) => v && all.indexOf(v) === i);
+        const trimmedSid = String(sessionId).trim();
+        const bare = trimmedSid.replace(/^session-/, '');
+        const rawCandidates = [trimmedSid, bare ? ('session-' + bare) : '', bare];
+        const safeBases = rawCandidates
+          .map((c) => sanitizeSessionFileBaseUI(c))
+          .filter((v, i, all) => v && all.indexOf(v) === i);
+        if (!safeBases.length) { setSyncNote(t('syncNoSession')); return undefined; }
+        const paths = safeBases.map((b) => '.dsh/canvas/' + b + '.json');
+        const runPaths = safeBases.map((b) => '.dsh/canvas/' + b + '.run.json');
         setRunState(null);
         setDecisionViewFor(null);
         let alive = true;
@@ -5228,6 +5355,7 @@ window.__ModuleLoader__.load({
         let lastRunStatSig = '';
         let cachedCanvasPath = '';
         let cachedRunPath = '';
+        let canStat = typeof wf.stat === 'function';
 
         const isPaneVisible = () => {
           if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
@@ -5235,17 +5363,16 @@ window.__ModuleLoader__.load({
           return true;
         };
 
+        // Source-verified DSH 0.2.2-rc.5 `WorkspaceFileStat`: `{ absolutePath, version, bytes? }`.
+        // `version` is an opaque freshness token ("never parsed") suitable for exact equality checks.
         const statFingerprint = (val) => {
           if (!val || typeof val !== 'object') return '';
-          const hasMeta = val.mtimeMs !== undefined || val.mtime !== undefined
-            || val.modifiedAt !== undefined || val.size !== undefined || val.etag !== undefined;
-          if (!hasMeta) return '';
-          try { return JSON.stringify(val); } catch (_e) { return ''; }
+          if (typeof val.version === 'string' && val.version) return val.version;
+          return '';
         };
 
         const readFirstMatch = async (candidates, cached, prevStatSig, onErr) => {
           const order = cached ? [cached, ...candidates.filter((p) => p !== cached)] : candidates;
-          const canStat = typeof wf.stat === 'function';
           let lastErr = null;
           for (const p of order) {
             let nextStatSig = '';
@@ -5255,17 +5382,20 @@ window.__ModuleLoader__.load({
                 if (!alive) return { text: '', hit: cached, statSig: prevStatSig, unchanged: false };
                 if (stRes && stRes.ok === false) {
                   const code = stRes.error && stRes.error.code;
-                  if (code !== 'workspace-file/not-found' && stRes.error) lastErr = stRes.error;
-                  continue;
+                  if (code === 'workspace-file/not-found' || code === 'workspace-file/not-regular-file') {
+                    continue;
+                  }
+                  // Unexpected stat error (e.g. older host / permission / transient): fall back to `read`.
+                } else {
+                  const stVal = stRes && stRes.value !== undefined ? stRes.value : stRes;
+                  nextStatSig = statFingerprint(stVal);
+                  if (nextStatSig && p === cached && nextStatSig === prevStatSig) {
+                    return { text: '', hit: p, statSig: nextStatSig, unchanged: true };
+                  }
                 }
-                const stVal = stRes && stRes.value !== undefined ? stRes.value : stRes;
-                nextStatSig = statFingerprint(stVal);
-                if (nextStatSig && p === cached && nextStatSig === prevStatSig) {
-                  return { text: '', hit: p, statSig: nextStatSig, unchanged: true };
-                }
-              } catch (statErr) {
-                lastErr = statErr;
-                continue;
+              } catch (_statErr) {
+                // Disable stat optimization if the host rejects/throws on `stat` and fall back to `read`.
+                canStat = false;
               }
             }
             try {
@@ -5334,7 +5464,7 @@ window.__ModuleLoader__.load({
                     (local && typeof local.at === 'number') ? local.at : 0,
                     lastLocalEditAtRef.current || 0,
                   );
-                  if (effectiveLocalAt > 0 && typeof doc.at === 'number' && effectiveLocalAt > doc.at) {
+                  if (effectiveLocalAt > 0 && typeof doc.at === 'number' && effectiveLocalAt >= doc.at) {
                     staleLocal = true;
                   }
                 } catch (_e) { /* ignore */ }
@@ -5435,13 +5565,8 @@ window.__ModuleLoader__.load({
         const finish = (text) => {
           if (!text || typeof text !== 'string') { flash(t('importNone')); return; }
           if (text.length > 2 * 1024 * 1024) { flash(t('importBad')); return; }
-          let doc;
-          try {
-            const start = text.indexOf('{');
-            const end = text.lastIndexOf('}');
-            if (start === -1 || end <= start) { flash(t('importBad')); return; }
-            doc = JSON.parse(text.slice(start, end + 1));
-          } catch (_e) { flash(t('importBad')); return; }
+          const doc = extractCanvasJsonFromText(text);
+          if (!doc) { flash(t('importBad')); return; }
           const payload = doc && (doc.canvas || doc);
           if (!payload || !applyCanvasDoc(payload)) { flash(t('importBad')); return; }
           if (enabled) setTimeout(() => pushPlan(true), 0);
@@ -5459,12 +5584,19 @@ window.__ModuleLoader__.load({
       const applyPreset = (name) => {
         const latest = loadPresets();
         const preset = latest[name] || presets[name];
-        if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)) { flash(t('invalidPreset')); return; }
-        const clonedNodes = preset.nodes.map((n) => ({
-          ...n,
-          ...(Array.isArray(n.refs) ? { refs: n.refs.slice() } : null),
-          ...(Array.isArray(n.branches) ? { branches: n.branches.map((b) => ({ ...b })) } : null),
-        }));
+        if (!preset || !Array.isArray(preset.nodes) || !Array.isArray(preset.edges)
+          || !preset.nodes.every((n) => n && typeof n === 'object' && typeof n.id === 'string' && n.id.trim())
+          || !preset.edges.every((e) => e && typeof e === 'object' && typeof e.from === 'string' && typeof e.to === 'string')) {
+          flash(t('invalidPreset'));
+          return;
+        }
+        const clonedNodes = ensureEntry({
+          nodes: preset.nodes.map((n) => ({
+            ...n,
+            ...(Array.isArray(n.refs) ? { refs: n.refs.slice() } : null),
+            ...(Array.isArray(n.branches) ? { branches: n.branches.map((b) => ({ ...b })) } : null),
+          })),
+        }).nodes;
         const clonedEdges = preset.edges.map((e) => ({ ...e }));
         pushSnapshot();
         if (preset.direction === 'tb' || preset.direction === 'lr') {
@@ -6252,6 +6384,7 @@ window.__ModuleLoader__.load({
                     placeholder: t('refsPh'),
                     autoFocus: idx === list.length - 1 && val === '',
                     onKeyDown: (e) => {
+                      if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
                       if (e.key === 'Enter' && list.length < 16) {
                         e.preventDefault();
                         addNodeRef(node);
@@ -6381,7 +6514,10 @@ window.__ModuleLoader__.load({
                       placeholder: t('presetNamePh'),
                       onMouseDown: (e) => e.stopPropagation(),
                       onChange: (e) => setPresetName(e.target.value),
-                      onKeyDown: (e) => { if (e.key === 'Enter') savePresetNow(); },
+                      onKeyDown: (e) => {
+                        if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                        if (e.key === 'Enter') savePresetNow();
+                      },
                     }),
                     h('button', {
                       style: { ...S.btn, padding: '4px 8px', fontSize: '11px' },
@@ -6829,7 +6965,7 @@ window.__ModuleLoader__.load({
                       ? h('button', {
                           type: 'button',
                           style: S.condBranchDel,
-                          title: t('del'),
+                          title: t('clearShortcut'),
                           onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; },
                           onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; },
                           onClick: () => {
@@ -7208,6 +7344,7 @@ window.__ModuleLoader__.load({
                       },
                       onBlur: () => commitLoopDraft(false),
                       onKeyDown: (e) => {
+                        if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
                         if (e.key === 'Enter') {
                           e.preventDefault();
                           commitLoopDraft(true);
@@ -7480,7 +7617,7 @@ window.__ModuleLoader__.load({
                         style: S.condAddBtn,
                         title: t('tipExpandEdit'),
                         onMouseDown: (e) => e.stopPropagation(),
-                        onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                        onClick: () => { setRefsEditFor(null); setRoleEditFor(roleEditFor === node.id ? null : node.id); },
                       }, '⤢'),
                     ),
                     h('textarea', {
@@ -7513,7 +7650,7 @@ window.__ModuleLoader__.load({
                           style: S.condAddBtn,
                           title: t('tipExpandEdit'),
                           onMouseDown: (e) => e.stopPropagation(),
-                          onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                          onClick: () => { setRefsEditFor(null); setRoleEditFor(roleEditFor === node.id ? null : node.id); },
                         }, '⤢'),
                       ),
                       h('textarea', {
@@ -7552,7 +7689,13 @@ window.__ModuleLoader__.load({
                           fallbackControl(node),
                         ),
                         h('div', { style: S.condLabelRow },
-                          h('span', { style: S.fieldLabel }, t('condLabel')),
+                          h('span', {
+                            style: {
+                              flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                              fontSize: '9px', color: C.dim, whiteSpace: 'nowrap',
+                            },
+                            title: t('condLabel'),
+                          }, t('condLabel')),
                           h('div', { style: S.condBtnGroup },
                             direction === 'tb' && h('button', {
                               type: 'button',
@@ -7573,7 +7716,7 @@ window.__ModuleLoader__.load({
                               style: S.condAddBtn,
                               title: t('tipExpandEdit'),
                               onMouseDown: (e) => e.stopPropagation(),
-                              onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                              onClick: () => { setRefsEditFor(null); setRoleEditFor(roleEditFor === node.id ? null : node.id); },
                             }, '⤢'),
                             conditionBranchesForUI(node, lang).length < 16 && h('button', {
                               type: 'button',
@@ -7650,7 +7793,7 @@ window.__ModuleLoader__.load({
                             onMouseDown: (e) => e.stopPropagation(),
                             onMouseEnter: (e) => { e.currentTarget.style.color = C.text; e.currentTarget.style.borderColor = C.accent; },
                             onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.borderColor = C.border; },
-                            onClick: () => setRoleEditFor(roleEditFor === node.id ? null : node.id),
+                            onClick: () => { setRefsEditFor(null); setRoleEditFor(roleEditFor === node.id ? null : node.id); },
                           }, '⤢'),
                         ),
                       ),
@@ -7727,6 +7870,7 @@ window.__ModuleLoader__.load({
       apply(ctx) {
         try {
         hostCtx = ctx;
+        workspaceFilesService = null;
         ctx.inject(['sidebarRightTabs'], (scope) => {
           scope.effect(() => scope.sidebarRightTabs.register({
             id: TAB_ID,
@@ -7752,7 +7896,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, isDockElementHidden, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

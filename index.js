@@ -38,8 +38,11 @@ import {
   normalizeBranches,
   conditionBranches,
   edgeKey,
+  extractJsonObjects,
+  parseStrictJsonObject,
   parseStrictConditionJson,
   parseConditionDecision,
+  clipSafeSlice,
   clipUpstreamOutput,
   briefFor,
   extractResultError,
@@ -169,7 +172,7 @@ function delayWithSignal(ms, signal) {
   });
 }
 
-async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet, loopCtx) {
+async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet, loopCtx, activeRec) {
   const childKey = (id) => String(sid || '') + '::' + id;
   const isCondition = node.kind === 'condition';
   const fullBrief = briefFor(plan, node, results, failedMap, prunedSet, loopCtx);
@@ -192,6 +195,8 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   if (node.reasoning) agentOptions.reasoningEffort = node.reasoning;
   if (Object.keys(agentOptions).length) spec.agentOptions = agentOptions;
   const allowSchema = !(route && route.noSchema);
+  const wantsStructured = !isCondition && (Boolean(node.structured)
+    || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured'));
   if (isCondition) {
     const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
     spec.agentPreset = 'minimal';
@@ -224,8 +229,6 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     }
   } else {
     if (node.preset) spec.agentPreset = node.preset;
-    const wantsStructured = Boolean(node.structured)
-      || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
     if (wantsStructured && allowSchema) {
       spec.outputSchema = {
         type: 'object',
@@ -251,14 +254,23 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       const message = String((error && error.message) || error);
       return { ok: false, text: '启动失败：' + message, reason: 'activation-failed', errorDetail: message };
     }
+    let trackedCid = '';
     try {
-      if (activation && activation.childId) {
-        const cid = String(activation.childId);
+      const cid = activation && activation.childId ? String(activation.childId) : '';
+      // If cancellation fired while `startActivation` was pending, interrupt this child
+      // immediately and skip updating memory/live slots so no zombie child can escape.
+      if (signal && signal.aborted) {
+        if (cid && scope && scope.subagents && typeof scope.subagents.interrupt === 'function') {
+          try { scope.subagents.interrupt(cid, { kind: 'user' }); } catch (_e) { /* best-effort */ }
+        }
+        return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '' };
+      }
+      if (cid) {
+        trackedCid = cid;
         touchMapLRU(liveChild, childKey(node.id), cid, MAX_CHILD_SLOTS);
         // Only overwrite the persisted memory slot when Memory is ON, so a
         // temporary keepSession=false experiment never destroys saved memory.
         if (node.keepSession) touchMapLRU(childByNode, childKey(node.id), cid, MAX_CHILD_SLOTS);
-        const activeRec = sid ? activeRunBySession.get(String(sid)) : null;
         if (activeRec && activeRec.childIds) activeRec.childIds.add(cid);
       }
       let result;
@@ -270,33 +282,37 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       }
       const outText = textOf(result);
       const errDetail = extractResultError(result);
-      // DSH 0.2.2 implements `outputSchema` via a `structured_output` tool; if a minimal
-      // condition judge completes with valid JSON text without calling the tool, DSH
-      // rewrites `completed -> error` with no `diagnostic`. Rescue strict JSON verdicts
-      // directly on attempt #1 instead of burning a second LLM roundtrip.
-      const rescuedDecision = (isCondition
-        && result
-        && result.stopReason === 'error'
-        && !errDetail
-        && result.structured === undefined)
+      // DSH 0.2.2 implements `outputSchema` via a `structured_output` tool; if a child
+      // completes with valid JSON text without calling the tool, DSH rewrites
+      // `completed -> error` with no `diagnostic`. Rescue strict JSON verdicts/objects
+      // directly on attempt #1 instead of burning a second LLM roundtrip or re-running
+      // a writable standard node.
+      const isRewriteCandidate = Boolean(
+        result && result.stopReason === 'error' && !errDetail && result.structured === undefined,
+      );
+      const rescuedDecision = (isCondition && isRewriteCandidate)
         ? parseStrictConditionJson(outText, node)
         : null;
+      const rescuedStructured = (!isCondition && wantsStructured && allowSchema && isRewriteCandidate)
+        ? parseStrictJsonObject(outText)
+        : null;
+      const rescued = Boolean(rescuedDecision || rescuedStructured);
+      const finalText = rescuedStructured ? JSON.stringify(rescuedStructured) : outText;
       const outcome = {
-        ok: rescuedDecision ? true : !failed(result),
-        text: outText,
-        reason: rescuedDecision ? 'completed' : (result && result.stopReason),
+        ok: rescued ? true : !failed(result),
+        text: finalText,
+        reason: rescued ? 'completed' : (result && result.stopReason),
         errorDetail: errDetail,
-        empty: rescuedDecision ? false : isEmptyOutput(result),
-        childId: activation && activation.childId ? String(activation.childId) : '',
+        empty: rescued ? false : isEmptyOutput(result),
+        childId: cid,
       };
       if (isCondition) {
         outcome.decision = rescuedDecision || parseConditionDecision(result, outText, node);
       }
       return outcome;
     } finally {
-      if (activation && activation.childId && sid) {
-        const activeRec = activeRunBySession.get(String(sid));
-        if (activeRec && activeRec.childIds) activeRec.childIds.delete(String(activation.childId));
+      if (trackedCid && activeRec && activeRec.childIds) {
+        activeRec.childIds.delete(trackedCid);
       }
       try { await activation.dispose(); } catch (_e) { /* ignore */ }
     }
@@ -323,8 +339,8 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     const continued = await run(forcedChild);
     if (signal && signal.aborted) return continued;
     if (continued.ok) {
-      touchMapLRU(liveChild, childKey(node.id), forcedChild, MAX_CHILD_SLOTS);
-      return continued;
+      touchMapLRU(liveChild, childKey(node.id), continued.childId || forcedChild, MAX_CHILD_SLOTS);
+      return { ...continued, sessionContinued: true };
     }
     if (continued.reason !== 'activation-failed') {
       return continued;
@@ -360,7 +376,9 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   return started;
 }
 
-async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx) {
+const NO_SCHEMA_RETRY_REASONS = new Set(['', 'error', 'run-failed']);
+
+async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx, activeRec) {
   const primaryModel = formatModelLabel(node.provider, node.model);
   if (signal && signal.aborted) {
     return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: '', modelUsed: primaryModel, fallbackUsed: false, sessionContinued: false };
@@ -371,25 +389,9 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
       || childByNode.get(String(sid || '') + '::' + e.from))
     .find((id) => typeof id === 'string');
 
-  if (continueFrom) {
-    const continued = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom, sid, failedMap, prunedSet, loopCtx);
-    if (signal && signal.aborted) return continued;
-    if (continued.ok) {
-      const out = {
-        ok: true,
-        empty: Boolean(continued.empty),
-        text: continued.text + '\n（已在上游会话中继续）',
-        childId: continued.childId || continueFrom,
-        modelUsed: primaryModel,
-        fallbackUsed: false,
-        sessionContinued: true,
-      };
-      if (continued.decision) out.decision = continued.decision;
-      return out;
-    }
-  }
-
-  let first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
+  // Single primary attempt (continuing upstream session if `continueFrom` is available,
+  // with cold-session fallback handled inside `spawnOnce` — never double-running primary).
+  let first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, continueFrom || undefined, sid, failedMap, prunedSet, loopCtx, activeRec);
   if (signal && signal.aborted) return first;
   // Safe single transient-error backoff retry strictly for read-only nodes (`minimal` / `condition`)
   // on post-start transient failures (429/502/503/504/timeout). Never auto-retry writable standard
@@ -403,20 +405,21 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
     if (signal && signal.aborted) {
       return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: first.childId || '', modelUsed: primaryModel, fallbackUsed: false, sessionContinued: false };
     }
-    const transientRetry = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
+    const transientRetry = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx, activeRec);
     if (signal && signal.aborted) return transientRetry;
     if (transientRetry.ok || transientRetry.errorDetail || !first.errorDetail) {
       first = transientRetry;
     }
   }
   // Many models/proxies reject strict `outputSchema` (`json_schema`) with stopReason='error'.
-  // For condition/structured nodes, automatically retry once on the same model without outputSchema
-  // so `parseConditionDecision` can parse plain-text JSON before giving up or falling back.
+  // Retry once without outputSchema strictly on read-only nodes (never re-run writable standard
+  // agents, and never retry `max-tokens` / `refusal` / `aborted` / `activation-failed`).
   const usedSchema = node.kind === 'condition'
     || Boolean(node.structured)
     || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
-  if (!first.ok && !transientRetried && usedSchema && first.reason !== 'activation-failed' && first.reason !== 'aborted' && !isPermissionFailure(first)) {
-    const plainRetry = await spawnOnce(scope, plan, node, results, parent, signal, { noSchema: true }, undefined, sid, failedMap, prunedSet, loopCtx);
+  const firstReason = typeof first.reason === 'string' ? first.reason : '';
+  if (!first.ok && !transientRetried && isReadOnly && usedSchema && NO_SCHEMA_RETRY_REASONS.has(firstReason) && !isPermissionFailure(first)) {
+    const plainRetry = await spawnOnce(scope, plan, node, results, parent, signal, { noSchema: true }, undefined, sid, failedMap, prunedSet, loopCtx, activeRec);
     if (signal && signal.aborted) return plainRetry;
     if (plainRetry.ok) {
       first = plainRetry;
@@ -425,14 +428,15 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
     }
   }
   if (first.ok) {
+    const continuedUpstream = Boolean(first.sessionContinued);
     const out = {
       ok: true,
       empty: Boolean(first.empty),
-      text: first.text,
-      childId: first.childId || '',
+      text: continuedUpstream ? (first.text + '\n（已在上游会话中继续）') : first.text,
+      childId: first.childId || (continuedUpstream ? continueFrom : '') || '',
       modelUsed: primaryModel,
       fallbackUsed: false,
-      sessionContinued: Boolean(first.warmReused),
+      sessionContinued: continuedUpstream || Boolean(first.warmReused),
     };
     if (first.decision) out.decision = first.decision;
     return out;
@@ -458,14 +462,15 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   let retry = await spawnOnce(scope, plan, node, results, parent, signal, {
     provider: node.fallbackProvider,
     model: node.fallbackModel,
-  }, undefined, sid, failedMap, prunedSet, loopCtx);
+  }, undefined, sid, failedMap, prunedSet, loopCtx, activeRec);
   if (signal && signal.aborted) return retry;
-  if (!retry.ok && usedSchema && retry.reason !== 'activation-failed' && retry.reason !== 'aborted' && !isPermissionFailure(retry)) {
+  const retryReason = typeof retry.reason === 'string' ? retry.reason : '';
+  if (!retry.ok && isReadOnly && usedSchema && NO_SCHEMA_RETRY_REASONS.has(retryReason) && !isPermissionFailure(retry)) {
     const plainFallback = await spawnOnce(scope, plan, node, results, parent, signal, {
       provider: node.fallbackProvider,
       model: node.fallbackModel,
       noSchema: true,
-    }, undefined, sid, failedMap, prunedSet, loopCtx);
+    }, undefined, sid, failedMap, prunedSet, loopCtx, activeRec);
     if (signal && signal.aborted) return plainFallback;
     if (plainFallback.ok || (plainFallback.errorDetail && !retry.errorDetail)) retry = plainFallback;
   }
@@ -503,12 +508,24 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
  * resolves a session's root from its header cwd, so the client reads the same
  * relative path back through the Remote.
  */
-function resolveSessionsService(scope) {
+/** Resolve a Cordis service safely: prefer `scope.get(name)` so uncommitted services return undefined instead of throwing. */
+function resolveService(scope, name) {
+  if (!scope) return null;
+  if (typeof scope.get === 'function') {
+    try {
+      const viaGet = scope.get(name);
+      if (viaGet) return viaGet;
+    } catch (_e) { /* fall through */ }
+  }
   try {
-    return (scope && scope.sessions) || (scope && typeof scope.get === 'function' ? scope.get('sessions') : null);
+    return scope[name] || null;
   } catch (_e) {
     return null;
   }
+}
+
+function resolveSessionsService(scope) {
+  return resolveService(scope, 'sessions');
 }
 
 function activeCanvasIds(extraId) {
@@ -522,6 +539,8 @@ function activeCanvasIds(extraId) {
   return ids;
 }
 
+let lastPublishCanvasAt = 0;
+
 function publishCanvas(scope, sessionId, canvas) {
   try {
     const safeId = safeSessionFileBase(sessionId);
@@ -531,7 +550,9 @@ function publishCanvas(scope, sessionId, canvas) {
     const root = live && live.header && live.header.cwd;
     if (!root) return false;
     const dir = join(root, '.dsh', 'canvas');
-    writeFileAtomic(join(dir, safeId + '.json'), JSON.stringify({ canvas, at: Date.now() }));
+    // Monotonic timestamp so back-to-back generate + patch within 1ms never share the same `at`.
+    lastPublishCanvasAt = Math.max(Date.now(), lastPublishCanvasAt + 1);
+    writeFileAtomic(join(dir, safeId + '.json'), JSON.stringify({ canvas, at: lastPublishCanvasAt }));
     cleanupStaleCanvasFiles(dir, { activeIds: activeCanvasIds(sessionId) });
     return true;
   } catch (_e) {
@@ -546,7 +567,7 @@ function compactDecisionsForTelemetry(decisions) {
   for (const [k, v] of Object.entries(decisions)) {
     if (!v || typeof v !== 'object') { out[k] = v; continue; }
     const reason = typeof v.reason === 'string' && v.reason.length > 1000
-      ? v.reason.slice(0, 999) + '…'
+      ? clipSafeSlice(v.reason, 999, '…')
       : v.reason;
     out[k] = reason === v.reason ? v : { ...v, reason };
   }
@@ -583,7 +604,7 @@ function publishRunState(scope, sessionId, runState) {
  * Uses DSH 0.2.2 native APIs:
  *   - `scope.subagents.interrupt(childId, { kind: 'user' })` for each live child
  *   - `scope.subagents.drainDescendants([rootAgent])` to tear down the full subtree
- *   - `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })` when a turn is active
+ *   - `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })` when a turn is active (`status === 'running'`)
  * Also aborts our local `AbortController`, preserves partial progress in `lastRunBySession`,
  * clears `runBySession` (`waitingLead`), and writes `halted` / `idle` to `.run.json`.
  */
@@ -601,10 +622,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
   }
 
   // Interrupt every tracked live child immediately via DSH's native subagents.interrupt API.
-  let subagents = null;
-  try {
-    subagents = (scope && scope.subagents) || (scope && typeof scope.get === 'function' ? scope.get('subagents') : null);
-  } catch (_e) { subagents = null; }
+  const subagents = resolveService(scope, 'subagents');
   if (subagents && typeof subagents.interrupt === 'function') {
     for (const cid of childIds) {
       try { subagents.interrupt(cid, { kind: 'user' }); } catch (_e) { /* best-effort */ }
@@ -615,10 +633,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
   // to drain the entire descendant subagent tree and cancel any active root turn.
   let targetAgent = rootAgent || null;
   if (!targetAgent) {
-    let agentsSvc = null;
-    try {
-      agentsSvc = (scope && scope.agents) || (scope && typeof scope.get === 'function' ? scope.get('agents') : null);
-    } catch (_e) { agentsSvc = null; }
+    const agentsSvc = resolveService(scope, 'agents');
     if (agentsSvc && typeof agentsSvc.get === 'function') {
       try { targetAgent = agentsSvc.get(sid) || null; } catch (_e) { targetAgent = null; }
     }
@@ -630,7 +645,8 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
         Promise.resolve(subagents.drainDescendants([targetAgent])).catch(() => {});
       } catch (_e) { /* best-effort */ }
     }
-    if (allowCancelRoot && (wasRunning || targetAgent.running) && typeof targetAgent.cancel === 'function') {
+    const agentActive = targetAgent.status === 'running' || Boolean(targetAgent.running);
+    if (allowCancelRoot && (wasRunning || agentActive) && typeof targetAgent.cancel === 'function') {
       try { targetAgent.cancel({ kind: 'user' }, { keepInbox: true }); } catch (_e) { /* best-effort */ }
     }
   }
@@ -945,20 +961,26 @@ async function executePlan(scope, plan, args, exec) {
       max: normalizeMaxIterations(e.maxIterations),
     }));
   const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
-  const MAX_PARALLEL = Number.isFinite(Number(rawMaxParallel))
-    ? Math.max(1, Math.min(8, Math.floor(Number(rawMaxParallel))))
+  const parsedMaxParallel = (rawMaxParallel === null || rawMaxParallel === undefined || rawMaxParallel === '' || typeof rawMaxParallel === 'boolean')
+    ? NaN
+    : Number(rawMaxParallel);
+  const MAX_PARALLEL = Number.isFinite(parsedMaxParallel)
+    ? Math.max(1, Math.min(8, Math.floor(parsedMaxParallel)))
     : 4;
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   const wantRetryFailed = opts.retryFailed === true;
-  if (opts.fromNodes !== undefined && !Array.isArray(opts.fromNodes)) {
-    return { error: '参数 fromNodes 必须是节点 ID 或名称的字符串数组，例如 ["n1"]。' };
-  }
-  const rawFromNodes = Array.isArray(opts.fromNodes) ? opts.fromNodes.filter((x) => typeof x === 'string' && x.trim()) : [];
   const resolvedFromIds = [];
-  if (rawFromNodes.length > 0) {
+  if (opts.fromNodes !== undefined) {
+    if (!Array.isArray(opts.fromNodes) || opts.fromNodes.length === 0) {
+      return { error: '参数 fromNodes 必须是包含至少一个节点 ID 或名称的非空字符串数组，例如 ["n1"]。' };
+    }
+    const invalidEntries = opts.fromNodes.filter((x) => typeof x !== 'string' || !x.trim());
+    if (invalidEntries.length) {
+      return { error: '参数 fromNodes 包含非字符串或空白项，请传入有效的节点 ID 或名称字符串数组。' };
+    }
     const unmatched = [];
-    for (const ref of rawFromNodes) {
+    for (const ref of opts.fromNodes) {
       const trimmed = ref.trim();
       if (byId.has(trimmed)) resolvedFromIds.push(trimmed);
       else {
@@ -1324,7 +1346,7 @@ async function executePlan(scope, plan, args, exec) {
     // Also interrupt every already-running child via DSH's native subagents.interrupt API,
     // since startActivation({ signal }) only aborts startup, not post-start execution.
     try {
-      const subagents = (scope && scope.subagents) || (scope && typeof scope.get === 'function' ? scope.get('subagents') : null);
+      const subagents = resolveService(scope, 'subagents');
       if (subagents && typeof subagents.interrupt === 'function') {
         for (const cid of activeRec.childIds) {
           try { subagents.interrupt(cid, { kind: 'user' }); } catch (_e) { /* best-effort */ }
@@ -1349,10 +1371,15 @@ async function executePlan(scope, plan, args, exec) {
   const finishAborted = () => {
     state.endedAt = Date.now();
     state.haltedReason = '工作流执行已取消';
-    snapshotLastRun(true);
-    emitRunState('halted', null, state.haltedReason);
-    if (sid) runBySession.delete(sid);
-    saveStore();
+    // Only touch session-level state & `.run.json` if this run still owns `runBySession.get(sid)`.
+    // When `abortSessionRun` already finalized synchronously (or a fresh Run 2 has started),
+    // skip writing so we never double-write `.run.json` or clobber Run 2.
+    if (!sid || runBySession.get(sid) === state) {
+      if (state.done && state.done.size > 0) snapshotLastRun(true);
+      emitRunState('halted', null, state.haltedReason);
+      if (sid) runBySession.delete(sid);
+      saveStore();
+    }
     return {
       status: 'halted',
       error: '工作流执行已取消。',
@@ -1401,7 +1428,7 @@ async function executePlan(scope, plan, args, exec) {
         childId: (prevStat && prevStat.childId) || '',
         reason: '',
       };
-      const promise = spawnNode(scope, plan, node, state.results, agent, runSignal, sid, state.failed, state.pruned, loopCtx)
+      const promise = spawnNode(scope, plan, node, state.results, agent, runSignal, sid, state.failed, state.pruned, loopCtx, activeRec)
         .then(
           (outcome) => ({ node, outcome, startedAt: launchAt }),
           (err) => ({ node, startedAt: launchAt, outcome: { ok: false, reason: 'run-failed', text: '运行失败：' + String((err && err.message) || err) } }),
@@ -1425,7 +1452,7 @@ async function executePlan(scope, plan, args, exec) {
       state.haltedReason = haltedReason;
       snapshotLastRun(true);
       emitRunState('halted', null, haltedReason);
-      if (sid) runBySession.delete(sid);
+      if (sid && runBySession.get(sid) === state) runBySession.delete(sid);
       saveStore();
       return {
         status: 'halted',
@@ -1446,7 +1473,7 @@ async function executePlan(scope, plan, args, exec) {
       state.endedAt = Date.now();
       snapshotLastRun(false);
       emitRunState('done', null);
-      runBySession.delete(sid);
+      if (sid && runBySession.get(sid) === state) runBySession.delete(sid);
       saveStore();
       return {
         status: 'done',
@@ -1593,7 +1620,7 @@ async function executePlan(scope, plan, args, exec) {
               if (mid === node.id) continue;
               const rawRes = state.results[mid];
               if (typeof rawRes === 'string' && rawRes.trim()) {
-                const clipped = rawRes.length > 500 ? rawRes.slice(0, 500) + '…' : rawRes;
+                const clipped = clipSafeSlice(rawRes, 500, '…');
                 summaryLines.push('[' + (labelOf.get(mid) || mid) + '] ' + clipped);
               }
             }
@@ -1616,12 +1643,14 @@ async function executePlan(scope, plan, args, exec) {
             for (const e of plan.edges || []) {
               if (e && members.has(e.from)) state.blockedEdges.delete(edgeKey(e));
             }
-            // Un-prune previously pruned downstream nodes reachable from loop members so
-            // an inner condition picking a different branch on a retry round can still run them.
+            // Un-prune previously pruned downstream nodes reachable from loop members over
+            // non-blocked forward edges so an inner condition picking a different branch on a
+            // retry round can still run them without waking branches vetoed by outside conditions.
             if (state.pruned.size > 0) {
               const fwdAdj = new Map();
               for (const e of forwardEdgesOf(plan.edges || [])) {
                 if (!e || !e.from || !e.to) continue;
+                if (state.blockedEdges.has(edgeKey(e))) continue;
                 if (!fwdAdj.has(e.from)) fwdAdj.set(e.from, []);
                 fwdAdj.get(e.from).push(e.to);
               }
@@ -1800,7 +1829,7 @@ async function executePlan(scope, plan, args, exec) {
       state.done.add(leadNode.id);
       snapshotLastRun(false);
       emitRunState('done', null);
-      if (sid) runBySession.delete(sid);
+      if (sid && runBySession.get(sid) === state) runBySession.delete(sid);
       saveStore();
       return {
         status: 'done',
@@ -1992,8 +2021,16 @@ export function apply(ctx) {
             try {
               const id = agent && agent.id !== undefined ? String(agent.id) : '';
               if (!id) return { kind: 'error', text: 'no session' };
-              touchMapLRU(canvasBySession, id, parsePayload(rawInput), MAX_STORED_SESSIONS);
-              if (!activeRunBySession.has(id)) {
+              const prev = canvasBySession.get(id);
+              const next = parsePayload(rawInput);
+              touchMapLRU(canvasBySession, id, next, MAX_STORED_SESSIONS);
+              const curRun = runBySession.get(id);
+              const sameActivePlan = Boolean(
+                prev && prev.enabled === true && next && next.enabled === true && !next.error
+                && prev.plan && next.plan && JSON.stringify(prev.plan) === JSON.stringify(next.plan),
+              );
+              const keepPausedLead = Boolean(curRun && curRun.waitingLead && sameActivePlan);
+              if (!activeRunBySession.has(id) && !keepPausedLead) {
                 runBySession.delete(id);
                 publishRunState(ctx, id, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
               }
@@ -2349,6 +2386,8 @@ export function apply(ctx) {
               type: 'object',
               properties: {
                 status: { type: 'string' },
+                wasRunning: { type: 'boolean' },
+                wasWaiting: { type: 'boolean' },
                 node: { type: 'object' },
                 finalLead: { type: 'object' },
                 results: { type: 'object' },
@@ -2367,7 +2406,7 @@ export function apply(ctx) {
             },
             render: (_args, value) => {
               const v = value || {};
-              if (typeof v.error === 'string') return [{ type: 'text', text: v.error }];
+              if (typeof v.error === 'string' && v.status !== 'halted') return [{ type: 'text', text: v.error }];
               if (v.status === 'cancelled') return [{ type: 'text', text: v.hint || '已终止当前工作流执行。' }];
               const results = v.results || {};
               const labels = v.labels || {};
@@ -2406,6 +2445,22 @@ export function apply(ctx) {
               const loopExNote = Array.isArray(v.loopExhausted) && v.loopExhausted.length
                 ? '\n\n⚠ 回环达上限熔断：' + v.loopExhausted.map((lx) => (lx.fromLabel || lx.edgeKey) + ' ↺ ' + (lx.toLabel || '') + '（' + lx.iterations + '/' + lx.maxIterations + '）').join('；')
                 : '';
+              if (v.status === 'halted') {
+                const reusedNote = Array.isArray(v.reused) && v.reused.length
+                  ? '\n\n已复用缓存：' + v.reused.join('、')
+                  : '';
+                return [{
+                  type: 'text',
+                  text: (v.error || '工作流已停止。')
+                    + decisionList
+                    + failedList
+                    + emptyList
+                    + loopExNote
+                    + (blocks.length ? '\n\n已完成节点结果：\n' + body : '')
+                    + branchSkipNote
+                    + reusedNote,
+                }];
+              }
               if (v.status === 'need-lead') {
                 const n = v.node || {};
                 const refsBlock = Array.isArray(n.refs) && n.refs.length
@@ -2493,8 +2548,11 @@ export {
   normalizeMaxIterations,
   loopMemberIds,
   validateLoopEdges,
+  extractJsonObjects,
+  parseStrictJsonObject,
   parseStrictConditionJson,
   parseConditionDecision,
+  clipSafeSlice,
   withoutEntry,
   analyzeCanvasWarnings,
   normalizeCanvas,

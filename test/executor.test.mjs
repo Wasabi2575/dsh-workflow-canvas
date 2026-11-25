@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apply, orderNodes, upstreamOf, downstreamLabels, parsePayload, clipUpstreamOutput, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, isTransientFailure, safeSessionFileBase, writeFileAtomic, pruneMapLRU, touchMapLRU, cleanupStaleCanvasFiles, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
+import { apply, orderNodes, upstreamOf, downstreamLabels, parsePayload, clipUpstreamOutput, briefFor, normalizeMaxIterations, extractJsonObjects, parseStrictJsonObject, parseStrictConditionJson, parseConditionDecision, clipSafeSlice, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, isTransientFailure, safeSessionFileBase, writeFileAtomic, pruneMapLRU, touchMapLRU, cleanupStaleCanvasFiles, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -2794,4 +2794,381 @@ test('DSH 0.2.2 SubagentResult: extracts diagnostic field and rescues strict JSO
   assert.ok(diagFail.results.gate.includes('invalid model alias'), 'surfaces latest `diagnostic` error text');
   assert.equal(isTransientFailure({ ok: false, reason: 'max-tokens', text: '503 error discussion' }), false, 'hyphenated DSH max-tokens never triggers retry');
   assert.equal(isTransientFailure({ ok: false, reason: 'refusal', text: '503' }), false, 'DSH refusal never triggers retry');
+});
+
+test('CJK binary condition fallback, multi-JSON prose extraction, and surrogate-safe clipSafeSlice', () => {
+  const condNode = { id: 'c1', kind: 'condition', label: '是否通过' };
+  // CJK text fallback must work without ASCII \b failing on Chinese characters
+  for (const sample of ['是', '通过', '通过，全部完成', '是：没有问题', 'pass']) {
+    const res = parseConditionDecision(null, sample, condNode);
+    assert.equal(res.pass, true, 'should match positive text: ' + sample);
+    assert.deepEqual(res.branches, ['true']);
+  }
+  const neg = parseConditionDecision(null, '否，发现 2 处错误', condNode);
+  assert.equal(neg.pass, false);
+  assert.deepEqual(neg.branches, ['false']);
+
+  // Multi-{...} prose: upstream snippet before final verdict must not break JSON parsing
+  const prose = '上游输出包含 {"status":"error","code":500}，经核实已恢复，最终判决：{"pass": true, "reason": "全部通过"}';
+  assert.equal(extractJsonObjects(prose).length, 2);
+  const strictCond = parseStrictConditionJson(prose, condNode);
+  assert.ok(strictCond && strictCond.pass === true && strictCond.branches[0] === 'true');
+  assert.equal(strictCond.reason, '全部通过');
+
+  const fenced = '说明：\n```json\n{"files": ["a.js"], "ok": true}\n```';
+  const strictObj = parseStrictJsonObject(fenced);
+  assert.deepEqual(strictObj, { files: ['a.js'], ok: true });
+
+  // Surrogate-safe clipping
+  const emoji = 'x' + '🔥'.repeat(30);
+  const sliced = clipSafeSlice(emoji, 10, '…');
+  assert.equal(sliced.isWellFormed(), true);
+  assert.ok(sliced.endsWith('…'));
+});
+
+test('structured standard node 1-shot JSON rescue, noSchema guard on writable/max-tokens, and session-ref single-run cold fallback', async () => {
+  // 1) Writable standard node with `structured: true` returns JSON text without calling `structured_output`:
+  // DSH rewrites completed -> error without diagnostic; executor rescues on attempt #1 (ZERO second spawn!).
+  let stdCalls = 0;
+  const scopeRescue = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 's1') {
+          stdCalls += 1;
+          return Promise.resolve({
+            childId: 'kid-s1',
+            result: Promise.resolve({
+              output: [{ type: 'text', text: '```json\n{"summary": "done", "files": ["a.js"]}\n```' }],
+              stopReason: 'error',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const planStruct = {
+    task: 'structured 救援测试',
+    nodes: [
+      { id: 's1', kind: 'agent', preset: 'standard', label: '实现', role: '改代码', structured: true },
+      { id: 's2', kind: 'agent', preset: 'minimal', label: '汇总', role: '读结果' },
+    ],
+    edges: [
+      { from: 'lead', to: 's1', type: 'prompt' },
+      { from: 's1', to: 's2', type: 'structured' },
+    ],
+  };
+  const rescued = await executePlan(scopeRescue, planStruct, {}, { agent: { id: 's-std-rescue-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(rescued.status, 'done');
+  assert.equal(stdCalls, 1, 'rescued writable structured node in 1 shot without re-running');
+  assert.equal(rescued.failed.length, 0);
+
+  // 2) Writable standard node that truly fails with outputSchema MUST NOT retry without outputSchema (avoid double side-effects),
+  //    and read-only node with max-tokens MUST NOT retry without outputSchema either.
+  let writeFailCalls = 0;
+  let maxTokCalls = 0;
+  const scopeNoRetry = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'w1') {
+          writeFailCalls += 1;
+          return Promise.resolve({
+            childId: 'kid-w1',
+            result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'schema rejected' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        maxTokCalls += 1;
+        return Promise.resolve({
+          childId: 'kid-m1',
+          result: Promise.resolve({ output: [], stopReason: 'max-tokens', diagnostic: 'token limit' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const planNoRetry = {
+    task: 'noSchema guard',
+    nodes: [
+      { id: 'w1', kind: 'agent', preset: 'standard', label: '写节点', role: '改文件', structured: true },
+      { id: 'm1', kind: 'condition', label: '只读条件', role: '判断' },
+    ],
+    edges: [
+      { from: 'lead', to: 'w1', type: 'prompt' },
+      { from: 'lead', to: 'm1', type: 'prompt' },
+    ],
+  };
+  await executePlan(scopeNoRetry, planNoRetry, {}, { agent: { id: 's-noretry-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(writeFailCalls, 1, 'writable standard node never retries noSchema');
+  assert.equal(maxTokCalls, 1, 'max-tokens never retries noSchema');
+
+  // 3) session-ref failure falls back cold ONCE without double-running primary, and cold fallback has sessionContinued: false
+  const callsB = [];
+  const scopeRef = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'a') {
+          return Promise.resolve({
+            childId: 'kid-a-1',
+            result: Promise.resolve({ output: [{ type: 'text', text: 'A ok' }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        callsB.push({ childId: spec.childId || null, model: spec.model || '' });
+        if (spec.childId === 'kid-a-1') {
+          return Promise.reject(new Error('upstream child closed'));
+        }
+        return Promise.resolve({
+          childId: 'kid-b-cold',
+          result: Promise.resolve({ output: [{ type: 'text', text: 'B cold ok' }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const planRef = {
+    task: 'session-ref cold fallback',
+    nodes: [
+      { id: 'a', kind: 'agent', preset: 'standard', label: 'A', role: 'r1' },
+      { id: 'b', kind: 'agent', preset: 'standard', label: 'B', role: 'r2' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'b', type: 'session-ref' },
+    ],
+  };
+  const refRes = await executePlan(scopeRef, planRef, {}, { agent: { id: 's-sref-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(refRes.status, 'done');
+  assert.equal(callsB.length, 2, '1 warm attempt (rejected) + 1 cold attempt, never 3');
+  assert.equal(callsB[0].childId, 'kid-a-1');
+  assert.equal(callsB[1].childId, null);
+});
+
+test('late startActivation abort interrupts child immediately, agent.status === running cancels root, and /canvas-sync preserves paused Lead', async () => {
+  // 1) Abort while startActivation is still pending: once it resolves, immediately interrupt the late child
+  let resolveStart;
+  const interrupted = [];
+  let rootCancelled = 0;
+  const scopeAbort = {
+    subagents: {
+      startActivation() {
+        return new Promise((resolve) => {
+          resolveStart = () => resolve({
+            childId: 'kid-late-1',
+            result: new Promise(() => {}),
+            dispose: () => Promise.resolve(),
+          });
+        });
+      },
+      interrupt(cid) { interrupted.push(cid); return Promise.resolve(); },
+      drainDescendants() { return Promise.resolve(); },
+    },
+  };
+  const planAbort = {
+    task: 'late start abort',
+    nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'r1' }],
+    edges: [{ from: 'lead', to: 'a', type: 'prompt' }],
+  };
+  const sidAbort = 's-late-abort-' + Date.now();
+  const rootAgent = {
+    id: sidAbort,
+    status: 'running', // DSH 0.2.2 verified field (no `.running` boolean)
+    cancel() { rootCancelled += 1; },
+  };
+  const runP = executePlan(scopeAbort, planAbort, {}, { agent: rootAgent, signal: new AbortController().signal });
+  await new Promise((r) => setTimeout(r, 10));
+  abortSessionRun(scopeAbort, sidAbort, rootAgent);
+  assert.equal(rootCancelled, 1, 'abortSessionRun cancels root agent when agent.status === "running"');
+  resolveStart();
+  const resAbort = await runP;
+  assert.equal(resAbort.status, 'halted');
+  assert.ok(interrupted.includes('kid-late-1'), 'late-resolving child is interrupted immediately on abort');
+
+  // 2) /canvas-sync with identical enabled plan preserves paused waitingLead (e.g. remount auto-sync)
+  const commands = new Map();
+  const tools = new Map();
+  const fakeCtx = {
+    inject(names, fn) {
+      const scope = {
+        effect: (cb) => cb(),
+        commands: { register: (c) => { commands.set(c.name, c); return () => {}; } },
+        tools: { register: (t) => { tools.set(t.name, t); return () => {}; } },
+        subagents: {
+          startActivation() {
+            return Promise.resolve({
+              childId: 'kid-sync-1',
+              result: Promise.resolve({ output: [{ type: 'text', text: 'step1 ok' }], stopReason: 'completed' }),
+              dispose: () => Promise.resolve(),
+            });
+          },
+        },
+        sessions: {},
+      };
+      fn(scope);
+    },
+  };
+  apply(fakeCtx);
+  const sidSync = 's-sync-keep-' + Date.now();
+  const syncPayload = encodeURIComponent(JSON.stringify({
+    enabled: true,
+    plan: {
+      task: '保留拍板',
+      nodes: [
+        { id: 'a', kind: 'agent', label: '摸底', role: 'r1' },
+        { id: 'l1', kind: 'lead', label: '拍板', role: '确认' },
+        { id: 'b', kind: 'agent', label: '执行', role: 'r2' },
+      ],
+      edges: [
+        { from: 'lead', to: 'a', type: 'prompt' },
+        { from: 'a', to: 'l1', type: 'prompt' },
+        { from: 'l1', to: 'b', type: 'prompt' },
+      ],
+    },
+  }));
+  const syncCmd = commands.get('canvas-sync');
+  const wfTool = tools.get('canvas_workflow');
+  assert.equal(syncCmd.handler({ agent: { id: sidSync }, rawInput: syncPayload }).kind, 'success');
+  const paused = await wfTool.execute({}, { agent: { id: sidSync }, signal: new AbortController().signal });
+  assert.equal(paused.status, 'need-lead');
+  // Re-sync identical enabled plan -> waitingLead must stay intact!
+  assert.equal(syncCmd.handler({ agent: { id: sidSync }, rawInput: syncPayload }).kind, 'success');
+  assert.equal(inspectPlan(sidSync).paused, true, 'identical enabled /canvas-sync preserves paused waitingLead');
+  // Halted render surfaces completed results & failed nodes
+  const renderedHalted = wfTool.output.render({}, {
+    status: 'halted',
+    error: '权限被拒',
+    results: { a: '摸底已完成' },
+    labels: { a: '摸底' },
+    failed: [{ id: 'b', label: '执行', reason: 'permission denied' }],
+  });
+  assert.ok(renderedHalted[0].text.includes('权限被拒') && renderedHalted[0].text.includes('摸底已完成') && renderedHalted[0].text.includes('执行'));
+});
+
+test('loop retry un-prune BFS skips outside blockedEdges and never wakes rejected outside branch', async () => {
+  let gateCount = 0;
+  let spawned = [];
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        spawned.push(id);
+        if (id === 'outer_cond') {
+          // Outer condition picks branch "a" (blocking edge outer_cond -> outside_rejected)
+          return Promise.resolve({
+            childId: 'kid-outer',
+            result: Promise.resolve({
+              structured: { branch: 'a', reason: 'go to loop' },
+              output: [],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'gate') {
+          gateCount += 1;
+          return Promise.resolve({
+            childId: 'kid-gate-' + gateCount,
+            result: Promise.resolve({
+              structured: { pass: gateCount >= 2, reason: gateCount >= 2 ? 'ok' : 'retry once' },
+              output: [],
+              stopReason: 'completed',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id + '-' + spawned.length,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'done:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: 'blockedEdges isolation on loop retry',
+    nodes: [
+      { id: 'outer_cond', kind: 'condition', label: '外层分流', role: '选 a', branches: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
+      { id: 'worker', kind: 'agent', label: '工作', role: '干活' },
+      { id: 'gate', kind: 'condition', label: '质检', role: '是否通过' },
+      { id: 'ship', kind: 'agent', label: '交付', role: '收尾' },
+      { id: 'rejected_b', kind: 'agent', label: 'B分支', role: '不应执行' },
+    ],
+    edges: [
+      { from: 'lead', to: 'outer_cond', type: 'prompt' },
+      { from: 'outer_cond', to: 'worker', type: 'prompt', branch: 'a' },
+      { from: 'outer_cond', to: 'rejected_b', type: 'prompt', branch: 'b' },
+      { from: 'worker', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'ship', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'worker', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+      // Even if a side edge connects gate -> rejected_b on a non-taken branch, rejected_b stays pruned!
+    ],
+  };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-loop-blocked-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done');
+  assert.equal(gateCount, 2);
+  assert.ok(!spawned.includes('rejected_b'), 'outside rejected branch must never wake during loop retry');
+  assert.equal(res.results.ship, 'done:ship');
+});
+
+test('input validation & classifier hardening: null/blank defaults, self-loop, errorDetail, stack-trace 502, Windows reserved names, applyPatch structured preservation', async () => {
+  // normalizeMaxIterations & maxParallel reject null / '' / boolean instead of clamping to 1
+  assert.equal(normalizeMaxIterations(null), 3);
+  assert.equal(normalizeMaxIterations(''), 3);
+  assert.equal(normalizeMaxIterations(false), 3);
+  assert.equal(normalizeMaxIterations(true), 3);
+  assert.equal(normalizeMaxIterations(0), 1);
+
+  // loopMemberIds & validateLoopEdges reject self-loop
+  assert.equal(loopMemberIds([{ id: 'c', kind: 'condition' }], [], { from: 'c', to: 'c', loop: true }).size, 0);
+  const selfLoopCheck = validateLoopEdges([{ id: 'c', kind: 'condition' }], [{ from: 'c', to: 'c', loop: true }]);
+  assert.equal(selfLoopCheck.length, 1);
+
+  // isPermissionFailure inspects errorDetail too
+  assert.equal(isPermissionFailure({ ok: false, text: '', errorDetail: 'EACCES: permission denied' }), true);
+
+  // isTransientFailure ignores line numbers like :502: and overly long prose
+  assert.equal(isTransientFailure({ ok: false, text: 'TypeError at src/app.js:502:14' }), false);
+  assert.equal(isTransientFailure({ ok: false, text: 'HTTP 502 Bad Gateway' }), true);
+  assert.equal(isTransientFailure({ ok: false, text: 'x'.repeat(1200) + ' HTTP 503' }), false);
+
+  // Windows reserved device names are prefixed safely
+  assert.equal(safeSessionFileBase('CON'), '_CON');
+  assert.equal(safeSessionFileBase('nul.txt'), '_nul.txt');
+  assert.equal(safeSessionFileBase('COM1'), '_COM1');
+
+  // applyPatch rejects blank / '#' id and preserves explicit terminal structured: true
+  const p = applyPatch(
+    {
+      task: 't',
+      nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'r1', structured: true }],
+      edges: [{ from: 'lead', to: 'a', type: 'prompt' }],
+    },
+    {
+      nodes: [{ id: '   ', label: 'bad' }, { id: 'bad#id', label: 'hash' }, { id: 'a', role: 'r2' }],
+    },
+  );
+  assert.ok(p.warnings.some((w) => w.includes('缺少有效字符串 id')));
+  assert.ok(p.warnings.some((w) => w.includes('bad#id')));
+  assert.equal(p.plan.nodes.length, 1);
+  assert.equal(p.plan.nodes[0].structured, true, 'explicit terminal structured: true preserved when no structured edge was removed');
+
+  // fromNodes rejects [] and blank/non-string items; maxParallel: null defaults to 4
+  const scope = { subagents: { startActivation() { throw new Error('should not spawn'); } } };
+  const basePlan = {
+    task: 't',
+    nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'r1' }],
+    edges: [{ from: 'lead', to: 'a', type: 'prompt' }],
+  };
+  const emptyFrom = await executePlan(scope, basePlan, { fromNodes: [] }, { agent: { id: 's-empty-fn' } });
+  assert.ok(emptyFrom.error && emptyFrom.error.includes('非空字符串数组'));
+  const badItemFrom = await executePlan(scope, basePlan, { fromNodes: ['  ', 123] }, { agent: { id: 's-bad-fn' } });
+  assert.ok(badItemFrom.error && badItemFrom.error.includes('非字符串或空白项'));
 });

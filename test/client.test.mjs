@@ -960,4 +960,58 @@ test('isDockElementHidden detects collapsed DSH right sidebar (aria-hidden/inert
 
   // 4) checkVisibility fallback when outside dockkit shell
   assert.equal(c.isDockElementHidden({ offsetParent: {}, closest: () => null, checkVisibility: () => false }), true);
+
+  // 5) Frame-0 dockkit contract: when [data-dockkit-content] reports visible, do NOT let CSS transition checkVisibility lag override it
+  const expandingSidebarEl = {
+    offsetParent: {},
+    closest: (sel) => (sel === '[data-dockkit-content]' ? { getAttribute: () => null, inert: false, hidden: false } : null),
+    checkVisibility: () => false,
+  };
+  assert.equal(c.isDockElementHidden(expandingSidebarEl), false, 'trusts dockkit aria-hidden/inert directly on frame 0');
+});
+
+test('client hardening: null/blank defaults, Windows reserved id sanitizer, multi-object clipboard extraction, and legacy summary runs/reason', () => {
+  const c = loadClientTestExports();
+  assert.equal(c.normalizeMaxIterationsUI(null), 3);
+  assert.equal(c.normalizeMaxIterationsUI(''), 3);
+  assert.equal(c.normalizeMaxIterationsUI(false), 3);
+
+  const planRes = c.buildPlan(
+    [
+      { id: 'lead', kind: 'lead', task: 't', x: 0, y: 0 },
+      { id: 'n1', kind: 'agent', label: 'A', role: 'r', x: 200, y: 0 },
+    ],
+    [{ id: 'e1', from: 'lead', to: 'n1', type: 'prompt' }],
+    { maxParallel: null },
+  );
+  assert.equal(planRes.plan.maxParallel, 4, 'null maxParallel defaults to 4 instead of clamping to 1');
+
+  // Windows reserved names prefixed identically to backend safeSessionFileBase
+  assert.equal(c.sanitizeSessionFileBaseUI('CON'), '_CON');
+  assert.equal(c.sanitizeSessionFileBaseUI('nul.txt'), '_nul.txt');
+  assert.equal(c.sanitizeSessionFileBaseUI('   '), '');
+
+  // Clipboard extraction handles prose with earlier `{...}` snippets + fenced json canvas block
+  const pasted = '节点说明里包含 { filesToChange } 示例。\n```json canvas\n{"nodes":[{"id":"lead","kind":"lead"},{"id":"n1","kind":"agent"}],"edges":[{"from":"lead","to":"n1"}]}\n```';
+  const extracted = c.extractCanvasJsonFromText(pasted);
+  assert.ok(extracted && Array.isArray(extracted.nodes) && extracted.nodes.length === 2);
+
+  // Legacy .run.json fallback: pruned node gets runs: 0 and empty branchLabels has no leading ' — '
+  const legacyView = c.buildRunSummaryView({
+    runState: {
+      status: 'done',
+      done: ['c1', 'skipped_n'],
+      pruned: ['skipped_n'],
+      decisions: { c1: { branchLabels: [], reason: '条件执行失败' } },
+    },
+    nodes: [
+      { id: 'lead', kind: 'lead', label: 'Lead' },
+      { id: 'c1', kind: 'condition', label: '判断' },
+      { id: 'skipped_n', kind: 'agent', label: '跳过节点' },
+    ],
+  });
+  const condRow = legacyView.nodes.find((n) => n.id === 'c1');
+  const skippedRow = legacyView.nodes.find((n) => n.id === 'skipped_n');
+  assert.equal(condRow.reason, '条件执行失败', 'no leading em-dash when branchLabels is empty');
+  assert.equal(skippedRow.runs, 0, 'pruned node reports 0 runs even if present in done');
 });

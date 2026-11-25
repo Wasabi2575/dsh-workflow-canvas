@@ -67,8 +67,8 @@ are performed by the conversation itself.
 | `canvas_generate` | replaces the canvas with a node/edge sketch |
 | `canvas_patch` | edits in place: update nodes by id, add/remove nodes and links |
 
-`canvas_generate` and `canvas_patch` publish `<workspace>/.dsh/canvas/<session>.json`,
-which the panel polls every 1.5s. A patch document is applied in merge mode so
+`canvas_generate` and `canvas_patch` atomically publish `<workspace>/.dsh/canvas/<session>.json`,
+which the panel polls via `remote.workspaceFiles.stat` (`version`-fingerprinted, pausing while collapsed/hidden and backing off when idle) and applies in merge mode so
 node positions survive.
 
 ## Running
