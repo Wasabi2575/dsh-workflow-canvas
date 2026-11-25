@@ -8,7 +8,50 @@ window.__ModuleLoader__.load({
     const useState = React.useState;
     const useRef = React.useRef;
     const useEffect = React.useEffect;
+    const useMemo = React.useMemo || ((fn) => fn());
     const Component = React.Component;
+
+    /** Isolated 1s elapsed timer so live ticks never re-render the full canvas tree. */
+    function LiveElapsedText({ active, startedAt, endedAt, style }) {
+      const [now, setNow] = useState(() => Date.now());
+      useEffect(() => {
+        if (!active) return undefined;
+        setNow(Date.now());
+        const id = setInterval(() => {
+          if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+            setNow(Date.now());
+          }
+        }, 1000);
+        return () => clearInterval(id);
+      }, [active, startedAt]);
+      if (typeof startedAt !== 'number') return null;
+      const ms = Math.max(0, (typeof endedAt === 'number' ? endedAt : now) - startedAt);
+      return h('span', { style }, ' · ' + formatDurationMs(ms));
+    }
+
+    /**
+     * Source-verified DSH 0.2.2-rc.5 panel visibility check:
+     * - Tab/session switches set `hidden` (`display: none` -> `offsetParent === null`),
+     * - Collapsing the right sidebar uses `transform + visibility: hidden` (`offsetParent !== null`),
+     *   while `[data-dockkit-content]` sets `aria-hidden="true"` and `inert = true` across ALL 3 hidden states.
+     */
+    function isDockElementHidden(el) {
+      if (!el) return false;
+      if (el.offsetParent === null) return true;
+      if (typeof el.closest === 'function') {
+        const dockHost = el.closest('[data-dockkit-content]');
+        if (dockHost) {
+          if (typeof dockHost.getAttribute === 'function' && dockHost.getAttribute('aria-hidden') === 'true') return true;
+          if (dockHost.inert === true) return true;
+        }
+      }
+      if (typeof el.checkVisibility === 'function') {
+        try {
+          if (!el.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })) return true;
+        } catch (_e) { /* ignore older engines */ }
+      }
+      return false;
+    }
 
     /** Resolved lazily so a missing namespace can never fail plugin load. */
     let workspaceFilesService = null;
@@ -1456,6 +1499,8 @@ window.__ModuleLoader__.load({
         waitingLead,
         haltedReason: (sum && sum.haltedReason) || '',
         maxParallel: (sum && typeof sum.maxParallel === 'number') ? sum.maxParallel : null,
+        startedAt,
+        endedAt,
         elapsedMs,
         totalCount: rows.length,
         doneCount,
@@ -2834,7 +2879,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function storageKey(sessionId) {      return STORAGE_PREFIX + (sessionId || '__global__');
+    function storageKey(sessionId) {
+      return STORAGE_PREFIX + (sessionId || '__global__');
     }
 
     function loadDoc(sessionId) {
@@ -2849,13 +2895,60 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function saveDoc(sessionId, doc, stamp) {
+    const MAX_STORED_CANVAS_SESSIONS = 80;
+    const RESERVED_STORAGE_SUFFIXES = new Set(['presets', 'direction', 'shortcuts', 'lang', 'cut', 'fx', 'maxParallel']);
+    let storagePrunedOnce = false;
+
+    /** Evict oldest session canvas entries from localStorage so months of chats never fill quota. */
+    function pruneSessionStorage(keepKey, maxSessions = MAX_STORED_CANVAS_SESSIONS) {
       try {
-        /** Stamp every local edit so a stale generated canvas cannot overwrite it. */
-        const stamped = { ...doc, at: typeof stamp === 'number' ? stamp : Date.now() };
-        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(stamped));
+        const ls = window.localStorage;
+        if (!ls || typeof ls.length !== 'number' || typeof ls.key !== 'function' || typeof ls.removeItem !== 'function') return 0;
+        const entries = [];
+        for (let i = 0; i < ls.length; i += 1) {
+          const k = ls.key(i);
+          if (!k || !k.startsWith(STORAGE_PREFIX)) continue;
+          const suffix = k.slice(STORAGE_PREFIX.length);
+          if (RESERVED_STORAGE_SUFFIXES.has(suffix)) continue;
+          if (k === keepKey) continue;
+          let at = 0;
+          try {
+            const parsed = JSON.parse(ls.getItem(k) || 'null');
+            if (parsed && typeof parsed.at === 'number') at = parsed.at;
+          } catch (_e) { /* treat corrupt entry as oldest */ }
+          entries.push({ key: k, at });
+        }
+        const limit = Math.max(1, maxSessions - (keepKey ? 1 : 0));
+        if (entries.length <= limit) return 0;
+        entries.sort((a, b) => a.at - b.at);
+        const dropCount = entries.length - limit;
+        for (let i = 0; i < dropCount; i += 1) {
+          try { ls.removeItem(entries[i].key); } catch (_e) { /* ignore */ }
+        }
+        return dropCount;
       } catch (_e) {
-        /* storage unavailable */
+        return 0;
+      }
+    }
+
+    function saveDoc(sessionId, doc, stamp) {
+      const key = storageKey(sessionId);
+      const serialized = JSON.stringify({ ...doc, at: typeof stamp === 'number' ? stamp : Date.now() });
+      try {
+        const ls = window.localStorage;
+        if (!storagePrunedOnce || (ls && typeof ls.length === 'number' && ls.length > MAX_STORED_CANVAS_SESSIONS + 16)) {
+          storagePrunedOnce = true;
+          pruneSessionStorage(key);
+        }
+        ls.setItem(key, serialized);
+      } catch (_e) {
+        // Retry once after evicting older sessions in case QuotaExceededError triggered.
+        try {
+          pruneSessionStorage(key, 30);
+          window.localStorage.setItem(key, serialized);
+        } catch (_retryErr) {
+          /* storage unavailable */
+        }
       }
     }
 
@@ -3051,11 +3144,63 @@ window.__ModuleLoader__.load({
       const skipDirtyOnce = useRef(false);
       const staleChildIds = useRef(new Set());
 
+      // Debounce localStorage persistence so high-frequency node drags & typing do not
+      // synchronously serialize JSON on every pointer pixel; skip initial mount write
+      // (preventing untouched tabs from polluting localStorage or stamping over pending
+      // Host-generated canvases) and track `lastLocalEditAtRef` immediately so a remote
+      // poll during the 250ms window can never clobber an unflushed local edit.
+      const pendingSaveRef = useRef(null);
+      const didInitSaveRef = useRef(false);
+      const lastLocalEditAtRef = useRef(initial && typeof initial.at === 'number' ? initial.at : 0);
       useEffect(() => {
+        if (!didInitSaveRef.current) {
+          didInitSaveRef.current = true;
+          return undefined;
+        }
         const stamp = applyStamp.current;
         applyStamp.current = null;
-        saveDoc(sessionId, { nodes, edges, enabled, direction }, stamp === null ? undefined : stamp);
+        const payload = { nodes, edges, enabled, direction };
+        if (pendingSaveRef.current && pendingSaveRef.current.timer) {
+          clearTimeout(pendingSaveRef.current.timer);
+        }
+        const flush = () => {
+          const rec = pendingSaveRef.current;
+          if (!rec) return;
+          if (rec.timer) clearTimeout(rec.timer);
+          pendingSaveRef.current = null;
+          saveDoc(rec.sessionId, rec.payload, rec.stamp);
+        };
+        if (stamp !== null) {
+          lastLocalEditAtRef.current = Math.max(lastLocalEditAtRef.current, stamp);
+          pendingSaveRef.current = null;
+          saveDoc(sessionId, payload, stamp);
+          return undefined;
+        }
+        const editAt = Date.now();
+        lastLocalEditAtRef.current = editAt;
+        const timer = setTimeout(flush, 250);
+        pendingSaveRef.current = { sessionId, payload, stamp: editAt, timer };
+        return undefined;
       }, [sessionId, nodes, edges, enabled, direction]);
+
+      useEffect(() => {
+        const flushNow = () => {
+          const rec = pendingSaveRef.current;
+          if (!rec) return;
+          if (rec.timer) clearTimeout(rec.timer);
+          pendingSaveRef.current = null;
+          saveDoc(rec.sessionId, rec.payload, rec.stamp);
+        };
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('beforeunload', flushNow);
+        }
+        return () => {
+          if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('beforeunload', flushNow);
+          }
+          flushNow();
+        };
+      }, [sessionId]);
 
       // Plan signature excludes visual (x, y) coordinates so dragging nodes does
       // not trigger false "unsaved changes" warnings; `skipDirtyOnce` suppresses
@@ -3076,7 +3221,7 @@ window.__ModuleLoader__.load({
           skipDirtyOnce.current = false;
           return;
         }
-        if (!enabled) return;
+        if (!enabled || nodeDrag.current) return;
         const sig = planSig(true, nodes, edges);
         if (lastSync.current && sig === lastSync.current) {
           setDirty(false);
@@ -3331,8 +3476,12 @@ window.__ModuleLoader__.load({
       // Sync the moment a user message starts a turn, so this turn's tool call
       // already sees the latest canvas. Falls back to the turn end if the start
       // edge was missed; `dirty` clears on success so only one fires.
-      const liveRef = useRef({ enabled, dirty, pushPlan });
-      liveRef.current = { enabled, dirty, pushPlan };
+      // Never auto-sync while a workflow is running or paused at Lead (`need-lead`),
+      // otherwise replying to approve a Lead step after a minor canvas tweak would
+      // trigger `/canvas-sync` and wipe the paused run progress.
+      const runStatusForSync = runState && typeof runState.status === 'string' ? runState.status : '';
+      const liveRef = useRef({ enabled, dirty, pushPlan, runStatus: runStatusForSync });
+      liveRef.current = { enabled, dirty, pushPlan, runStatus: runStatusForSync };
 
       useEffect(() => {
         const face = sessionFace(sessionId);
@@ -3344,7 +3493,8 @@ window.__ModuleLoader__.load({
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
           if (running !== wasRunning) {
             const live = liveRef.current;
-            if (live.enabled && live.dirty) live.pushPlan(true);
+            const runBusyOrPaused = live.runStatus === 'running' || live.runStatus === 'need-lead';
+            if (live.enabled && live.dirty && !runBusyOrPaused) live.pushPlan(true);
           }
           wasRunning = running;
         };
@@ -3449,16 +3599,20 @@ window.__ModuleLoader__.load({
         const stop = () => { if (timer) { clearInterval(timer); timer = null; } };
         let wasRunning = false;
         try { wasRunning = Boolean(face.getSnapshot().running); } catch (_e) { wasRunning = false; }
+        const readIfVisible = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+          read();
+        };
         setSessionRunning(wasRunning);
         read();
-        if (wasRunning) timer = setInterval(read, 700);
+        if (wasRunning) timer = setInterval(readIfVisible, 700);
         const onSnapshot = () => {
           let running = false;
           try { running = Boolean(face.getSnapshot().running); } catch (_e) { running = false; }
           const finished = !running && wasRunning;
           wasRunning = running;
           setSessionRunning(running);
-          if (running && !timer) { read(); timer = setInterval(read, 700); }
+          if (running && !timer) { read(); timer = setInterval(readIfVisible, 700); }
           if (!running && timer) { stop(); read(); }
           if (finished && typeof sessions.refreshProjections === 'function') {
             Promise.resolve(sessions.refreshProjections(sessionId)).then(read, () => {});
@@ -4457,8 +4611,10 @@ window.__ModuleLoader__.load({
         setAddMenu, setCtxMenu, setLoopEditEdgeId, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setSummaryOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
       };
       const summaryIsLive = Boolean(runState && (runState.status === 'running' || runState.status === 'need-lead'));
+      // Only tick root `summaryNow` while the Run Summary modal is actually open;
+      // the bottom-left pill uses its own isolated `LiveElapsedText` timer so the canvas stays idle.
       useEffect(() => {
-        if (!summaryIsLive) return undefined;
+        if (!summaryIsLive || !summaryOpen) return undefined;
         setSummaryNow(Date.now());
         const timer = setInterval(() => setSummaryNow(Date.now()), 1000);
         return () => clearInterval(timer);
@@ -4470,6 +4626,8 @@ window.__ModuleLoader__.load({
           return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
         };
         const onKey = (ev) => {
+          // Ignore IME composition events (e.g. pressing Escape/Enter while selecting Chinese candidates).
+          if (ev.isComposing || ev.keyCode === 229) return;
           const act = keyActionsRef.current;
           if (!act) return;
           if (act.recordingAction) {
@@ -4582,11 +4740,43 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener('keydown', onKey);
       }, []);
 
+      // Attach drag listeners once per drag gesture (never churn on marquee/pending pixels)
+      // and coalesce pointer moves to one animation frame for 120Hz+/high-DPI mice.
+      const dragHandlersRef = useRef({ move: null, up: null });
       useEffect(() => {
         if (!dragging) return undefined;
-        const move = (ev) => onCanvasMove(ev);
-        const up = (ev) => onCanvasUp(ev);
+        let rafId = 0;
+        let queuedEv = null;
+        const cancelRaf = () => {
+          if (rafId && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
+          rafId = 0;
+          queuedEv = null;
+        };
+        const move = (ev) => {
+          queuedEv = ev;
+          if (typeof requestAnimationFrame !== 'function') {
+            const hdl = dragHandlersRef.current.move;
+            if (hdl) hdl(ev);
+            return;
+          }
+          if (rafId) return;
+          rafId = requestAnimationFrame(() => {
+            rafId = 0;
+            const latest = queuedEv;
+            queuedEv = null;
+            const hdl = dragHandlersRef.current.move;
+            if (latest && hdl) hdl(latest);
+          });
+        };
+        const up = (ev) => {
+          const latest = queuedEv;
+          cancelRaf();
+          if (latest && dragHandlersRef.current.move) dragHandlersRef.current.move(latest);
+          const hdl = dragHandlersRef.current.up;
+          if (hdl) hdl(ev);
+        };
         const cancelDrag = () => {
+          cancelRaf();
           panDrag.current = null;
           nodeDrag.current = null;
           rightClickRef.current = null;
@@ -4604,11 +4794,12 @@ window.__ModuleLoader__.load({
         window.addEventListener('mouseup', up);
         window.addEventListener('blur', cancelDrag);
         return () => {
+          cancelRaf();
           window.removeEventListener('mousemove', move);
           window.removeEventListener('mouseup', up);
           window.removeEventListener('blur', cancelDrag);
         };
-      }, [dragging, marquee, pending]);
+      }, [dragging]);
 
       const onCanvasDown = (e) => {
         if (e.button === 2) {
@@ -4767,8 +4958,14 @@ window.__ModuleLoader__.load({
           }
         }
         if (cutPath.length) { setCutPath([]); setCutVictims([]); }
+        // Recompute drop coordinates directly from the mouseup event so a fast <16ms flick
+        // whose final mousemove was just flushed synchronously never reads stale React state.
+        const endPt = (ev && typeof ev.clientX === 'number' && (marquee || pending)) ? pointTo(ev) : null;
         if (marquee) {
-          setSelectedIds(hitTest(marquee));
+          const finalRect = endPt
+            ? { x1: marquee.x1, y1: marquee.y1, x2: endPt.x, y2: endPt.y }
+            : marquee;
+          setSelectedIds(hitTest(finalRect));
           setMarquee(null);
         }
         if (panDrag.current) {
@@ -4779,7 +4976,9 @@ window.__ModuleLoader__.load({
         const handled = pendingHandledRef.current;
         pendingHandledRef.current = false;
         if (!handled && pending && pending.dir === 'out') {
-          const dist = Math.hypot(pending.x - pending.sx, pending.y - pending.sy);
+          const px = endPt ? endPt.x : pending.x;
+          const py = endPt ? endPt.y : pending.y;
+          const dist = Math.hypot(px - pending.sx, py - pending.sy);
           const wrap = canvasWrapRef.current;
           if (dist >= 16 && wrap) {
             const wrapRect = wrap.getBoundingClientRect();
@@ -4790,8 +4989,8 @@ window.__ModuleLoader__.load({
             setAddMenu({
               sx,
               sy,
-              wx: pending.x,
-              wy: pending.y,
+              wx: px,
+              wy: py,
               linkFrom: {
                 fromId: pending.fromId,
                 type: pending.type || 'prompt',
@@ -4799,8 +4998,8 @@ window.__ModuleLoader__.load({
                 color: pending.color || '#8a8f98',
                 sx: pending.sx,
                 sy: pending.sy,
-                x: pending.x,
-                y: pending.y,
+                x: px,
+                y: py,
               },
             });
             setMenuOpen(false);
@@ -4812,6 +5011,7 @@ window.__ModuleLoader__.load({
         setPending(null);
         setDragging(false);
       };
+      dragHandlersRef.current = { move: onCanvasMove, up: onCanvasUp };
 
       const savePresetNow = () => {
         const name = presetName.trim();
@@ -4844,7 +5044,9 @@ window.__ModuleLoader__.load({
         const merge = doc.mode === 'merge';
         if (!merge && !doc.nodes.length) return false;
         pushSnapshot();
-        const stamp = typeof remoteAt === 'number' ? remoteAt : (typeof doc.at === 'number' ? doc.at : null);
+        // Only preserve remote timestamp when applying a Host bridge file; local JSON
+        // imports/presets must stamp Date.now() so an older workspace file never clobbers them.
+        const stamp = fromRemote && typeof remoteAt === 'number' ? remoteAt : null;
         applyStamp.current = stamp;
         if (fromRemote) {
           skipDirtyOnce.current = true;
@@ -4978,7 +5180,17 @@ window.__ModuleLoader__.load({
 
       // The Host writes generated canvases where the workspace Remote can read
       // them; polling that file is the only Host -> canvas channel available.
+      // Pause polling while the window or keepMounted tab is hidden, cache matched
+      // path prefixes (6 IPC reads -> 2), and back off while disabled & idle.
       const AUTO_CANVAS = true;
+      const pollActiveRef = useRef(false);
+      pollActiveRef.current = Boolean(enabled || sessionRunning);
+      const pollWakeRef = useRef(null);
+      useEffect(() => {
+        if ((enabled || sessionRunning) && pollWakeRef.current) {
+          pollWakeRef.current();
+        }
+      }, [enabled, sessionRunning]);
       useEffect(() => {
         if (!AUTO_CANVAS) return undefined;
         let remote;
@@ -4989,101 +5201,251 @@ window.__ModuleLoader__.load({
         }
         if (!wf || typeof wf.read !== 'function') { setSyncNote(t('syncOff')); return undefined; }
         if (!sessionId) { setSyncNote(t('syncNoSession')); return undefined; }
-        // The Host names the file after the agent id (session-<uuid>); the
-        // pane prop may carry either form, so try both.
+        // The Host names the file after the sanitized agent id (session-<uuid>); the
+        // pane prop may carry either form, so try them until one hits, then cache it.
+        const sanitizeId = (s) => String(s || '').trim().replace(/[^A-Za-z0-9._-]/g, '_').replace(/\.\.+/g, '_').replace(/^\.+/, '_').slice(0, 180);
+        const safeSid = sanitizeId(sessionId);
         const bare = String(sessionId).replace(/^session-/, '');
+        const safeBare = sanitizeId(bare);
         const paths = [
-          '.dsh/canvas/' + String(sessionId) + '.json',
-          '.dsh/canvas/session-' + bare + '.json',
-          '.dsh/canvas/' + bare + '.json',
-        ].filter((v, i, all) => all.indexOf(v) === i);
+          '.dsh/canvas/' + safeSid + '.json',
+          '.dsh/canvas/session-' + safeBare + '.json',
+          '.dsh/canvas/' + safeBare + '.json',
+        ].filter((v, i, all) => v && all.indexOf(v) === i);
         const runPaths = [
-          '.dsh/canvas/' + String(sessionId) + '.run.json',
-          '.dsh/canvas/session-' + bare + '.run.json',
-          '.dsh/canvas/' + bare + '.run.json',
-        ].filter((v, i, all) => all.indexOf(v) === i);
+          '.dsh/canvas/' + safeSid + '.run.json',
+          '.dsh/canvas/session-' + safeBare + '.run.json',
+          '.dsh/canvas/' + safeBare + '.run.json',
+        ].filter((v, i, all) => v && all.indexOf(v) === i);
         setRunState(null);
         setDecisionViewFor(null);
         let alive = true;
+        let busy = false;
+        let timer = null;
         let lastText = '';
         let lastRunText = '';
-        const tick = async () => {
-          try {
-            let text = '';
-            for (const path of paths) {
-              try {
-                const res = await wf.read(sessionId, path, {}, new AbortController().signal);
-                if (!alive) return;
-                const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
-                const read = payload && (typeof payload.text === 'string' ? payload.text : '');
-                if (read) { text = read; break; }
-              } catch (err) {
-                setSyncNote(t('syncReadFail') + String((err && err.message) || err).slice(0, 80));
-              }
-            }
-            if (text && text !== lastText) {
-              lastText = text;
-              const doc = JSON.parse(text);
-              const canvas = doc && doc.canvas;
-              // A canvas the user has edited more recently wins over an old file.
-              let staleLocal = false;
-              try {
-                const raw = window.localStorage.getItem(storageKey(sessionId));
-                const local = raw ? JSON.parse(raw) : null;
-                if (local && typeof local.at === 'number' && typeof doc.at === 'number' && local.at > doc.at) {
-                  staleLocal = true;
-                }
-              } catch (_e) { /* ignore */ }
-              if (!staleLocal) {
-                const valid = canvas && Array.isArray(canvas.nodes)
-                  && (canvas.mode === 'merge' || canvas.nodes.length > 0)
-                  && canvas.nodes.every((n) => n && typeof n.id === 'string');
-                if (valid && applyCanvasDoc(canvas, doc.at, true)) {
-                  flash(t('generated'));
-                  setSyncNote(t('syncApplied'));
-                  setTimeout(() => setSyncNote(''), 4000);
-                }
-                else setSyncNote(t('syncBadFile'));
-              }
-            }
-          } catch (_e) { /* file absent or not readable yet */ }
-          try {
-            let runText = '';
-            for (const rp of runPaths) {
-              try {
-                const res = await wf.read(sessionId, rp, {}, new AbortController().signal);
-                if (!alive) return;
-                const payload = res && res.ok === false ? null : (res && res.value !== undefined ? res.value : res);
-                const read = payload && (typeof payload.text === 'string' ? payload.text : '');
-                if (read) { runText = read; break; }
-              } catch (_e) { /* ignore */ }
-            }
-            if (runText && runText !== lastRunText) {
-              lastRunText = runText;
-              const parsed = JSON.parse(runText);
-              if (parsed && typeof parsed === 'object') {
-                setRunState(parsed.status === 'idle' ? null : parsed);
-              }
-            }
-          } catch (_e) { /* run state file absent or not readable yet */ }
+        let lastCanvasStatSig = '';
+        let lastRunStatSig = '';
+        let cachedCanvasPath = '';
+        let cachedRunPath = '';
+
+        const isPaneVisible = () => {
+          if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
+          if (isDockElementHidden(canvasWrapRef.current)) return false;
+          return true;
         };
-        const timer = setInterval(tick, 1500);
+
+        const statFingerprint = (val) => {
+          if (!val || typeof val !== 'object') return '';
+          const hasMeta = val.mtimeMs !== undefined || val.mtime !== undefined
+            || val.modifiedAt !== undefined || val.size !== undefined || val.etag !== undefined;
+          if (!hasMeta) return '';
+          try { return JSON.stringify(val); } catch (_e) { return ''; }
+        };
+
+        const readFirstMatch = async (candidates, cached, prevStatSig, onErr) => {
+          const order = cached ? [cached, ...candidates.filter((p) => p !== cached)] : candidates;
+          const canStat = typeof wf.stat === 'function';
+          let lastErr = null;
+          for (const p of order) {
+            let nextStatSig = '';
+            if (canStat) {
+              try {
+                const stRes = await wf.stat(sessionId, p, new AbortController().signal);
+                if (!alive) return { text: '', hit: cached, statSig: prevStatSig, unchanged: false };
+                if (stRes && stRes.ok === false) {
+                  const code = stRes.error && stRes.error.code;
+                  if (code !== 'workspace-file/not-found' && stRes.error) lastErr = stRes.error;
+                  continue;
+                }
+                const stVal = stRes && stRes.value !== undefined ? stRes.value : stRes;
+                nextStatSig = statFingerprint(stVal);
+                if (nextStatSig && p === cached && nextStatSig === prevStatSig) {
+                  return { text: '', hit: p, statSig: nextStatSig, unchanged: true };
+                }
+              } catch (statErr) {
+                lastErr = statErr;
+                continue;
+              }
+            }
+            try {
+              const res = await wf.read(sessionId, p, {}, new AbortController().signal);
+              if (!alive) return { text: '', hit: cached, statSig: prevStatSig, unchanged: false };
+              if (res && res.ok === false) {
+                const code = res.error && res.error.code;
+                if (code !== 'workspace-file/not-found' && res.error) lastErr = res.error;
+                continue;
+              }
+              const payload = res && res.value !== undefined ? res.value : res;
+              const read = payload && (typeof payload.text === 'string' ? payload.text : '');
+              if (read) return { text: read, hit: p, statSig: nextStatSig, unchanged: false };
+            } catch (err) {
+              lastErr = err;
+            }
+          }
+          if (lastErr && onErr) onErr(lastErr);
+          return { text: '', hit: cached, statSig: prevStatSig, unchanged: false };
+        };
+
+        const schedule = (visibleHint) => {
+          if (!alive) return;
+          if (timer) clearTimeout(timer);
+          const visible = visibleHint !== undefined ? visibleHint : isPaneVisible();
+          const delay = (visible && pollActiveRef.current) ? 1500 : 4000;
+          timer = setTimeout(tick, delay);
+        };
+
+        const tick = async () => {
+          if (!alive) return;
+          if (!isPaneVisible()) {
+            schedule(false);
+            return;
+          }
+          if (busy) {
+            schedule(true);
+            return;
+          }
+          busy = true;
+          try {
+            try {
+              const { text, hit, statSig, unchanged } = await readFirstMatch(paths, cachedCanvasPath, lastCanvasStatSig, (err) => {
+                setSyncNote(t('syncReadFail') + String((err && err.message) || err).slice(0, 80));
+              });
+              if (!alive) return;
+              if (hit) {
+                cachedCanvasPath = hit;
+                if (!cachedRunPath) {
+                  const pairedRun = hit.replace(/\.json$/, '.run.json');
+                  if (runPaths.includes(pairedRun)) cachedRunPath = pairedRun;
+                }
+              }
+              if (!unchanged && text && text !== lastText) {
+                const doc = JSON.parse(text);
+                lastText = text;
+                if (statSig) lastCanvasStatSig = statSig;
+                const canvas = doc && doc.canvas;
+                // A canvas the user has edited more recently wins over an old file;
+                // also check `lastLocalEditAtRef` so unflushed debounced edits are never clobbered.
+                let staleLocal = false;
+                try {
+                  const raw = window.localStorage.getItem(storageKey(sessionId));
+                  const local = raw ? JSON.parse(raw) : null;
+                  const effectiveLocalAt = Math.max(
+                    (local && typeof local.at === 'number') ? local.at : 0,
+                    lastLocalEditAtRef.current || 0,
+                  );
+                  if (effectiveLocalAt > 0 && typeof doc.at === 'number' && effectiveLocalAt > doc.at) {
+                    staleLocal = true;
+                  }
+                } catch (_e) { /* ignore */ }
+                if (!staleLocal) {
+                  const valid = canvas && Array.isArray(canvas.nodes)
+                    && (canvas.mode === 'merge' || canvas.nodes.length > 0)
+                    && canvas.nodes.every((n) => n && typeof n.id === 'string');
+                  if (valid && applyCanvasDoc(canvas, doc.at, true)) {
+                    flash(t('generated'));
+                    setSyncNote(t('syncApplied'));
+                    setTimeout(() => setSyncNote(''), 4000);
+                  }
+                  else setSyncNote(t('syncBadFile'));
+                }
+              } else if (!unchanged && text && text === lastText && statSig) {
+                lastCanvasStatSig = statSig;
+              }
+            } catch (_e) { /* file absent or not readable yet */ }
+            try {
+              const { text: runText, hit: runHit, statSig: runStatSig, unchanged: runUnchanged } = await readFirstMatch(runPaths, cachedRunPath, lastRunStatSig);
+              if (!alive) return;
+              if (runHit) {
+                cachedRunPath = runHit;
+                if (!cachedCanvasPath) {
+                  const pairedCanvas = runHit.replace(/\.run\.json$/, '.json');
+                  if (paths.includes(pairedCanvas)) cachedCanvasPath = pairedCanvas;
+                }
+              }
+              if (!runUnchanged && runText && runText !== lastRunText) {
+                const parsed = JSON.parse(runText);
+                lastRunText = runText;
+                if (runStatSig) lastRunStatSig = runStatSig;
+                if (parsed && typeof parsed === 'object') {
+                  setRunState(parsed.status === 'idle' ? null : parsed);
+                }
+              } else if (!runUnchanged && runText && runText === lastRunText && runStatSig) {
+                lastRunStatSig = runStatSig;
+              }
+            } catch (_e) { /* run state file absent or not readable yet */ }
+          } finally {
+            busy = false;
+            schedule();
+          }
+        };
+
+        const wake = () => {
+          if (!alive || !isPaneVisible()) return;
+          if (timer) { clearTimeout(timer); timer = null; }
+          tick();
+        };
+        pollWakeRef.current = wake;
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+          document.addEventListener('visibilitychange', wake);
+        }
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('focus', wake);
+        }
+        let io = null;
+        if (typeof IntersectionObserver === 'function' && canvasWrapRef.current) {
+          try {
+            io = new IntersectionObserver((entries) => {
+              if (entries && entries.some((e) => e.isIntersecting)) wake();
+            });
+            io.observe(canvasWrapRef.current);
+          } catch (_e) { io = null; }
+        }
+        // Watch `[data-dockkit-content]` aria-hidden/inert so expanding a collapsed right
+        // sidebar wakes polling on frame 0 instead of waiting for CSS slide transition.
+        let mo = null;
+        if (typeof MutationObserver === 'function' && canvasWrapRef.current && typeof canvasWrapRef.current.closest === 'function') {
+          try {
+            const dockHost = canvasWrapRef.current.closest('[data-dockkit-content]');
+            if (dockHost) {
+              mo = new MutationObserver(() => {
+                if (isPaneVisible()) wake();
+              });
+              mo.observe(dockHost, { attributes: true, attributeFilter: ['aria-hidden', 'inert'] });
+            }
+          } catch (_e) { mo = null; }
+        }
         tick();
-        return () => { alive = false; clearInterval(timer); };
+        return () => {
+          alive = false;
+          if (pollWakeRef.current === wake) pollWakeRef.current = null;
+          if (timer) clearTimeout(timer);
+          if (io) try { io.disconnect(); } catch (_e) { /* ignore */ }
+          if (mo) try { mo.disconnect(); } catch (_e) { /* ignore */ }
+          if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+            document.removeEventListener('visibilitychange', wake);
+          }
+          if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+            window.removeEventListener('focus', wake);
+          }
+        };
       }, [sessionId]);
 
       const importFromClipboard = () => {
         const finish = (text) => {
-          if (!text) { flash(t('importNone')); return; }
+          if (!text || typeof text !== 'string') { flash(t('importNone')); return; }
+          if (text.length > 2 * 1024 * 1024) { flash(t('importBad')); return; }
           let doc;
           try {
             const start = text.indexOf('{');
             const end = text.lastIndexOf('}');
+            if (start === -1 || end <= start) { flash(t('importBad')); return; }
             doc = JSON.parse(text.slice(start, end + 1));
           } catch (_e) { flash(t('importBad')); return; }
-          if (!applyCanvasDoc(doc.canvas || doc)) { flash(t('importBad')); return; }
+          const payload = doc && (doc.canvas || doc);
+          if (!payload || !applyCanvasDoc(payload)) { flash(t('importBad')); return; }
           if (enabled) setTimeout(() => pushPlan(true), 0);
-          flash(t('importOk') + (doc.canvas || doc).nodes.length);
+          flash(t('importOk') + payload.nodes.length);
         };
         try {
           if (navigator.clipboard && navigator.clipboard.readText) {
@@ -5392,27 +5754,39 @@ window.__ModuleLoader__.load({
       };
 
       const fxName = (level) => (level === 'minimal' ? t('fxMinimal') : (level === 'vivid' ? t('fxVivid') : t('fxStandard')));
-      const selectedSet = new Set(selectedIds);
-      const nodeById = new Map(nodes.map((n) => [n.id, n]));
-      const inColorByNode = new Map();
-      const inCountByNode = new Map();
-      const inPriority = (e) => (e.loop ? 0.5 : (e.type === 'session-ref' ? 3 : (e.type === 'structured' ? 2 : (e.branch ? 1.5 : 1))));
-      const inPrioByNode = new Map();
-      const connectedOut = new Set();
-      for (const e of edges) {
-        const type = e.type || 'prompt';
-        const b = typeof e.branch === 'string' ? e.branch.trim() : '';
-        connectedOut.add(e.from + '|' + (b ? 'branch:' + b : type));
-        inCountByNode.set(e.to, (inCountByNode.get(e.to) || 0) + 1);
-        const prio = inPriority(e);
-        if (!inPrioByNode.has(e.to) || prio >= inPrioByNode.get(e.to)) {
-          inPrioByNode.set(e.to, prio);
-          inColorByNode.set(e.to, edgeColorFor(nodeById.get(e.from), e));
+      const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+      // Memoize O(V+E) graph topology & loop analyses so viewport pan/zoom, status polls,
+      // and popover toggles never re-run BFS or loop-body intersections.
+      const graphMeta = useMemo(() => {
+        const nodeById = new Map(nodes.map((n) => [n.id, n]));
+        const inColorByNode = new Map();
+        const inCountByNode = new Map();
+        const inPriority = (e) => (e.loop ? 0.5 : (e.type === 'session-ref' ? 3 : (e.type === 'structured' ? 2 : (e.branch ? 1.5 : 1))));
+        const inPrioByNode = new Map();
+        const connectedOut = new Set();
+        for (const e of edges) {
+          const type = e.type || 'prompt';
+          const b = typeof e.branch === 'string' ? e.branch.trim() : '';
+          connectedOut.add(e.from + '|' + (b ? 'branch:' + b : type));
+          inCountByNode.set(e.to, (inCountByNode.get(e.to) || 0) + 1);
+          const prio = inPriority(e);
+          if (!inPrioByNode.has(e.to) || prio >= inPrioByNode.get(e.to)) {
+            inPrioByNode.set(e.to, prio);
+            inColorByNode.set(e.to, edgeColorFor(nodeById.get(e.from), e));
+          }
         }
-      }
-      const reachableIds = reachableFrom(nodes, edges);
-      const soloLeadIds = soloLeadNodeIds(nodes, edges);
-      const deadEndIds = deadEndNodeIds(nodes, edges);
+        return {
+          nodeById,
+          inColorByNode,
+          inCountByNode,
+          connectedOut,
+          reachableIds: reachableFrom(nodes, edges),
+          soloLeadIds: soloLeadNodeIds(nodes, edges),
+          deadEndIds: deadEndNodeIds(nodes, edges),
+          loopGroups: loopGroupsForUI(nodes, edges),
+        };
+      }, [nodes, edges]);
+      const { nodeById, inColorByNode, inCountByNode, connectedOut, reachableIds, soloLeadIds, deadEndIds, loopGroups } = graphMeta;
 
       // Lead nodes are never spawned, so their status is derived via `deriveLeadStatuses`,
       // honoring authoritative backend `runState.status` (`halted` / `done` / `need-lead`).
@@ -5496,7 +5870,6 @@ window.__ModuleLoader__.load({
         now: summaryNow,
         fallbackTiming: clientRunTimingRef.current,
       });
-      const loopGroups = loopGroupsForUI(nodes, edges);
       const edgeKeyForState = (e) => String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
       const loopPillItems = [];
 
@@ -6669,6 +7042,7 @@ window.__ModuleLoader__.load({
               : runSummary.status === 'running' || runSummary.status === 'need-lead'
                 ? '#2f81f7'
                 : '#e5534b';
+            const elapsedStyle = { flex: '0 0 auto', color: C.dim, fontVariantNumeric: 'tabular-nums' };
             const elapsedText = runSummary.elapsedMs !== null ? ' · ' + formatDurationMs(runSummary.elapsedMs) : '';
             const loopText = runSummary.totalLoops > 0 ? ' · ↺' + runSummary.totalLoops : '';
             return h('button', {
@@ -6692,7 +7066,9 @@ window.__ModuleLoader__.load({
               h('span', { style: { color: pillColor, flex: '0 0 auto' } }, pillIcon),
               h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } },
                 t('runSummaryBtn') + ' · ' + runSummary.doneCount + '/' + runSummary.totalCount + loopText),
-              elapsedText && h('span', { style: { flex: '0 0 auto', color: C.dim, fontVariantNumeric: 'tabular-nums' } }, elapsedText),
+              runSummary.isLive && typeof runSummary.startedAt === 'number'
+                ? h(LiveElapsedText, { active: true, startedAt: runSummary.startedAt, endedAt: runSummary.endedAt, style: elapsedStyle })
+                : (elapsedText && h('span', { style: elapsedStyle }, elapsedText)),
             );
           })(),
           h('div', {
@@ -6731,6 +7107,7 @@ window.__ModuleLoader__.load({
             style: {
               ...S.content, width: contentW, height: contentH, overflow: 'visible',
               transform: 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.k + ')',
+              willChange: panning ? 'transform' : undefined,
               transformOrigin: '0 0',
             },
           },
@@ -7375,7 +7752,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, isDockElementHidden, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

@@ -114,7 +114,10 @@ function loadClientTestExports(clientSrc) {
 console.log('Running dsh-workflow-canvas repository checks...\n');
 
 // 1. JS Syntax Checks
-for (const file of ['index.js', 'client.js']) {
+const libFiles = existsSync(path.join(ROOT, 'lib'))
+  ? readdirSync(path.join(ROOT, 'lib')).filter((f) => f.endsWith('.js')).map((f) => `lib/${f}`)
+  : [];
+for (const file of ['index.js', ...libFiles, 'client.js']) {
   const res = spawnSync(process.execPath, ['--check', path.join(ROOT, file)], { encoding: 'utf8' });
   if (res.status === 0) pass(`Syntax OK: ${file}`);
   else fail(`Syntax error in ${file}: ${(res.stderr || res.stdout || '').trim()}`);
@@ -272,6 +275,8 @@ if (packRes.status !== 0) {
     );
     const required = [
       'index.js',
+      'lib/graph.js',
+      'lib/telemetry.js',
       'client.js',
       'cordis.patch.yml',
       'package.json',

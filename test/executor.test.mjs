@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { apply, orderNodes, upstreamOf, downstreamLabels, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, utimesSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { apply, orderNodes, upstreamOf, downstreamLabels, parsePayload, clipUpstreamOutput, briefFor, parseConditionDecision, withoutEntry, analyzeCanvasWarnings, normalizeCanvas, applyPatch, inspectPlan, sessionIdFromContext, buildActiveCanvasContext, isPermissionFailure, isTransientFailure, safeSessionFileBase, writeFileAtomic, pruneMapLRU, touchMapLRU, cleanupStaleCanvasFiles, buildRunSummarySnapshot, abortSessionRun, loopMemberIds, validateLoopEdges, executePlan } from '../index.js';
 
 test('withoutEntry strips the entry Lead', () => {
   const nodes = [
@@ -2360,4 +2363,435 @@ test('condition node auto-retries without outputSchema on provider error and exp
   assert.ok(resFail.results.gate.includes('502 bad gateway'), 'surfaces real host error detail in result text');
   assert.ok(resFail.results.gate.includes('DeepSeek-V4-Pro'), 'mentions the actual model that failed');
   assert.ok(!resFail.results.gate.includes('未配置备用模型'), 'must never mislead Lead into blaming missing fallbackModel');
+});
+
+test('clipUpstreamOutput and briefFor fold oversized upstream outputs while preserving head conclusion and tail error', () => {
+  assert.equal(clipUpstreamOutput('short summary', 1000), 'short summary');
+  const head = 'HEAD_CONCLUSION: all modules checked.\n';
+  const tail = '\nTAIL_SUMMARY: 1 warning in footer.';
+  const huge = head + 'X'.repeat(20000) + tail;
+  const clipped = clipUpstreamOutput(huge, 16000);
+  assert.ok(clipped.length < huge.length, 'oversized output is compacted');
+  assert.ok(clipped.startsWith(head), 'head conclusion preserved');
+  assert.ok(clipped.endsWith(tail), 'tail conclusion/error preserved');
+  assert.ok(clipped.includes('已折叠中间'), 'omitted char notice included');
+
+  const plan = {
+    task: '裁剪测试',
+    nodes: [
+      { id: 'a', kind: 'agent', label: '日志产出', role: 'r1' },
+      { id: 'b', kind: 'agent', label: '下游汇总', role: 'r2' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'b', type: 'prompt' },
+    ],
+  };
+  const prompt = briefFor(plan, plan.nodes[1], { a: huge });
+  assert.ok(prompt.includes('HEAD_CONCLUSION'), 'brief keeps upstream head');
+  assert.ok(prompt.includes('TAIL_SUMMARY'), 'brief keeps upstream tail');
+  assert.ok(prompt.includes('已折叠中间'), 'brief folds oversized prose upstream');
+  assert.ok(prompt.length < 18000, 'brief stays bounded well below raw 20K payload');
+
+  // Structured JSON edges receive the larger 24K budget (20K JSON stays intact without corruption)
+  const jsonPlan = {
+    ...plan,
+    edges: [
+      { from: 'lead', to: 'a', type: 'prompt' },
+      { from: 'a', to: 'b', type: 'structured' },
+    ],
+  };
+  const jsonPrompt = briefFor(jsonPlan, jsonPlan.nodes[1], { a: '{"data":"' + 'y'.repeat(19000) + '"}' });
+  assert.ok(!jsonPrompt.includes('已折叠中间'), '20K structured JSON fits within 24K structured budget');
+  assert.ok(jsonPrompt.includes('JSON，可直接解析'), 'unclipped structured JSON keeps parseable header');
+  const hugeJsonPrompt = briefFor(jsonPlan, jsonPlan.nodes[1], { a: '{"data":"' + 'y'.repeat(30000) + '"}' });
+  assert.ok(hugeJsonPrompt.includes('已折叠中间'), '30K structured JSON is head+tail folded');
+  assert.ok(hugeJsonPrompt.includes('超长已头尾折叠'), 'folded structured JSON warns downstream not to blindly JSON.parse');
+});
+
+test('read-only nodes retry once on transient 503/429 while writable standard agents never auto-retry and AbortSignal cancels backoff', async () => {
+  assert.equal(isTransientFailure({ ok: false, reason: 'error', errorDetail: 'HTTP 503 Service Unavailable' }), true);
+  assert.equal(isTransientFailure({ ok: false, reason: 'error', text: '429 rate limit exceeded' }), true);
+  assert.equal(isTransientFailure({ ok: false, reason: 'error', text: 'permission denied' }), false);
+  assert.equal(isTransientFailure({ ok: false, reason: 'aborted', text: '503' }), false);
+  assert.equal(isTransientFailure({ ok: false, reason: 'max_tokens', text: 'HTTP 502 error handling review...' }), false, 'max_tokens truncation mentioning 502 must not trigger retry');
+  assert.equal(isTransientFailure({ ok: false, reason: 'error', text: 'long prose mentioning timeout '.repeat(30) }), false, 'long non-error prose without errorDetail must not trigger retry');
+
+  // 1) Read-only `minimal` + `condition` nodes each recover on a single transient retry
+  const calls = { ro: 0, gate: 0, std: 0 };
+  const scope = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        calls[id] = (calls[id] || 0) + 1;
+        if (id === 'ro' && calls.ro === 1) {
+          return Promise.resolve({
+            childId: 'kid-ro-1',
+            result: Promise.resolve({ output: [], stopReason: 'error', error: '503 Service Unavailable' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'gate' && calls.gate === 1) {
+          return Promise.resolve({
+            childId: 'kid-gate-1',
+            result: Promise.resolve({ output: [], stopReason: 'error', error: '429 Too Many Requests' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'gate') {
+          assert.ok(spec.outputSchema, 'transient retry preserves outputSchema on condition node');
+          return Promise.resolve({
+            childId: 'kid-gate-2',
+            result: Promise.resolve({ structured: { pass: true, reason: 'retry ok' }, output: [{ type: 'text', text: '' }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        if (id === 'std') {
+          return Promise.resolve({
+            childId: 'kid-std-1',
+            result: Promise.resolve({ output: [], stopReason: 'error', error: '503 Service Unavailable' }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id + '-' + calls[id],
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '瞬态重试策略测试',
+    __transientDelayMs: 5,
+    nodes: [
+      { id: 'ro', kind: 'agent', preset: 'minimal', label: '只读分析', role: '分析' },
+      { id: 'gate', kind: 'condition', label: '是否继续', role: '判断' },
+      { id: 'std', kind: 'agent', preset: 'standard', label: '写文件节点', role: '修改文件' },
+    ],
+    edges: [
+      { from: 'lead', to: 'ro', type: 'prompt' },
+      { from: 'ro', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'std', type: 'prompt', branch: 'true' },
+    ],
+  };
+  const res = await executePlan(scope, plan, {}, { agent: { id: 's-transient-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(res.status, 'done');
+  assert.equal(calls.ro, 2, 'minimal read-only agent retries once after 503');
+  assert.equal(calls.gate, 2, 'condition node retries once after 429');
+  assert.equal(calls.std, 1, 'writable standard agent must NEVER auto-retry transient errors');
+  assert.equal(res.results.ro, 'ok:ro');
+  assert.equal(res.failed.length, 1);
+  assert.equal(res.failed[0].id, 'std');
+
+  // 2) AbortSignal fired during backoff cancels cleanly with zero zombie retry spawn
+  const abortCtrl = new AbortController();
+  let abortCalls = 0;
+  const abortScope = {
+    subagents: {
+      startActivation() {
+        abortCalls += 1;
+        setTimeout(() => abortCtrl.abort('user-stop'), 15);
+        return Promise.resolve({
+          childId: 'kid-abort-1',
+          result: Promise.resolve({ output: [], stopReason: 'error', error: '504 Gateway Timeout' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const abortPlan = {
+    task: '取消退避测试',
+    __transientDelayMs: 5000,
+    nodes: [{ id: 'ro', kind: 'agent', preset: 'minimal', label: '只读', role: '只读' }],
+    edges: [{ from: 'lead', to: 'ro', type: 'prompt' }],
+  };
+  const t0 = Date.now();
+  const abortRes = await executePlan(abortScope, abortPlan, {}, { agent: { id: 's-transient-abort-' + Date.now() }, signal: abortCtrl.signal });
+  assert.equal(abortRes.status, 'halted');
+  assert.equal(abortCalls, 1, 'must not spawn a second child after abort during backoff');
+  assert.ok(Date.now() - t0 < 2000, 'backoff delay aborts immediately instead of waiting 5s');
+});
+
+test('LRU map helpers evict oldest entries and cleanupStaleCanvasFiles removes >14d orphan files safely', () => {
+  const m = new Map();
+  touchMapLRU(m, 'a', 1, 3);
+  touchMapLRU(m, 'b', 2, 3);
+  touchMapLRU(m, 'c', 3, 3);
+  touchMapLRU(m, 'a', 10, 3); // refresh 'a' -> 'b' is now oldest
+  touchMapLRU(m, 'd', 4, 3);  // evicts 'b'
+  assert.deepEqual(Array.from(m.keys()), ['c', 'a', 'd']);
+  assert.equal(m.get('a'), 10);
+  assert.equal(pruneMapLRU(m, 2), 1);
+  assert.deepEqual(Array.from(m.keys()), ['a', 'd']);
+
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-cleanup-'));
+  try {
+    const now = Date.now();
+    const oldSec = (now - 20 * 24 * 60 * 60 * 1000) / 1000; // 20 days ago
+    const freshSec = (now - 2 * 24 * 60 * 60 * 1000) / 1000; // 2 days ago
+    const oldCanvas = join(dir, 'orphan-1.json');
+    const oldRun = join(dir, 'orphan-1.run.json');
+    const activeOldRun = join(dir, 'active-s.run.json');
+    const freshCanvas = join(dir, 'fresh-s.json');
+    const otherTxt = join(dir, 'readme.txt');
+    for (const f of [oldCanvas, oldRun, activeOldRun, freshCanvas, otherTxt]) writeFileSync(f, '{}', 'utf8');
+    utimesSync(oldCanvas, oldSec, oldSec);
+    utimesSync(oldRun, oldSec, oldSec);
+    utimesSync(activeOldRun, oldSec, oldSec);
+    utimesSync(freshCanvas, freshSec, freshSec);
+    utimesSync(otherTxt, oldSec, oldSec);
+
+    const removed1 = cleanupStaleCanvasFiles(dir, { activeIds: new Set(['active-s']), now, force: true });
+    assert.equal(removed1, 2, 'removes both old orphan .json and .run.json');
+    assert.equal(existsSync(oldCanvas), false);
+    assert.equal(existsSync(oldRun), false);
+    assert.equal(existsSync(activeOldRun), true, 'active session file is protected');
+    assert.equal(existsSync(freshCanvas), true, 'fresh (<14d) file is preserved');
+    assert.equal(existsSync(otherTxt), true, 'non-json file is untouched');
+
+    // Without force, second call within 1h throttle window is a fast no-op
+    const oldCanvas2 = join(dir, 'orphan-2.json');
+    writeFileSync(oldCanvas2, '{}', 'utf8');
+    utimesSync(oldCanvas2, oldSec, oldSec);
+    const removed2 = cleanupStaleCanvasFiles(dir, { activeIds: new Set(), now: now + 5000 });
+    assert.equal(removed2, 0, 'throttled within 1 hour per directory');
+    assert.equal(existsSync(oldCanvas2), true);
+
+    // Orphaned atomic-write *.tmp files older than 1h are reaped while fresh *.tmp files stay intact
+    const oldTmp = join(dir, 'crash.json.123.1.tmp');
+    const freshTmp = join(dir, 'writing.json.123.2.tmp');
+    writeFileSync(oldTmp, 'partial', 'utf8');
+    writeFileSync(freshTmp, 'partial', 'utf8');
+    utimesSync(oldTmp, (now - 2 * 60 * 60 * 1000) / 1000, (now - 2 * 60 * 60 * 1000) / 1000);
+    utimesSync(freshTmp, (now - 5 * 60 * 1000) / 1000, (now - 5 * 60 * 1000) / 1000);
+    const removedTmp = cleanupStaleCanvasFiles(dir, { activeIds: new Set(['active-s']), now, force: true });
+    assert.equal(removedTmp, 2, 'removes orphan-2.json (>14d) and oldTmp (>1h)');
+    assert.equal(existsSync(oldTmp), false);
+    assert.equal(existsSync(freshTmp), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeFileAtomic writes cleanly without leaving temp files, and clipUpstreamOutput preserves UTF-16 surrogate pairs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-atomic-'));
+  try {
+    const target = join(dir, 'nested', 'state.json');
+    writeFileAtomic(target, '{"v":1}');
+    assert.equal(readFileSync(target, 'utf8'), '{"v":1}');
+    writeFileAtomic(target, '{"v":2,"ok":true}');
+    assert.equal(readFileSync(target, 'utf8'), '{"v":2,"ok":true}');
+    const entries = readdirSync(join(dir, 'nested'));
+    assert.deepEqual(entries, ['state.json'], 'zero leftover .tmp files after atomic writes');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  // Construct an emoji-heavy string where naive UTF-16 slicing hits the middle of a surrogate pair
+  const emojiStream = 'a' + '🚀'.repeat(1200); // odd offset guarantees surrogate boundary hits at even maxChars*0.68 / 0.25
+  const clipped = clipUpstreamOutput(emojiStream, 1000);
+  assert.ok(clipped.includes('已折叠中间'));
+  assert.equal(clipped.isWellFormed(), true, 'clipped output must contain zero lone UTF-16 surrogates');
+});
+
+test('clear input validation and actionable errors across parsePayload, normalizeCanvas, applyPatch, and fromNodes', async () => {
+  const badJson = parsePayload('not%20valid%20json');
+  assert.equal(badJson.enabled, false);
+  assert.ok(badJson.error && badJson.error.includes('画布数据解析失败'));
+  const nonObj = parsePayload(encodeURIComponent('[1,2,3]'));
+  assert.equal(nonObj.enabled, false);
+  assert.ok(nonObj.error && nonObj.error.includes('JSON 对象'));
+
+  const badNodes = normalizeCanvas({ nodes: 'not-array' });
+  assert.ok(badNodes.error && badNodes.error.includes('nodes 必须是包含至少一个节点的数组'));
+
+  const withDroppedAndCycle = normalizeCanvas({
+    task: '校验测试',
+    nodes: [
+      { id: 'a', label: 'A', role: 'r1' },
+      { id: 'b', label: 'B', role: 'r2' },
+    ],
+    edges: [
+      { from: 'lead', to: 'a' },
+      { from: 'a', to: 'b' },
+      { from: 'b', to: 'a' },         // forward cycle without loop:true
+      { from: 'a', to: 'ghost_99' },  // unknown target
+      { from: 'a', to: 'a' },         // self-loop
+    ],
+  });
+  assert.ok(withDroppedAndCycle.warnings.some((w) => w.includes('环路')), 'flags forward cycle early in warnings');
+  assert.ok(withDroppedAndCycle.warnings.some((w) => w.includes('ghost_99') && w.includes('a → a')), 'reports dropped invalid edges');
+
+  const patched = applyPatch(
+    { task: 't', nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'r1' }], edges: [{ from: 'lead', to: 'a', type: 'prompt' }] },
+    {
+      nodes: [{ id: 'lead', task: 'wrong place' }],
+      removeNodes: ['lead'],
+      edges: [{ from: 'a', to: 'missing_node' }],
+    },
+  );
+  assert.ok(patched.warnings.some((w) => w.includes('入口节点 lead 不可通过 nodes[] 修改')));
+  assert.ok(patched.warnings.some((w) => w.includes('入口节点 lead 不能删除')));
+  assert.ok(patched.warnings.some((w) => w.includes('missing_node')));
+
+  const scope = { subagents: { startActivation() { throw new Error('should not spawn on invalid input'); } } };
+  const validPlan = {
+    task: 't',
+    nodes: [{ id: 'n1', kind: 'agent', label: '分析', role: 'r1' }],
+    edges: [{ from: 'lead', to: 'n1', type: 'prompt' }],
+  };
+  const badType = await executePlan(scope, validPlan, { fromNodes: 'n1' }, { agent: { id: 's-val-1' } });
+  assert.ok(badType.error && badType.error.includes('字符串数组'), 'rejects non-array fromNodes clearly');
+
+  const unknownTarget = await executePlan(scope, validPlan, { fromNodes: ['typo_node'] }, { agent: { id: 's-val-2' } });
+  assert.ok(unknownTarget.error && unknownTarget.error.includes('typo_node') && unknownTarget.error.includes('n1(分析)'), 'lists unknown and valid nodes');
+});
+
+test('executePlan rejects concurrent re-entrant runs on the same session and safeSessionFileBase sanitizes unsafe ids', async () => {
+  assert.equal(safeSessionFileBase('session-550e8400-e29b-41d4-a716-446655440000'), 'session-550e8400-e29b-41d4-a716-446655440000');
+  assert.equal(safeSessionFileBase('remote:abc/123\\x*?'), 'remote_abc_123_x__');
+  assert.ok(!safeSessionFileBase('../../etc/passwd').includes('..'), 'neutralizes path traversal');
+  assert.ok(!safeSessionFileBase('../../etc/passwd').includes('/'));
+  assert.ok(!safeSessionFileBase('.hidden').startsWith('.'));
+
+  let releaseFirst;
+  let spawnCount = 0;
+  const scope = {
+    subagents: {
+      startActivation() {
+        spawnCount += 1;
+        return Promise.resolve({
+          childId: 'kid-lock-' + spawnCount,
+          result: new Promise((resolve) => {
+            if (spawnCount === 1) {
+              releaseFirst = () => resolve({ output: [{ type: 'text', text: 'first-done' }], stopReason: 'completed' });
+            } else {
+              resolve({ output: [{ type: 'text', text: 'second-done' }], stopReason: 'completed' });
+            }
+          }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: '并发锁测试',
+    nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'r1' }],
+    edges: [{ from: 'lead', to: 'a', type: 'prompt' }],
+  };
+  const sid = 's-reentry-' + Date.now();
+  const run1Promise = executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  // Wait a microtask tick so run1 registers in activeRunBySession
+  await new Promise((r) => setTimeout(r, 10));
+
+  const concurrentErr = await executePlan(scope, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.ok(concurrentErr.error && concurrentErr.error.includes('正在执行中'), 'blocks overlapping concurrent run on same session');
+  assert.equal(spawnCount, 1, 'second overlapping call spawns zero subagents');
+
+  releaseFirst();
+  const res1 = await run1Promise;
+  assert.equal(res1.status, 'done');
+  assert.equal(res1.results.a, 'first-done');
+
+  // Lock is cleanly released once run1 finishes
+  const res2 = await executePlan(scope, plan, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+  assert.equal(res2.status, 'done');
+  assert.equal(res2.results.a, 'second-done');
+});
+
+test('DSH 0.2.2 SubagentResult: extracts diagnostic field and rescues strict JSON when activation rewrites completed -> error', async () => {
+  // 1) Condition judge answers with valid JSON text without calling `structured_output` tool:
+  // DSH activation.ts rewrites `stopReason: 'completed'` -> `'error'` with no `diagnostic`.
+  // Executor must rescue the strict JSON verdict on attempt #1 (ZERO wasted retry roundtrip!).
+  let gateCalls = 0;
+  const scopeRescue = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'gate') {
+          gateCalls += 1;
+          return Promise.resolve({
+            childId: 'kid-gate-text-json',
+            result: Promise.resolve({
+              output: [{ type: 'text', text: '{"pass": true, "reason": "自检全部通过"}' }],
+              stopReason: 'error',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const plan = {
+    task: 'DSH diagnostic 与 JSON 救援测试',
+    __transientDelayMs: 5,
+    nodes: [
+      { id: 'run', kind: 'agent', label: '执行', role: '执行' },
+      { id: 'gate', kind: 'condition', label: '是否通过', role: '判断', model: 'deepseek-flash' },
+      { id: 'yes_s', kind: 'agent', label: '通过交付', role: '交付' },
+      { id: 'no_s', kind: 'agent', label: '失败修复', role: '修复' },
+    ],
+    edges: [
+      { from: 'lead', to: 'run', type: 'prompt' },
+      { from: 'run', to: 'gate', type: 'prompt' },
+      { from: 'gate', to: 'yes_s', type: 'prompt', branch: 'true' },
+      { from: 'gate', to: 'no_s', type: 'prompt', branch: 'false' },
+    ],
+  };
+  const rescued = await executePlan(scopeRescue, plan, {}, { agent: { id: 's-dsh-rescue-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(rescued.status, 'done');
+  assert.equal(gateCalls, 1, 'rescued on attempt #1 without wasting a second LLM call');
+  assert.equal(rescued.failed.length, 0);
+  assert.equal(rescued.results.yes_s, 'ok:yes_s');
+  assert.equal(rescued.results.no_s, undefined);
+
+  // 2) Real failure carrying DSH's `diagnostic` field is surfaced & classified as transient for read-only retry
+  let diagCalls = 0;
+  const scopeDiag = {
+    subagents: {
+      startActivation(spec) {
+        const id = String(spec.label || '').split('#').pop();
+        if (id === 'gate') {
+          diagCalls += 1;
+          if (diagCalls === 1) {
+            return Promise.resolve({
+              childId: 'kid-gate-diag-1',
+              result: Promise.resolve({
+                output: [],
+                stopReason: 'error',
+                diagnostic: 'upstream provider HTTP 503 overloaded',
+              }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          return Promise.resolve({
+            childId: 'kid-gate-diag-2',
+            result: Promise.resolve({
+              output: [],
+              stopReason: 'error',
+              diagnostic: 'provider rejected request: invalid model alias',
+            }),
+            dispose: () => Promise.resolve(),
+          });
+        }
+        return Promise.resolve({
+          childId: 'kid-' + id,
+          result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+          dispose: () => Promise.resolve(),
+        });
+      },
+    },
+  };
+  const diagFail = await executePlan(scopeDiag, plan, {}, { agent: { id: 's-dsh-diag-' + Date.now() }, signal: new AbortController().signal });
+  assert.equal(diagCalls, 2, '503 in `diagnostic` triggers 1 safe transient retry on read-only condition node');
+  assert.equal(diagFail.failed.length, 1);
+  assert.ok(diagFail.results.gate.includes('invalid model alias'), 'surfaces latest `diagnostic` error text');
+  assert.equal(isTransientFailure({ ok: false, reason: 'max-tokens', text: '503 error discussion' }), false, 'hyphenated DSH max-tokens never triggers retry');
+  assert.equal(isTransientFailure({ ok: false, reason: 'refusal', text: '503' }), false, 'DSH refusal never triggers retry');
 });

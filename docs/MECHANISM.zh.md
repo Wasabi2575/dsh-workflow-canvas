@@ -9,8 +9,8 @@
 ## 1. 整体架构：Client 与 Host 的双向通道
 
 插件由两部分组成：
-- **客户端（`client.js`）**：挂载在 DSH 右侧边栏的 `Workflow` 标签页（`keepMounted: true` 且按 `sessionId` 设 `key` 隔离，收起侧边栏时保留画布状态），负责图形编辑、跨会话实时预设同步、全局布局偏好与实时状态渲染。
-- **Host 侧（`index.js`）**：注册技能 `workflow-canvas`、会话级强上下文注入 `systemPrompt.context`、两条命令（`/canvas-sync` 与 `/canvas-stop`），以及 4 个工具（`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow`），负责真实调度子代理、统一中止与持久化执行状态。
+- **客户端（`client.js`）**：挂载在 DSH 右侧边栏的 `Workflow` 标签页（`keepMounted: true` 且按 `sessionId` 设 `key` 隔离，收起侧边栏时保留画布状态），负责图形编辑、跨会话实时预设同步、全局布局偏好、`rAF` 流畅渲染、可见性自适应轮询与实时状态渲染。
+- **Host 侧（`index.js` + `lib/graph.js` + `lib/telemetry.js`）**：注册技能 `workflow-canvas`、精简会话级强上下文注入 `systemPrompt.context`、两条命令（`/canvas-sync` 与 `/canvas-stop`），以及 4 个工具（`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow`），负责真实调度子代理、上游超长输出头尾智能裁剪、只读节点瞬态错误自动退避重试、统一中止、LRU 内存/磁盘清理与原子持久化。
 
 ```mermaid
 flowchart LR

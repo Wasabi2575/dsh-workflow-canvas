@@ -7,6 +7,8 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 ## 1. Repository Map
 
 - `index.js` — Backend DSH Cordis plugin: DAG/loop executor, `canvas_*` tools, `/canvas-sync` & `/canvas-stop` commands, `systemPrompt.context` builder, and `.run.json` run-state telemetry.
+- `lib/graph.js` — Pure ESM graph, condition, loop, prompt clipping, error-classifier, normalization, and patch helpers shared by `index.js`.
+- `lib/telemetry.js` — Pure ESM zero-token run-summary snapshot builder, LRU map eviction helpers, and throttled stale `.dsh/canvas/*.json` cleanup.
 - `client.js` — Frontend sidebar UI (vanilla React via `h`, zero build step): canvas rendering, pan/zoom/layout (`lr` & `tb`), undo/redo, presets, `I18N` (`zh`/`en`), and `helpBody`.
 - `skills/workflow-canvas/SKILL.md` — Runtime DSH plugin skill read by the host agent.
 - `docs/DETAIL.md`, `docs/MECHANISM.zh.md`, `docs/MECHANISM.md`, `README.zh.md`, `README.md` — User & architecture docs.
@@ -38,6 +40,10 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 | Host `ctx.subagents` | `drainDescendants([rootAgent])` | Tears down the entire descendant subtree; fire-and-forget when returning to UI to avoid provider stalls. |
 | Host root `Agent` (`invocation.agent` / `ctx.agents.get(sid)`) | `cancel({ kind: 'user' }, { keepInbox: true })` | Cancels root turn. (`ctx.sessions.get(sid)` is only a log/projection registry and has no `cancel`.) |
 | Commands (`session.command('/cmd')`) | Concurrent immediate execution | Runs immediately even while a turn is active (does not queue) and receives the exact root `agent`. |
+| Host `SubagentResult` (`dsh-subagent`) | `{ output, structured?, diagnostic?, stopReason }` | `stopReason` enum is `'completed' \| 'aborted' \| 'error' \| 'max-tokens' \| 'refusal'`. Error detail is in `diagnostic` (≤4096B, no `error`/`errorMessage`). `outputSchema` is translated into a `structured_output` tool; if the child finishes with text without calling it, DSH rewrites `completed → error` without `diagnostic`. |
+| Client `remote.workspaceFiles` | `read` / `stat` / `changes` | Facade resolves `RemoteResult` (`{ ok: true, value } \| { ok: false, error: { code, message, details } }`, never rejects on `workspace-file/not-found`). `stat` checks existence/metadata without reading file bytes. |
+| Right sidebar `keepMounted` hiding (`dsh-client-ui-sidebar-right`) | `[data-dockkit-content]` `aria-hidden` / `inert` | Collapsed right sidebar uses `transform + visibility: hidden` (`offsetParent !== null`), whereas `[data-dockkit-content]` sets `aria-hidden="true"` and `inert = true` across all 3 hidden states (tab switch, session switch, collapsed sidebar). |
+| Plugin loading & client runtime | ESM (`index.js` + `./lib/*.js`) / CJS factory (`client.js`) | Host loads `index.js` via Node native ESM (`./lib/*.js` works in local & npm installs); `client.js` must stay single-file `__ModuleLoader__.load` factory (React 18.3.1, no StrictMode). `sessionId` is not restricted to `[A-Za-z0-9_-]` across all entry points — always sanitize before file naming. |
 
 - **Backward compatibility**: Lazily resolve optional `ctx.remote.*` namespaces at call time instead of adding hard entries to `package.json` `dsh.client.inject`, so older hosts never fail to mount the plugin.
 

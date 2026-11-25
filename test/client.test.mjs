@@ -3,17 +3,27 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-function loadClientTestExports() {
+function loadClientTestExports(storageMap) {
   let loaded = null;
+  const store = storageMap instanceof Map ? storageMap : null;
+  const mockLocalStorage = store
+    ? {
+        get length() { return store.size; },
+        key: (i) => Array.from(store.keys())[i] ?? null,
+        getItem: (k) => (store.has(k) ? store.get(k) : null),
+        setItem: (k, v) => { store.set(String(k), String(v)); },
+        removeItem: (k) => { store.delete(String(k)); },
+      }
+    : {
+        getItem: () => null,
+        setItem: () => {},
+      };
   const sandbox = {
     window: {
       __ModuleLoader__: {
         load(mod) { loaded = mod; },
       },
-      localStorage: {
-        getItem: () => null,
-        setItem: () => {},
-      },
+      localStorage: mockLocalStorage,
     },
     console,
     Math,
@@ -882,4 +892,72 @@ test('formatDurationMs, buildRunSummaryView & formatRunSummaryMarkdown cover v1.
   });
   assert.equal(staleLegacyView.elapsedMs, null);
   assert.equal(client.formatDurationMs(staleLegacyView.elapsedMs), '—');
+});
+
+test('pruneSessionStorage evicts oldest session canvas docs while preserving reserved settings keys and keepKey', () => {
+  const store = new Map();
+  const c = loadClientTestExports(store);
+  const prefix = c.storageKey('x').slice(0, -1);
+  // Reserved settings keys + unrelated host key must never be evicted
+  const reserved = ['presets', 'direction', 'shortcuts', 'lang', 'cut', 'fx', 'maxParallel'];
+  for (const r of reserved) store.set(prefix + r, JSON.stringify({ v: r }));
+  store.set('unrelated-host-key', 'keep-me');
+
+  // Seed 6 session canvas entries with distinct timestamps
+  store.set(c.storageKey('s-old-1'), JSON.stringify({ at: 100, nodes: [] }));
+  store.set(c.storageKey('s-corrupt'), '{not-json');
+  store.set(c.storageKey('s-old-2'), JSON.stringify({ at: 200, nodes: [] }));
+  store.set(c.storageKey('s-mid'), JSON.stringify({ at: 300, nodes: [] }));
+  store.set(c.storageKey('s-new'), JSON.stringify({ at: 400, nodes: [] }));
+  store.set(c.storageKey('s-keep'), JSON.stringify({ at: 50, nodes: [] })); // oldest, but explicitly protected by keepKey
+
+  // Cap at 3 sessions total -> keepKey ('s-keep') + 2 newest others ('s-new', 's-mid') survive; 3 oldest evicted
+  const dropped = c.pruneSessionStorage(c.storageKey('s-keep'), 3);
+  assert.equal(dropped, 3);
+  assert.equal(store.has(c.storageKey('s-keep')), true, 'keepKey must survive even if oldest');
+  assert.equal(store.has(c.storageKey('s-new')), true);
+  assert.equal(store.has(c.storageKey('s-mid')), true);
+  assert.equal(store.has(c.storageKey('s-corrupt')), false, 'corrupt entry treated as at=0 and evicted first');
+  assert.equal(store.has(c.storageKey('s-old-1')), false);
+  assert.equal(store.has(c.storageKey('s-old-2')), false);
+  for (const r of reserved) {
+    assert.equal(store.has(prefix + r), true, 'reserved key ' + r + ' must never be evicted');
+  }
+  assert.equal(store.get('unrelated-host-key'), 'keep-me');
+
+  // Long-running Electron session: saveDoc re-prunes automatically once localStorage.length > 96
+  c.saveDoc('s-trigger-first', { nodes: [], edges: [], enabled: false }, 500);
+  for (let i = 0; i < 100; i += 1) {
+    store.set(c.storageKey('bulk-' + i), JSON.stringify({ at: 1000 + i, nodes: [] }));
+  }
+  assert.ok(store.size > 96);
+  c.saveDoc('s-latest', { nodes: [], edges: [], enabled: false }, 999999);
+  assert.ok(store.size <= 90, 'saveDoc re-triggers prune when session count grows over cap in long-lived process');
+  assert.equal(store.has(c.storageKey('s-latest')), true);
+});
+
+test('isDockElementHidden detects collapsed DSH right sidebar (aria-hidden/inert even when offsetParent !== null)', () => {
+  const c = loadClientTestExports();
+  // 1) Visible dockkit pane
+  const visibleEl = {
+    offsetParent: {},
+    closest: (sel) => (sel === '[data-dockkit-content]' ? { getAttribute: () => 'false', inert: false } : null),
+    checkVisibility: () => true,
+  };
+  assert.equal(c.isDockElementHidden(visibleEl), false);
+
+  // 2) Collapsed right sidebar: DSH uses transform + visibility:hidden so offsetParent is non-null,
+  //    but [data-dockkit-content] sets aria-hidden="true" and inert=true.
+  const collapsedSidebarEl = {
+    offsetParent: {},
+    closest: (sel) => (sel === '[data-dockkit-content]' ? { getAttribute: () => 'true', inert: true } : null),
+    checkVisibility: () => false,
+  };
+  assert.equal(c.isDockElementHidden(collapsedSidebarEl), true, 'detects collapsed right sidebar via dockkit aria-hidden');
+
+  // 3) Tab/session hidden via display:none (offsetParent === null)
+  assert.equal(c.isDockElementHidden({ offsetParent: null }), true);
+
+  // 4) checkVisibility fallback when outside dockkit shell
+  assert.equal(c.isDockElementHidden({ offsetParent: {}, closest: () => null, checkVisibility: () => false }), true);
 });

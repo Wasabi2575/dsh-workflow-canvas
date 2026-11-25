@@ -16,17 +16,76 @@
  * Everything is defensive: a missing service disables one piece instead of
  * failing the plugin load.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  MAX_LOOP_ITERATIONS,
+  DEFAULT_LOOP_ITERATIONS,
+  MAX_GLOBAL_LOOPS,
+  withoutEntry,
+  parsePayload,
+  normalizeMaxIterations,
+  isLoopEdge,
+  forwardEdgesOf,
+  loopMemberIds,
+  orderNodes,
+  upstreamOf,
+  downstreamLabels,
+  normalizeKind,
+  normalizeRefs,
+  normalizeBranch,
+  normalizeBranches,
+  conditionBranches,
+  edgeKey,
+  parseStrictConditionJson,
+  parseConditionDecision,
+  clipUpstreamOutput,
+  briefFor,
+  extractResultError,
+  textOf,
+  failed,
+  isEmptyOutput,
+  buildLoopWarmPrompt,
+  formatModelLabel,
+  isPermissionFailure,
+  isTransientFailure,
+  reachableFrom,
+  inactiveNodeSets,
+  validateLoopEdges,
+  analyzeCanvasWarnings,
+  normalizeCanvas,
+  applyPatch,
+} from './lib/graph.js';
+import {
+  MAX_STORED_SESSIONS,
+  MAX_LAST_RUNS,
+  MAX_CHILD_SLOTS,
+  safeSessionFileBase,
+  writeFileAtomic,
+  pruneMapLRU,
+  touchMapLRU,
+  cleanupStaleCanvasFiles,
+  buildRunSummarySnapshot,
+} from './lib/telemetry.js';
 
-/** Latest canvas payload per Session id. */
+/** Latest canvas payload per Session id (LRU-bounded). */
 const canvasBySession = new Map();
+/** Read a session canvas and refresh its LRU recency so active old sessions are never evicted. */
+function getCanvasLRU(sid) {
+  if (!sid) return undefined;
+  const key = String(sid);
+  if (!canvasBySession.has(key)) return undefined;
+  const val = canvasBySession.get(key);
+  canvasBySession.delete(key);
+  canvasBySession.set(key, val);
+  return val;
+}
 /** In-flight run progress per Session id. */
 const runBySession = new Map();
 /** Live AbortController & active child session ids per executing Session id. */
 const activeRunBySession = new Map();
-/** Snapshot of the last completed/halted run per Session id (enables partial retry). */
+/** Snapshot of the last completed/halted run per Session id (LRU-bounded; enables partial retry). */
 const lastRunBySession = new Map();
 /**
  * Two separate maps by design:
@@ -37,6 +96,8 @@ const lastRunBySession = new Map();
  */
 const childByNode = new Map();
 const liveChild = new Map();
+let lastSavedStorePath = '';
+let lastSavedStoreJson = '';
 
 function storePath() {
   const home = process.env.DSH_PROFILE_DIR;
@@ -51,11 +112,17 @@ function loadStore() {
     const raw = readFileSync(path, 'utf8');
     const doc = JSON.parse(raw);
     if (doc && doc.canvas && typeof doc.canvas === 'object') {
-      for (const [sid, payload] of Object.entries(doc.canvas)) canvasBySession.set(sid, payload);
+      for (const [sid, payload] of Object.entries(doc.canvas)) {
+        touchMapLRU(canvasBySession, sid, payload, MAX_STORED_SESSIONS);
+      }
     }
     if (doc && doc.children && typeof doc.children === 'object') {
-      for (const [node, child] of Object.entries(doc.children)) childByNode.set(node, child);
+      for (const [node, child] of Object.entries(doc.children)) {
+        touchMapLRU(childByNode, node, child, MAX_CHILD_SLOTS);
+      }
     }
+    lastSavedStorePath = path;
+    lastSavedStoreJson = raw;
   } catch (_e) {
     /* no store yet, or unreadable: start clean */
   }
@@ -65,454 +132,41 @@ function saveStore() {
   const path = storePath();
   if (!path) return;
   try {
-    mkdirSync(join(path, '..'), { recursive: true });
-    const tmp = path + '.tmp';
-    writeFileSync(tmp, JSON.stringify({
+    pruneMapLRU(canvasBySession, MAX_STORED_SESSIONS);
+    pruneMapLRU(childByNode, MAX_CHILD_SLOTS);
+    const json = JSON.stringify({
       canvas: Object.fromEntries(canvasBySession),
       children: Object.fromEntries(childByNode),
-    }), 'utf8');
-    renameSync(tmp, path);
+    });
+    if (path === lastSavedStorePath && json === lastSavedStoreJson) return;
+    writeFileAtomic(path, json);
+    lastSavedStorePath = path;
+    lastSavedStoreJson = json;
   } catch (_e) {
     /* persistence is best-effort */
   }
 }
 
-/** The entry Lead is a task container, never a runnable node. */
-function withoutEntry(nodes) {
-  return (nodes || []).filter((n) => n.id !== 'lead');
-}
-
-function parsePayload(rawInput) {
-  const text = String(rawInput || '').trim();
-  if (!text) return { enabled: false };
-  try {
-    return JSON.parse(decodeURIComponent(text));
-  } catch (_e) {
-    return { enabled: false, error: '画布数据解析失败' };
-  }
-}
-
-const MAX_LOOP_ITERATIONS = 10;
-const DEFAULT_LOOP_ITERATIONS = 3;
-const MAX_GLOBAL_LOOPS = 20;
-
-function normalizeMaxIterations(val) {
-  const n = Number(val);
-  if (!Number.isFinite(n)) return DEFAULT_LOOP_ITERATIONS;
-  return Math.max(1, Math.min(MAX_LOOP_ITERATIONS, Math.floor(n)));
-}
-
-function isLoopEdge(e) {
-  return Boolean(e && e.loop === true);
-}
-
-function forwardEdgesOf(edges) {
-  return (Array.isArray(edges) ? edges : []).filter((e) => e && !e.loop);
-}
-
-/**
- * Compute the set of node ids strictly inside a controlled loop edge (from target -> ... -> source)
- * over forward edges: `descendants(loopEdge.to) ∩ ancestors(loopEdge.from)` (inclusive).
- * Returns an empty Set if `loopEdge.from` is not reachable from `loopEdge.to` over forward edges.
- */
-function loopMemberIds(nodes, edges, loopEdge) {
-  if (!loopEdge || !loopEdge.from || !loopEdge.to || loopEdge.to === 'lead') return new Set();
-  const fwd = new Map();
-  const rev = new Map();
-  for (const e of forwardEdgesOf(edges)) {
-    if (!e.from || !e.to) continue;
-    if (!fwd.has(e.from)) fwd.set(e.from, []);
-    fwd.get(e.from).push(e.to);
-    if (!rev.has(e.to)) rev.set(e.to, []);
-    rev.get(e.to).push(e.from);
-  }
-  const desc = new Set([loopEdge.to]);
-  const q1 = [loopEdge.to];
-  for (let i = 0; i < q1.length; i += 1) {
-    for (const next of fwd.get(q1[i]) || []) {
-      if (!desc.has(next)) { desc.add(next); q1.push(next); }
-    }
-  }
-  if (!desc.has(loopEdge.from)) return new Set();
-  const anc = new Set([loopEdge.from]);
-  const q2 = [loopEdge.from];
-  for (let i = 0; i < q2.length; i += 1) {
-    for (const prev of rev.get(q2[i]) || []) {
-      if (!anc.has(prev)) { anc.add(prev); q2.push(prev); }
-    }
-  }
-  const members = new Set();
-  for (const id of desc) {
-    if (anc.has(id)) members.add(id);
-  }
-  return members;
-}
-
-/** Kahn topological order over every plan node (ignoring controlled loop back-edges). */
-function orderNodes(plan) {
-  const nodes = plan.nodes || [];
-  const edges = forwardEdgesOf(plan.edges || []);
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const indeg = new Map(nodes.map((n) => [n.id, 0]));
-  const adj = new Map(nodes.map((n) => [n.id, []]));
-  for (const e of edges) {
-    if (e.from === 'lead') continue;
-    if (!byId.has(e.from) || !byId.has(e.to)) continue;
-    indeg.set(e.to, indeg.get(e.to) + 1);
-    adj.get(e.from).push(e.to);
-  }
-  const queue = nodes.filter((n) => indeg.get(n.id) === 0).map((n) => n.id);
-  const out = [];
-  for (let i = 0; i < queue.length; i += 1) {
-    const id = queue[i];
-    out.push(byId.get(id));
-    for (const next of adj.get(id)) {
-      indeg.set(next, indeg.get(next) - 1);
-      if (indeg.get(next) === 0) queue.push(next);
-    }
-  }
-  return out.length === nodes.length ? out : null;
-}
-
-function upstreamOf(plan, node) {
-  const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
-  return forwardEdgesOf(plan.edges || [])
-    .filter((e) => e.to === node.id)
-    .map((e) => ({ edge: e, from: byId.get(e.from) }))
-    .filter((x) => x.from);
-}
-
-function downstreamLabels(plan, node) {
-  const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
-  return forwardEdgesOf(plan.edges || [])
-    .filter((e) => e.from === node.id)
-    .map((e) => (byId.get(e.to) || {}).label)
-    .filter(Boolean);
-}
-
-function normalizeKind(rawKind) {
-  if (rawKind === 'lead') return 'lead';
-  if (rawKind === 'condition') return 'condition';
-  return 'agent';
-}
-
-/**
- * Normalize a reference list (paths, URLs, or rules attached to a node or entry Lead).
- * Accepts string arrays or `{ text | path }` objects; capped at 16 unique non-empty items.
- */
-function normalizeRefs(rawRefs) {
-  if (!Array.isArray(rawRefs) || !rawRefs.length) return null;
-  const out = [];
-  const seen = new Set();
-  for (const raw of rawRefs) {
-    if (out.length >= 16) break;
-    let s = '';
-    if (typeof raw === 'string') s = raw.trim();
-    else if (raw && typeof raw === 'object') {
-      s = String(raw.text !== undefined ? raw.text : (raw.path !== undefined ? raw.path : '')).trim();
-    }
-    if (!s || seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-  }
-  return out.length ? out : null;
-}
-
-function normalizeBranch(rawBranch) {
-  if (rawBranch === true) return 'true';
-  if (rawBranch === false) return 'false';
-  if (typeof rawBranch !== 'string') return '';
-  return rawBranch.trim();
-}
-
-const DEFAULT_BINARY_BRANCHES = [
-  { id: 'true', label: '是' },
-  { id: 'false', label: '否' },
-];
-
-/**
- * Normalize a condition node's branch list (2–5 entries).
- * Accepts either string arrays (e.g. `['通过', '小修', '重做']`) or `{ id, label }` objects.
- * Returns `null` when the node uses the default binary `true`/`false` pair.
- */
-function normalizeBranches(rawBranches) {
-  if (!Array.isArray(rawBranches) || rawBranches.length < 2) return null;
-  const out = [];
-  const used = new Set();
-  for (let i = 0; i < Math.min(16, rawBranches.length); i += 1) {
-    const item = rawBranches[i];
-    let id = '';
-    let label = '';
-    if (typeof item === 'string') {
-      label = item.trim();
-      id = label;
-    } else if (item && typeof item === 'object') {
-      id = typeof item.id === 'string' ? item.id.trim() : '';
-      label = typeof item.label === 'string' ? item.label.trim() : '';
-      if (!id) id = label;
-      if (!label) label = id;
-    }
-    if (!id) id = 'case_' + (i + 1);
-    if (!label) label = '分支 ' + (i + 1);
-    let uniq = id;
-    let suffix = 2;
-    while (used.has(uniq)) { uniq = id + '_' + suffix; suffix += 1; }
-    used.add(uniq);
-    out.push({ id: uniq, label });
-  }
-  return out.length >= 2 ? out : null;
-}
-
-function conditionBranches(node) {
-  const custom = normalizeBranches(node && node.branches);
-  const multiMatch = Boolean(node && node.multiMatch);
-  if (custom) return { branches: custom, isDefaultBinary: false, multiMatch };
-  return { branches: DEFAULT_BINARY_BRANCHES, isDefaultBinary: !multiMatch, multiMatch };
-}
-
-function edgeKey(e) {
-  return String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
-}
-
-/**
- * Parse a condition node's structured or text output into
- * `{ branches, branchLabels, branch, branchLabel, pass, reason }`.
- * Supports:
- *   - default binary `{ pass: boolean }`
- *   - single-match `switch/case` (`{ branches: [id] }` or `{ branch: id }`, or `[]` when none match)
- *   - multi-match parallel fan-out (`multiMatch: true`, `{ branches: [id1, id2, ...] }` or `[]`)
- */
-function parseConditionDecision(result, fallbackText, nodeOrBranches) {
-  const { branches, isDefaultBinary, multiMatch } = Array.isArray(nodeOrBranches)
-    ? { branches: normalizeBranches(nodeOrBranches) || DEFAULT_BINARY_BRANCHES, isDefaultBinary: !normalizeBranches(nodeOrBranches), multiMatch: false }
-    : conditionBranches(nodeOrBranches);
-
-  const resolveByToken = (token) => {
-    const t = String(token || '').trim();
-    if (!t) return null;
-    const exactId = branches.find((b) => b.id === t);
-    if (exactId) return exactId;
-    const exactLabel = branches.find((b) => b.label === t);
-    if (exactLabel) return exactLabel;
-    const lower = t.toLowerCase();
-    const ci = branches.find((b) => b.id.toLowerCase() === lower || b.label.toLowerCase() === lower);
-    return ci || null;
-  };
-
-  const makeDecision = (pickedList, reason) => {
-    const seen = new Set();
-    const uniq = [];
-    for (const item of pickedList) {
-      if (!item || seen.has(item.id)) continue;
-      seen.add(item.id);
-      uniq.push(item);
-    }
-    const finalList = multiMatch ? uniq : uniq.slice(0, 1);
-    const first = finalList[0] || null;
-    return {
-      branches: finalList.map((b) => b.id),
-      branchLabels: finalList.map((b) => b.label),
-      branch: first ? first.id : '',
-      branchLabel: first ? first.label : '',
-      pass: isDefaultBinary ? Boolean(first && first.id === 'true') : finalList.length > 0,
-      reason: String(reason || ''),
-    };
-  };
-
-  const tryObj = (obj) => {
-    if (!obj || typeof obj !== 'object') return null;
-    if (Array.isArray(obj.branches)) {
-      const hits = obj.branches.map(resolveByToken).filter(Boolean);
-      return makeDecision(hits, obj.reason);
-    }
-    if (typeof obj.branch === 'string') {
-      const trimmed = obj.branch.trim();
-      if (!trimmed || /^(none|null|无|都不满足|未命中)$/i.test(trimmed)) {
-        return makeDecision([], obj.reason);
+/** Abort-aware backoff delay for safe read-only transient retries. */
+function delayWithSignal(ms, signal) {
+  const wait = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  if (wait <= 0 || (signal && signal.aborted)) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (signal && typeof signal.removeEventListener === 'function') {
+        try { signal.removeEventListener('abort', finish); } catch (_e) { /* ignore */ }
       }
-      const hit = resolveByToken(trimmed);
-      if (hit) return makeDecision([hit], obj.reason);
-    }
-    if (typeof obj.pass === 'boolean') {
-      const picked = obj.pass ? branches[0] : branches[branches.length - 1];
-      return makeDecision([picked], obj.reason);
-    }
-    return null;
-  };
-
-  const fromStructured = tryObj(result && result.structured);
-  if (fromStructured) return fromStructured;
-
-  const raw = String(fallbackText || '').trim();
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start !== -1 && end > start) {
-    try {
-      const fromJson = tryObj(JSON.parse(raw.slice(start, end + 1)));
-      if (fromJson) return fromJson;
-    } catch (_e) { /* fall through */ }
-  }
-
-  if (isDefaultBinary) {
-    if (/^(true|yes|pass|通过|是)\b/i.test(raw)) return makeDecision([branches[0]], raw.slice(0, 200));
-    return makeDecision([branches[1]], raw.slice(0, 200) || '未能解析布尔判断，默认走「否」分支');
-  }
-
-  // Multi-way text fallback: collect matching branch ids/labels; return empty [] if none match.
-  const lowerRaw = raw.toLowerCase();
-  const matched = [];
-  for (const b of branches) {
-    if (lowerRaw.includes(b.id.toLowerCase()) || lowerRaw.includes(b.label.toLowerCase())) {
-      matched.push(b);
-      if (!multiMatch) break;
-    }
-  }
-  return makeDecision(matched, raw.slice(0, 200) || (matched.length ? '' : '未命中任何分支，已跳过后续分支'));
-}
-
-function briefFor(plan, node, results, failedMap, prunedSet, loopCtx) {
-  const ups = upstreamOf(plan, node).filter((u) => !(prunedSet && prunedSet.has(u.from.id)));
-  const downs = downstreamLabels(plan, node);
-  const head = [];
-  if (node.kind === 'condition') {
-    const outEdges = (plan.edges || []).filter((e) => e.from === node.id);
-    const byId = new Map((plan.nodes || []).map((n) => [n.id, n]));
-    const { branches, isDefaultBinary, multiMatch } = conditionBranches(node);
-    const fmtTarget = (e) => {
-      const lbl = (byId.get(e.to) || {}).label || e.to;
-      return e.loop ? (lbl + '（↺ 回环重做，最多 ' + normalizeMaxIterations(e.maxIterations) + ' 次）') : lbl;
+      resolve();
     };
-    head.push('【工作流条件判断节点】你负责判断当前工作流接下来走哪条分支（「' + node.label + '」）。');
-    head.push('【总任务】' + plan.task);
-    if (isDefaultBinary) {
-      const yesTargets = outEdges.filter((e) => (normalizeBranch(e.branch) || 'true') === 'true').map(fmtTarget);
-      const noTargets = outEdges.filter((e) => normalizeBranch(e.branch) === 'false').map(fmtTarget);
-      head.push('【判断条件】' + (node.role || '判断上游步骤是否执行成功并达到预期；成功返回 true，失败或未达标返回 false。'));
-      head.push('【分支去向】pass=true（是）→ ' + (yesTargets.join('、') || '（无）') + '；pass=false（否）→ ' + (noTargets.join('、') || '（无）'));
-      head.push('【要求】严格依据上游实际输出（含成功/失败状态与【未完全交付】标记）做出客观判断，只返回 JSON 对象 {"pass": true/false, "reason": "一句话理由"}。');
-    } else {
-      const branchLines = branches.map((b, idx) => {
-        const targets = outEdges
-          .filter((e) => {
-            const eb = normalizeBranch(e.branch);
-            return eb ? eb === b.id : idx === 0;
-          })
-          .map(fmtTarget);
-        const tag = b.label === b.id ? '"' + b.id + '"' : '"' + b.id + '"（' + b.label + '）';
-        return '- ' + tag + ' → ' + (targets.join('、') || '（无下游）');
-      });
-      head.push('【判断规则】' + (node.role || (multiMatch
-        ? '根据上游结果选出所有满足条件的分支（可多选并行）；若均不满足返回空数组。'
-        : '根据上游结果选出最匹配的一条分支；若均不满足返回空数组（如有「其他/兜底」分支则选它）。')));
-      head.push('【匹配模式】' + (multiMatch
-        ? '多选并行（可返回 0 条、1 条或多条分支 id）'
-        : '单选分流（最多返回 1 条最匹配的分支 id；均不满足返回空数组 []）'));
-      head.push('【可选分支】\n' + branchLines.join('\n'));
-      head.push('【要求】严格依据上游实际输出（含成功/失败状态与【未完全交付】标记）做出客观判断，只返回 JSON 对象 {"branches": ["<分支id>"], "reason": "一句话理由"}；若没有任何分支满足，返回 {"branches": [], "reason": "..."}。');
+    const timer = setTimeout(finish, wait);
+    if (signal && typeof signal.addEventListener === 'function') {
+      signal.addEventListener('abort', finish, { once: true });
     }
-  } else {
-    head.push('【工作流节点】你在一个多步工作流里负责「' + node.label + '」这一步（子代理）。');
-    if (ups.length === 0) head.push('【总任务】' + plan.task);
-    head.push('【职责】' + (node.role || node.label));
-    if (ups.length) head.push('【上游】' + ups.map((u) => u.from.label).join('、') + ' 已交付结果给你（见下文）。');
-    head.push('【下游】' + (downs.length ? downs.join('、') + ' 会使用你的输出。' : '你是终点，结果会直接交付给用户。'));
-    head.push('【要求】只完成你这一步；最终回复只输出简洁、可直接被下游或 Lead 消费的交付报告（结论、改动清单、关键接口/路径），不要包含思考独白、过程叙述或对其他并行节点的评价。若因环境或权限受限未能生成预期产物，必须在开头显式标注「【未完全交付】」并列出缺失项，不得把仅写脚本汇报为已完成。');
-  }
-  const mergedRefs = [];
-  const seenRefs = new Set();
-  for (const r of (normalizeRefs(plan && plan.refs) || []).concat(normalizeRefs(node && node.refs) || [])) {
-    if (!seenRefs.has(r)) { seenRefs.add(r); mergedRefs.push(r); }
-  }
-  if (mergedRefs.length) {
-    head.push('【参考资料 / 约束】\n' + mergedRefs.map((r) => '- ' + r).join('\n'));
-  }
-  if (loopCtx && loopCtx.feedback) {
-    const fb = loopCtx.feedback;
-    const lines = [
-      '【第 ' + fb.retry + '/' + fb.max + ' 次回环修正反馈】下游条件节点「' + (fb.sourceLabel || '条件判断') + '」判定上一轮未通过，请针对以下问题修正后输出最新结果：',
-      '- 打回理由：' + (fb.reason || '未达预期'),
-    ];
-    if (fb.lastSummary) lines.push('- 上一轮环内参考摘要：\n' + fb.lastSummary);
-    head.push(lines.join('\n'));
-  }
-  let text = head.join('\n') + '\n';
-  for (const u of ups) {
-    const value = results[u.from.id];
-    const type = u.edge.type || 'prompt';
-    const body = typeof value === 'string' ? value : '（没有结果）';
-    const failInfo = failedMap && failedMap[u.from.id];
-    const warn = failInfo
-      ? '【警告：该上游节点执行失败（' + (failInfo.reason || 'unknown') + '），请勿将其报错当作正常结论，必要时说明受阻情况】\n'
-      : '';
-    if (type === 'structured') {
-      text += '\n## 来自【' + u.from.label + '】的数据（JSON，可直接解析）\n' + warn + '```json\n'
-        + body + '\n```\n';
-    } else if (type === 'session-ref') {
-      text += '\n## 来自【' + u.from.label + '】的会话引用（当前按文本传递）\n' + warn
-        + body + '\n';
-    } else {
-      text += '\n## 来自【' + u.from.label + '】\n' + warn + body + '\n';
-    }
-  }
-  return text;
-}
-
-function extractResultError(result) {
-  if (!result || typeof result !== 'object') return '';
-  const candidates = [result.error, result.errorMessage, result.message, result.failureReason];
-  for (const raw of candidates) {
-    if (typeof raw === 'string' && raw.trim()) return raw.trim();
-    if (raw && typeof raw === 'object') {
-      const msg = raw.message || raw.detail || raw.code;
-      if (typeof msg === 'string' && msg.trim()) return msg.trim();
-      try {
-        const s = JSON.stringify(raw);
-        if (s && s !== '{}') return s.slice(0, 240);
-      } catch (_e) { /* ignore */ }
-    }
-  }
-  return '';
-}
-
-function textOf(result) {
-  // A structured node's canonical value is its parsed object, not the prose.
-  if (result && result.structured !== undefined) {
-    try {
-      return JSON.stringify(result.structured);
-    } catch (_e) {
-      /* fall through to prose */
-    }
-  }
-  const blocks = (result && result.output) || [];
-  const text = blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
-  if (text) return text;
-  const errDetail = extractResultError(result);
-  const stop = (result && result.stopReason) || (errDetail ? 'error' : 'no-output');
-  return errDetail ? '[' + stop + '] ' + errDetail : '[' + stop + ']';
-}
-
-function failed(result) {
-  const reason = result && result.stopReason;
-  return reason !== undefined && reason !== 'completed';
-}
-
-function isEmptyOutput(result) {
-  if (result && result.structured !== undefined) return false;
-  const blocks = (result && result.output) || [];
-  const text = blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join('');
-  return text.trim().length === 0;
-}
-
-function buildLoopWarmPrompt(node, loopCtx) {
-  const fb = loopCtx && loopCtx.feedback;
-  if (!fb) return null;
-  const lines = [
-    '【第 ' + fb.retry + '/' + fb.max + ' 次回环修正】下游条件节点「' + (fb.sourceLabel || '条件判断') + '」判定上一轮未通过，请结合以下反馈直接在当前会话上下文中修正并输出最新交付结果（无需重复叙述过程）：',
-    '- 打回理由：' + (fb.reason || '未达预期'),
-  ];
-  if (fb.lastSummary) lines.push('- 上一轮环内参考摘要：\n' + fb.lastSummary);
-  if (node.role) lines.push('- 你的职责提醒：' + node.role);
-  return lines.join('\n');
+  });
 }
 
 async function spawnOnce(scope, plan, node, results, parent, signal, route, forcedChild, sid, failedMap, prunedSet, loopCtx) {
@@ -600,10 +254,10 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     try {
       if (activation && activation.childId) {
         const cid = String(activation.childId);
-        liveChild.set(childKey(node.id), cid);
+        touchMapLRU(liveChild, childKey(node.id), cid, MAX_CHILD_SLOTS);
         // Only overwrite the persisted memory slot when Memory is ON, so a
         // temporary keepSession=false experiment never destroys saved memory.
-        if (node.keepSession) childByNode.set(childKey(node.id), cid);
+        if (node.keepSession) touchMapLRU(childByNode, childKey(node.id), cid, MAX_CHILD_SLOTS);
         const activeRec = sid ? activeRunBySession.get(String(sid)) : null;
         if (activeRec && activeRec.childIds) activeRec.childIds.add(cid);
       }
@@ -616,16 +270,27 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
       }
       const outText = textOf(result);
       const errDetail = extractResultError(result);
+      // DSH 0.2.2 implements `outputSchema` via a `structured_output` tool; if a minimal
+      // condition judge completes with valid JSON text without calling the tool, DSH
+      // rewrites `completed -> error` with no `diagnostic`. Rescue strict JSON verdicts
+      // directly on attempt #1 instead of burning a second LLM roundtrip.
+      const rescuedDecision = (isCondition
+        && result
+        && result.stopReason === 'error'
+        && !errDetail
+        && result.structured === undefined)
+        ? parseStrictConditionJson(outText, node)
+        : null;
       const outcome = {
-        ok: !failed(result),
+        ok: rescuedDecision ? true : !failed(result),
         text: outText,
-        reason: result && result.stopReason,
+        reason: rescuedDecision ? 'completed' : (result && result.stopReason),
         errorDetail: errDetail,
-        empty: isEmptyOutput(result),
+        empty: rescuedDecision ? false : isEmptyOutput(result),
         childId: activation && activation.childId ? String(activation.childId) : '',
       };
       if (isCondition) {
-        outcome.decision = parseConditionDecision(result, outText, node);
+        outcome.decision = rescuedDecision || parseConditionDecision(result, outText, node);
       }
       return outcome;
     } finally {
@@ -643,7 +308,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     const continued = await run(loopCtx.warmChildId, warmPrompt);
     if (signal && signal.aborted) return continued;
     if (continued.ok) {
-      liveChild.set(childKey(node.id), continued.childId || loopCtx.warmChildId);
+      touchMapLRU(liveChild, childKey(node.id), continued.childId || loopCtx.warmChildId, MAX_CHILD_SLOTS);
       return { ...continued, warmReused: true };
     }
     if (continued.reason !== 'activation-failed') {
@@ -658,7 +323,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     const continued = await run(forcedChild);
     if (signal && signal.aborted) return continued;
     if (continued.ok) {
-      liveChild.set(childKey(node.id), forcedChild);
+      touchMapLRU(liveChild, childKey(node.id), forcedChild, MAX_CHILD_SLOTS);
       return continued;
     }
     if (continued.reason !== 'activation-failed') {
@@ -690,16 +355,9 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   const started = await run(undefined);
   if (node.keepSession && started.ok) {
     const current = childByNode.get(childKey(node.id));
-    if (current) liveChild.set(childKey(node.id), current);
+    if (current) touchMapLRU(liveChild, childKey(node.id), current, MAX_CHILD_SLOTS);
   }
   return started;
-}
-
-function formatModelLabel(provider, model) {
-  const p = typeof provider === 'string' ? provider.trim() : '';
-  const m = typeof model === 'string' ? model.trim() : '';
-  if (p && m) return p + '/' + m;
-  return m || p || '';
 }
 
 async function spawnNode(scope, plan, node, results, parent, signal, sid, failedMap, prunedSet, loopCtx) {
@@ -733,13 +391,31 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
 
   let first = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
   if (signal && signal.aborted) return first;
+  // Safe single transient-error backoff retry strictly for read-only nodes (`minimal` / `condition`)
+  // on post-start transient failures (429/502/503/504/timeout). Never auto-retry writable standard
+  // agents (which may have side effects) or `activation-failed` (which feeds the circuit breaker).
+  const isReadOnly = node.kind === 'condition' || node.preset === 'minimal';
+  let transientRetried = false;
+  if (!first.ok && isReadOnly && first.reason !== 'activation-failed' && first.reason !== 'aborted' && isTransientFailure(first)) {
+    transientRetried = true;
+    const retryDelayMs = typeof plan.__transientDelayMs === 'number' ? plan.__transientDelayMs : 600;
+    await delayWithSignal(retryDelayMs, signal);
+    if (signal && signal.aborted) {
+      return { ok: false, empty: false, reason: 'aborted', text: '已取消', childId: first.childId || '', modelUsed: primaryModel, fallbackUsed: false, sessionContinued: false };
+    }
+    const transientRetry = await spawnOnce(scope, plan, node, results, parent, signal, undefined, undefined, sid, failedMap, prunedSet, loopCtx);
+    if (signal && signal.aborted) return transientRetry;
+    if (transientRetry.ok || transientRetry.errorDetail || !first.errorDetail) {
+      first = transientRetry;
+    }
+  }
   // Many models/proxies reject strict `outputSchema` (`json_schema`) with stopReason='error'.
   // For condition/structured nodes, automatically retry once on the same model without outputSchema
   // so `parseConditionDecision` can parse plain-text JSON before giving up or falling back.
   const usedSchema = node.kind === 'condition'
     || Boolean(node.structured)
     || (plan.edges || []).some((e) => e.from === node.id && e.type === 'structured');
-  if (!first.ok && usedSchema && first.reason !== 'activation-failed' && first.reason !== 'aborted' && !isPermissionFailure(first)) {
+  if (!first.ok && !transientRetried && usedSchema && first.reason !== 'activation-failed' && first.reason !== 'aborted' && !isPermissionFailure(first)) {
     const plainRetry = await spawnOnce(scope, plan, node, results, parent, signal, { noSchema: true }, undefined, sid, failedMap, prunedSet, loopCtx);
     if (signal && signal.aborted) return plainRetry;
     if (plainRetry.ok) {
@@ -822,466 +498,6 @@ async function spawnNode(scope, plan, node, results, parent, signal, sid, failed
   };
 }
 
-/** Ids reachable from the entry Lead via O(V + E) BFS over forward edges; every other node is skipped at run time. */
-function reachableFrom(plan) {
-  const adj = new Map();
-  for (const e of forwardEdgesOf(plan && plan.edges)) {
-    if (!e || !e.from || !e.to) continue;
-    if (!adj.has(e.from)) adj.set(e.from, []);
-    adj.get(e.from).push(e.to);
-  }
-  const set = new Set(['lead']);
-  const queue = ['lead'];
-  for (let i = 0; i < queue.length; i += 1) {
-    const cur = queue[i];
-    for (const next of adj.get(cur) || []) {
-      if (!set.has(next)) { set.add(next); queue.push(next); }
-    }
-  }
-  return set;
-}
-
-/**
- * Classify inactive nodes that are rendered dashed on the canvas and skipped at run time:
- *   - unreachable orphans
- *   - solo chained Leads (zero reachable subagent upstream and blank role)
- *   - dangling dead-end subagents (zero outgoing edges while an active non-ancestor downstream Lead exists)
- */
-function inactiveNodeSets(nodes, edges) {
-  const list = withoutEntry(nodes);
-  const linkList = Array.isArray(edges) ? edges : [];
-  const fwdLinks = forwardEdgesOf(linkList);
-  const reachable = reachableFrom({ edges: fwdLinks });
-  const byId = new Map(list.map((n) => [n.id, n]));
-
-  const soloLeads = new Set();
-  for (const n of list) {
-    if (n.kind !== 'lead' || !reachable.has(n.id)) continue;
-    const hasAgentUp = fwdLinks.some((e) => {
-      if (!e || e.to !== n.id || !reachable.has(e.from) || e.from === 'lead') return false;
-      const src = byId.get(e.from);
-      return Boolean(src && src.kind !== 'lead');
-    });
-    const hasRole = Boolean(String(n.role || '').trim());
-    if (!hasAgentUp && !hasRole) soloLeads.add(n.id);
-  }
-
-  const deadEnds = new Set();
-  const activeLeads = list.filter((n) => n.kind === 'lead' && reachable.has(n.id) && !soloLeads.has(n.id));
-  if (activeLeads.length) {
-    const hasOut = new Set(linkList.map((e) => e.from));
-    const parents = new Map();
-    for (const e of fwdLinks) {
-      if (!parents.has(e.to)) parents.set(e.to, []);
-      parents.get(e.to).push(e.from);
-    }
-    const ancestorsOf = (id) => {
-      const seen = new Set();
-      const stack = [id];
-      while (stack.length) {
-        const cur = stack.pop();
-        for (const p of parents.get(cur) || []) {
-          if (!seen.has(p)) { seen.add(p); stack.push(p); }
-        }
-      }
-      return seen;
-    };
-    for (const n of list) {
-      if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) continue;
-      const anc = ancestorsOf(n.id);
-      if (activeLeads.some((ln) => !anc.has(ln.id))) deadEnds.add(n.id);
-    }
-  }
-  return { reachable, soloLeads, deadEnds };
-}
-
-/**
- * Validate controlled loop edges: each loop edge must leave a condition node, target a strict
- * forward-path ancestor (never entry Lead), and not overlap/cross another loop edge's body.
- */
-function validateLoopEdges(nodes, edges) {
-  const list = withoutEntry(nodes);
-  const byId = new Map(list.map((n) => [n.id, n]));
-  const linkList = Array.isArray(edges) ? edges : [];
-  const loopEdges = linkList.filter((e) => isLoopEdge(e));
-  const errors = [];
-  const seenMembers = new Map();
-  for (const le of loopEdges) {
-    const src = byId.get(le.from);
-    const dst = byId.get(le.to);
-    if (!src || src.kind !== 'condition') {
-      errors.push('回环边起点必须是条件判断节点（' + le.from + ' → ' + le.to + '）。');
-      continue;
-    }
-    if (!dst || le.to === 'lead') {
-      errors.push('回环边不能指向入口 Lead 或不存在的节点（' + le.from + ' → ' + le.to + '）。');
-      continue;
-    }
-    const members = loopMemberIds(list, linkList, le);
-    if (!members.size) {
-      errors.push('回环边目标「' + (dst.label || dst.id) + '」不是「' + (src.label || src.id) + '」的上游祖先节点。');
-      continue;
-    }
-    let overlap = false;
-    for (const mid of members) {
-      if (seenMembers.has(mid)) { overlap = true; break; }
-    }
-    if (overlap) {
-      errors.push('检测到交叉或嵌套回环（涉及节点「' + (dst.label || dst.id) + '」），暂不支持交叉回环。');
-      continue;
-    }
-    for (const mid of members) seenMembers.set(mid, le);
-  }
-  return errors;
-}
-
-/**
- * Detect structural warnings on a canvas plan (all three classes are rendered
- * dashed on the canvas and skipped at run time):
- *   1. Unreachable nodes.
- *   2. Solo chained Lead nodes with zero subagent upstream and blank role.
- *   3. Dangling dead-end subagent nodes with zero outgoing edges.
- *   4. Invalid/crossing loop edges or loop conditions with no forward exit.
- */
-function analyzeCanvasWarnings(nodes, edges) {
-  const list = withoutEntry(nodes);
-  const linkList = Array.isArray(edges) ? edges : [];
-  const warnings = [];
-  if (!list.length) return warnings;
-
-  const { reachable, soloLeads, deadEnds } = inactiveNodeSets(list, linkList);
-  const orphans = list.filter((n) => !reachable.has(n.id));
-  if (orphans.length) {
-    warnings.push('以下节点未从入口 Lead 连通，运行时会被跳过：'
-      + orphans.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
-  }
-  const soloList = list.filter((n) => soloLeads.has(n.id));
-  if (soloList.length) {
-    warnings.push('以下 Lead 节点未连入子代理且未填写分工（role），运行时不生效：'
-      + soloList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
-  }
-  const deadList = list.filter((n) => deadEnds.has(n.id));
-  if (deadList.length) {
-    warnings.push('以下子代理节点没有出边，产出未连入下游或终审 Lead，运行时不生效：'
-      + deadList.map((n) => (n.label || n.id) + '(' + n.id + ')').join('、'));
-  }
-  for (const err of validateLoopEdges(list, linkList)) warnings.push(err);
-  // Warn if a non-exit node inside a loop has a forward edge leaking outside the loop
-  // (that outside branch starts on round 1 and will not re-run on retry rounds).
-  const fwdLinks = forwardEdgesOf(linkList);
-  const byId = new Map(list.map((n) => [n.id, n]));
-  for (const le of linkList) {
-    if (!isLoopEdge(le)) continue;
-    const members = loopMemberIds(list, linkList, le);
-    if (!members.size) continue;
-    const leaked = [];
-    for (const e of fwdLinks) {
-      if (e.from !== le.from && members.has(e.from) && !members.has(e.to)) {
-        const src = byId.get(e.from);
-        const dst = byId.get(e.to);
-        leaked.push(((src && src.label) || e.from) + ' → ' + ((dst && dst.label) || e.to));
-      }
-    }
-    if (leaked.length) {
-      warnings.push('回环内部节点存在绕过条件裁判的旁路连线（' + leaked.join('、') + '），回环重试时这些环外节点不会重跑。');
-    }
-  }
-  return warnings;
-}
-
-/**
- * Turn a model-authored sketch into a canvas document: assign ids, ensure one
- * connected entry Lead, and lay the graph out in columns by depth.
- */
-function normalizeCanvas(args) {
-  const rawNodes = Array.isArray(args && args.nodes) ? args.nodes : [];
-  const rawEdges = Array.isArray(args && args.edges) ? args.edges : [];
-  if (!rawNodes.length) return { error: '至少需要一个节点' };
-
-  const nodes = [];
-  const idByRef = new Map();
-  const usedIds = new Set();
-  let counter = 0;
-  let hasExplicitLead = false;
-  for (const raw of rawNodes) {
-    if (!raw || typeof raw !== 'object') continue;
-    counter += 1;
-    const kind = normalizeKind(raw.kind);
-    const wantsEntry = !hasExplicitLead && (raw.id === 'lead' || (raw.entry === true && kind === 'lead'));
-    let id = wantsEntry
-      ? 'lead'
-      : (typeof raw.id === 'string' && raw.id && raw.id !== 'lead' ? raw.id : 'n' + counter);
-    if (usedIds.has(id)) {
-      let suffix = 2;
-      while (usedIds.has(id + '_' + suffix)) suffix += 1;
-      id = id + '_' + suffix;
-    }
-    usedIds.add(id);
-    if (id === 'lead') hasExplicitLead = true;
-    const defaultLabel = kind === 'lead'
-      ? 'Lead 步骤 ' + counter
-      : (kind === 'condition' ? '条件判断 ' + counter : 'Node ' + counter);
-    const label = String(raw.label || defaultLabel);
-    const nodeObj = {
-      id,
-      kind: id === 'lead' ? 'lead' : kind,
-      label,
-      role: String(raw.role || ''),
-      task: String(raw.task || ''),
-      provider: String(raw.provider || ''),
-      model: String(raw.model || ''),
-      reasoning: String(raw.reasoning || ''),
-      preset: (id === 'lead' ? '' : (kind === 'condition' ? 'minimal' : String(raw.preset || ''))),
-      structured: Boolean(raw.structured),
-      keepSession: Boolean(raw.keepSession),
-      fallbackModel: String(raw.fallbackModel || ''),
-      fallbackProvider: String(raw.fallbackProvider || ''),
-      x: 0,
-      y: 0,
-    };
-    const normRefs = normalizeRefs(raw.refs);
-    if (normRefs) nodeObj.refs = normRefs;
-    if (nodeObj.kind === 'condition') {
-      const customBranches = normalizeBranches(raw.branches);
-      if (customBranches) nodeObj.branches = customBranches;
-      if (raw.multiMatch === true) nodeObj.multiMatch = true;
-    }
-    nodes.push(nodeObj);
-    if (raw.ref && !idByRef.has(String(raw.ref))) idByRef.set(String(raw.ref), id);
-    if (raw.id && !idByRef.has(String(raw.id))) idByRef.set(String(raw.id), id);
-    idByRef.set(id, id);
-  }
-  if (!nodes.length) return { error: '节点都无效' };
-
-  const ids = new Set(nodes.map((n) => n.id));
-  const edges = [];
-  for (const raw of rawEdges) {
-    if (!raw || typeof raw !== 'object') continue;
-    const from = idByRef.get(String(raw.from)) || String(raw.from);
-    const to = idByRef.get(String(raw.to)) || String(raw.to);
-    if ((from !== 'lead' && !ids.has(from)) || !ids.has(to) || from === to || to === 'lead') continue;
-    const type = ['prompt', 'structured', 'session-ref'].includes(raw.type) ? raw.type : 'prompt';
-    const branch = normalizeBranch(raw.branch);
-    const edgeObj = { id: 'e' + edges.length, from, to, type };
-    if (branch) edgeObj.branch = branch;
-    if (raw.loop === true) {
-      edgeObj.loop = true;
-      edgeObj.maxIterations = normalizeMaxIterations(raw.maxIterations);
-    }
-    edges.push(edgeObj);
-  }
-
-  let entry = nodes.find((n) => n.id === 'lead');
-  if (!entry) {
-    // If the caller hand-authored a root Lead node (no incoming edges, has outgoing edges)
-    // and didn't wire from id='lead', promote it to entry Lead instead of duplicating it.
-    const hasLeadEdge = edges.some((e) => e.from === 'lead');
-    const inSet = new Set(edges.map((e) => e.to));
-    const outSet = new Set(edges.map((e) => e.from));
-    const rootLead = !hasLeadEdge
-      ? nodes.find((n) => n.kind === 'lead' && !inSet.has(n.id) && outSet.has(n.id))
-      : null;
-    if (rootLead) {
-      const oldId = rootLead.id;
-      rootLead.id = 'lead';
-      rootLead.task = rootLead.task || String(args.task || '') || rootLead.role;
-      rootLead.role = '';
-      for (const e of edges) {
-        if (e.from === oldId) e.from = 'lead';
-      }
-      entry = rootLead;
-    } else {
-      entry = {
-        id: 'lead', kind: 'lead', label: 'Lead（本对话）', role: '',
-        task: String(args.task || ''), provider: '', model: '', reasoning: '',
-        preset: '', structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
-        x: 0, y: 0,
-      };
-      nodes.unshift(entry);
-    }
-  } else if (!entry.task) {
-    entry.task = String(args.task || '') || entry.role;
-  }
-  const topRefs = normalizeRefs(args && args.refs);
-  if (topRefs && !entry.refs) entry.refs = topRefs;
-
-  // If entry Lead still has no outgoing edges, auto-wire it to all root nodes so
-  // a freshly generated canvas is never dead/unreachable on arrival.
-  if (!edges.some((e) => e.from === 'lead')) {
-    const hasIn = new Set(edges.map((e) => e.to));
-    const roots = nodes.filter((n) => n.id !== 'lead' && !hasIn.has(n.id));
-    for (const root of roots) {
-      edges.push({ id: 'e' + edges.length, from: 'lead', to: root.id, type: 'prompt' });
-    }
-  }
-
-  const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
-  for (const node of nodes) {
-    if (structuredSources.has(node.id)) node.structured = true;
-  }
-
-  // Layout: depth of the longest path from the entry (ignoring controlled loop back-edges).
-  const depth = new Map(nodes.map((n) => [n.id, n.id === 'lead' ? 0 : 1]));
-  for (let pass = 0; pass < nodes.length; pass += 1) {
-    let changed = false;
-    for (const e of forwardEdgesOf(edges)) {
-      if (e.to === 'lead') continue;
-      const next = Math.min(nodes.length, depth.get(e.from) + 1);
-      if (next > depth.get(e.to)) { depth.set(e.to, next); changed = true; }
-    }
-    if (!changed) break;
-  }
-  const perColumn = new Map();
-  for (const node of nodes) {
-    const level = depth.get(node.id) || 0;
-    const row = perColumn.get(level) || 0;
-    perColumn.set(level, row + 1);
-    node.x = 60 + level * 300;
-    node.y = 80 + row * 260;
-  }
-
-  return {
-    nodes,
-    edges,
-    task: String(entry.task || args.task || ''),
-    warnings: analyzeCanvasWarnings(nodes, edges),
-  };
-}
-
-/**
- * Apply an in-place patch to an existing plan: update/add/remove nodes and
- * edges without losing untouched nodes. Preserves `'lead'` as a valid edge
- * source so newly added branches can wire directly from the entry Lead.
- */
-function applyPatch(plan, args) {
-  const nodes = withoutEntry(plan.nodes).map((n) => ({ ...n }));
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const ALLOWED = ['label', 'role', 'provider', 'model', 'reasoning', 'preset', 'keepSession', 'memoryChildId', 'structured', 'fallbackModel', 'fallbackProvider'];
-  const touched = [];
-  for (const patch of args && Array.isArray(args.nodes) ? args.nodes : []) {
-    // 'lead' is the reserved entry node and is never edited here.
-    if (!patch || typeof patch.id !== 'string' || patch.id === 'lead') continue;
-    const existing = byId.get(patch.id);
-    if (existing) {
-      for (const key of ALLOWED) {
-        if (patch[key] !== undefined) existing[key] = patch[key];
-      }
-      if (patch.kind !== undefined) existing.kind = normalizeKind(patch.kind);
-      if (existing.kind === 'condition') existing.preset = 'minimal';
-      if (patch.branches !== undefined) {
-        const nb = normalizeBranches(patch.branches);
-        if (nb) existing.branches = nb;
-        else delete existing.branches;
-      }
-      if (patch.multiMatch !== undefined) {
-        if (patch.multiMatch) existing.multiMatch = true;
-        else delete existing.multiMatch;
-      }
-      if (patch.refs !== undefined) {
-        const nr = normalizeRefs(patch.refs);
-        if (nr) existing.refs = nr;
-        else delete existing.refs;
-      }
-      touched.push(patch.id);
-    } else {
-      const created = {
-        id: patch.id,
-        kind: normalizeKind(patch.kind),
-        label: patch.label || patch.id,
-        role: '', provider: '', model: '', reasoning: '', preset: 'standard',
-        structured: false, keepSession: false, fallbackModel: '', fallbackProvider: '',
-      };
-      for (const key of ALLOWED) {
-        if (patch[key] !== undefined) created[key] = patch[key];
-      }
-      created.preset = (created.kind === 'condition' || created.preset === 'minimal') ? 'minimal' : 'standard';
-      if (created.kind === 'condition' && patch.branches !== undefined) {
-        const nb = normalizeBranches(patch.branches);
-        if (nb) created.branches = nb;
-      }
-      if (created.kind === 'condition' && patch.multiMatch === true) {
-        created.multiMatch = true;
-      }
-      if (patch.refs !== undefined) {
-        const nr = normalizeRefs(patch.refs);
-        if (nr) created.refs = nr;
-      }
-      nodes.push(created);
-      byId.set(created.id, created);
-      touched.push(created.id);
-    }
-  }
-  const removed = new Set(Array.isArray(args && args.removeNodes) ? args.removeNodes : []);
-  removed.delete('lead');
-  const keptNodes = nodes.filter((n) => !removed.has(n.id));
-  const keptIds = new Set(keptNodes.map((n) => n.id));
-  const rawRemoveEdges = Array.isArray(args && args.removeEdges) ? args.removeEdges : [];
-  const matchesRemovedEdge = (edge) => rawRemoveEdges.some((r) => {
-    if (!r || String(r.from) !== edge.from || String(r.to) !== edge.to) return false;
-    if (r.type && r.type !== edge.type) return false;
-    const rb = normalizeBranch(r.branch);
-    if (rb && rb !== normalizeBranch(edge.branch)) return false;
-    return true;
-  });
-  let edges = (Array.isArray(plan.edges) ? plan.edges : [])
-    .filter((e) => !matchesRemovedEdge(e) && !removed.has(e.from) && !removed.has(e.to))
-    .map((e) => ({ ...e }));
-  for (const edge of Array.isArray(args && args.edges) ? args.edges : []) {
-    if (!edge || typeof edge.from !== 'string' || typeof edge.to !== 'string') continue;
-    if (edge.from === edge.to || edge.to === 'lead') continue;
-    const validFrom = edge.from === 'lead' || keptIds.has(edge.from);
-    const validTo = keptIds.has(edge.to);
-    if (!validFrom || !validTo) continue;
-    const type = ['prompt', 'structured', 'session-ref'].includes(edge.type) ? edge.type : 'prompt';
-    const branch = normalizeBranch(edge.branch);
-    const existingEdge = edges.find((e) => e.from === edge.from && e.to === edge.to && e.type === type && normalizeBranch(e.branch) === branch);
-    if (existingEdge) {
-      if (edge.loop === true) {
-        existingEdge.loop = true;
-        existingEdge.maxIterations = normalizeMaxIterations(edge.maxIterations !== undefined ? edge.maxIterations : existingEdge.maxIterations);
-      } else if (edge.loop === false) {
-        delete existingEdge.loop;
-        delete existingEdge.maxIterations;
-      }
-      continue;
-    }
-    const nextEdge = { from: edge.from, to: edge.to, type };
-    if (branch) nextEdge.branch = branch;
-    if (edge.loop === true) {
-      nextEdge.loop = true;
-      nextEdge.maxIterations = normalizeMaxIterations(edge.maxIterations);
-    }
-    edges.push(nextEdge);
-  }
-  const structuredSources = new Set(edges.filter((e) => e.type === 'structured').map((e) => e.from));
-  for (const node of keptNodes) {
-    node.structured = structuredSources.has(node.id);
-  }
-  const taskPatched = typeof (args && args.task) === 'string';
-  const nextTask = taskPatched ? args.task : String(plan.task || '');
-  const refsPatched = args && args.refs !== undefined;
-  const nextRefs = refsPatched ? normalizeRefs(args.refs) : normalizeRefs(plan.refs);
-  const nextPlan = { ...plan, task: nextTask, nodes: keptNodes, edges };
-  if (nextRefs) nextPlan.refs = nextRefs;
-  else delete nextPlan.refs;
-  return {
-    plan: nextPlan,
-    touched,
-    taskPatched,
-    refsPatched,
-    removed: Array.from(removed),
-    removeEdges: rawRemoveEdges
-      .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
-      .map((r) => {
-        const item = { from: r.from, to: r.to };
-        if (r.type) item.type = r.type;
-        const rb = normalizeBranch(r.branch);
-        if (rb) item.branch = rb;
-        return item;
-      }),
-  };
-}
-
 /**
  * Drop a generated canvas where the browser can pick it up. `workspaceFiles`
  * resolves a session's root from its header cwd, so the client reads the same
@@ -1295,141 +511,46 @@ function resolveSessionsService(scope) {
   }
 }
 
+function activeCanvasIds(extraId) {
+  const ids = new Set();
+  for (const k of runBySession.keys()) {
+    const safe = safeSessionFileBase(k);
+    if (safe) ids.add(safe);
+  }
+  const extraSafe = safeSessionFileBase(extraId);
+  if (extraSafe) ids.add(extraSafe);
+  return ids;
+}
+
 function publishCanvas(scope, sessionId, canvas) {
   try {
+    const safeId = safeSessionFileBase(sessionId);
+    if (!safeId) return false;
     const sessionsSvc = resolveSessionsService(scope);
     const live = sessionsSvc && typeof sessionsSvc.get === 'function' ? sessionsSvc.get(sessionId) : null;
     const root = live && live.header && live.header.cwd;
     if (!root) return false;
     const dir = join(root, '.dsh', 'canvas');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, sessionId + '.json'), JSON.stringify({ canvas, at: Date.now() }), 'utf8');
+    writeFileAtomic(join(dir, safeId + '.json'), JSON.stringify({ canvas, at: Date.now() }));
+    cleanupStaleCanvasFiles(dir, { activeIds: activeCanvasIds(sessionId) });
     return true;
   } catch (_e) {
     return false;
   }
 }
 
-/**
- * Build a zero-token structured run summary snapshot from in-memory executor state.
- * Published inside `.run.json` for the sidebar UI (never injected into model prompts).
- */
-function buildRunSummarySnapshot(st, opts) {
-  if (!st || typeof st !== 'object') return null;
-  const o = opts || {};
-  const now = typeof o.now === 'number' ? o.now : Date.now();
-  const status = typeof o.status === 'string' && o.status ? o.status : 'running';
-  const waitingLead = o.waitingLead || st.waitingLead || null;
-  const haltedReason = typeof o.haltedReason === 'string' && o.haltedReason
-    ? o.haltedReason
-    : (st.haltedReason || '');
-  const isTerminal = status === 'done' || status === 'halted';
-  const startedAt = typeof st.startedAt === 'number' ? st.startedAt : now;
-  const endedAt = isTerminal ? (typeof st.endedAt === 'number' ? st.endedAt : now) : null;
-  const nodeStatsMap = st.nodeStats && typeof st.nodeStats === 'object' ? st.nodeStats : {};
-  const prunedSet = st.pruned instanceof Set ? st.pruned : new Set(Array.isArray(st.pruned) ? st.pruned : []);
-  const decisions = st.decisions && typeof st.decisions === 'object' ? st.decisions : {};
-  const failedMap = st.failed && typeof st.failed === 'object' ? st.failed : {};
-  const emptyMap = st.emptyOutputs && typeof st.emptyOutputs === 'object' ? st.emptyOutputs : {};
-  const nodeMeta = st.nodeMeta && typeof st.nodeMeta === 'object' ? st.nodeMeta : {};
-  const orderIds = Array.isArray(st.orderIds) && st.orderIds.length
-    ? st.orderIds
-    : Object.keys(nodeStatsMap);
-
-  const nodes = [];
-  for (const id of orderIds) {
-    const meta = nodeMeta[id] || {};
-    const stat = nodeStatsMap[id] || null;
-    const dec = decisions[id] || null;
-    const fail = failedMap[id] || null;
-    const isPruned = prunedSet.has(id);
-    const isWaiting = Boolean(status === 'need-lead' && waitingLead && waitingLead.id === id);
-
-    let entryStatus = 'pending';
-    let durationMs = stat && typeof stat.durationMs === 'number' ? stat.durationMs : 0;
-    let entryStartedAt = stat && typeof stat.startedAt === 'number' ? stat.startedAt : null;
-    let entryEndedAt = stat && typeof stat.endedAt === 'number' ? stat.endedAt : null;
-
-    if (isPruned && (!stat || stat.status === 'pending' || stat.status === 'pruned')) {
-      entryStatus = 'pruned';
-    } else if (isWaiting) {
-      entryStatus = 'waiting';
-    } else if (stat && stat.status) {
-      entryStatus = stat.status;
-      if (status === 'halted' && (entryStatus === 'running' || entryStatus === 'waiting')) {
-        entryStatus = 'halted';
-        if (entryStartedAt && !entryEndedAt) {
-          durationMs += Math.max(0, now - entryStartedAt);
-          entryEndedAt = now;
-        }
-      }
-    } else if (fail) {
-      entryStatus = 'failed';
-    } else if (emptyMap[id]) {
-      entryStatus = 'empty';
-    }
-
-    let reason = (stat && typeof stat.reason === 'string' ? stat.reason : '') || (fail && fail.reason) || '';
-    if (!reason && dec) {
-      const matched = Array.isArray(dec.branchLabels) && dec.branchLabels.length
-        ? dec.branchLabels.join(', ')
-        : (dec.branchLabel || dec.branch || '');
-      const decReason = typeof dec.reason === 'string' ? dec.reason.trim() : '';
-      reason = matched ? (decReason ? matched + ' — ' + decReason : matched) : decReason;
-    }
-    if (reason.length > 160) reason = reason.slice(0, 159) + '…';
-
-    nodes.push({
-      id,
-      label: (stat && stat.label) || meta.label || (st.labels && st.labels[id]) || id,
-      kind: (stat && stat.kind) || meta.kind || 'agent',
-      status: entryStatus,
-      startedAt: entryStartedAt,
-      endedAt: entryEndedAt,
-      durationMs,
-      runs: stat && typeof stat.runs === 'number' ? stat.runs : 0,
-      model: (stat && stat.model) || meta.model || '',
-      fallbackUsed: Boolean(stat && stat.fallbackUsed),
-      sessionContinued: Boolean(stat && stat.sessionContinued),
-      childId: (stat && stat.childId) || '',
-      reason,
-    });
+/** Bound per-decision reason text inside `.run.json` so huge error dumps never bloat telemetry writes. */
+function compactDecisionsForTelemetry(decisions) {
+  if (!decisions || typeof decisions !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(decisions)) {
+    if (!v || typeof v !== 'object') { out[k] = v; continue; }
+    const reason = typeof v.reason === 'string' && v.reason.length > 1000
+      ? v.reason.slice(0, 999) + '…'
+      : v.reason;
+    out[k] = reason === v.reason ? v : { ...v, reason };
   }
-
-  const loopMeta = Array.isArray(st.loopMeta) ? st.loopMeta : [];
-  const loopCounts = st.loopCounts && typeof st.loopCounts === 'object' ? st.loopCounts : {};
-  const loopHistory = st.loopHistory && typeof st.loopHistory === 'object' ? st.loopHistory : {};
-  const exhaustedKeys = new Set(Array.isArray(st.loopExhausted) ? st.loopExhausted.map((x) => x && x.edgeKey).filter(Boolean) : []);
-  const loops = [];
-  for (const lm of loopMeta) {
-    const used = Number(loopCounts[lm.key]) || 0;
-    const rawRounds = Array.isArray(loopHistory[lm.key]) ? loopHistory[lm.key] : [];
-    const exhausted = exhaustedKeys.has(lm.key);
-    if (used === 0 && rawRounds.length === 0 && !exhausted) continue;
-    loops.push({
-      fromLabel: lm.fromLabel,
-      toLabel: lm.toLabel,
-      used,
-      max: lm.max,
-      exhausted,
-      rounds: rawRounds.map((r) => ({
-        round: r.round,
-        reason: typeof r.reason === 'string' && r.reason.length > 140 ? r.reason.slice(0, 139) + '…' : (r.reason || ''),
-      })),
-    });
-  }
-
-  return {
-    status,
-    startedAt,
-    endedAt,
-    haltedReason,
-    maxParallel: typeof st.maxParallel === 'number' ? st.maxParallel : 4,
-    totalLoops: typeof st.totalLoops === 'number' ? st.totalLoops : 0,
-    reused: Array.isArray(st.reusedIds) ? st.reusedIds.slice() : [],
-    nodes,
-    loops,
-  };
+  return out;
 }
 
 /**
@@ -1440,17 +561,17 @@ function buildRunSummarySnapshot(st, opts) {
  */
 function publishRunState(scope, sessionId, runState) {
   try {
-    if (!sessionId) return false;
+    const safeId = safeSessionFileBase(sessionId);
+    if (!safeId) return false;
     const sessionsSvc = resolveSessionsService(scope);
     const live = sessionsSvc && typeof sessionsSvc.get === 'function' ? sessionsSvc.get(sessionId) : null;
     const root = live && live.header && live.header.cwd;
     if (!root) return false;
     const dir = join(root, '.dsh', 'canvas');
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, sessionId + '.run.json'), JSON.stringify({
-      ...(runState || {}),
-      at: Date.now(),
-    }), 'utf8');
+    const payload = { ...(runState || {}), at: Date.now() };
+    if (payload.decisions) payload.decisions = compactDecisionsForTelemetry(payload.decisions);
+    writeFileAtomic(join(dir, safeId + '.run.json'), JSON.stringify(payload));
+    cleanupStaleCanvasFiles(dir, { activeIds: activeCanvasIds(sessionId) });
     return true;
   } catch (_e) {
     return false;
@@ -1521,7 +642,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
     st.endedAt = haltNow;
     st.haltedReason = wasWaiting ? '用户结束了等待拍板状态' : '用户主动终止';
     if (st.done && st.done.size > 0) {
-      lastRunBySession.set(sid, {
+      touchMapLRU(lastRunBySession, sid, {
         sig: st.sig,
         done: new Set(st.done),
         results: { ...(st.results || {}) },
@@ -1534,7 +655,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
         fallbackLinks: Array.isArray(st.fallbackLinks) ? st.fallbackLinks.map((fl) => ({ ...fl })) : [],
         nodeStats: st.nodeStats ? Object.fromEntries(Object.entries(st.nodeStats).map(([k, v]) => [k, { ...v }])) : {},
         halted: true,
-      });
+      }, MAX_LAST_RUNS);
     }
     const summary = buildRunSummarySnapshot(st, {
       status: 'halted',
@@ -1589,7 +710,7 @@ async function runPlan(scope, args, exec) {
         : '已终止当前工作流执行。',
     };
   }
-  const payload = sid ? canvasBySession.get(sid) : undefined;
+  const payload = getCanvasLRU(sid);
   if (!payload) return { error: '当前会话还没有画布数据。请在右侧 Workflow 画布点「启用」。' };
   if (!payload.enabled) return { error: '画布当前是「已禁用」状态。请在画布上点「启用」后再运行。' };
   if (payload.error) return { error: String(payload.error) };
@@ -1597,7 +718,7 @@ async function runPlan(scope, args, exec) {
 }
 
 function inspectPlan(sid) {
-  const payload = sid ? canvasBySession.get(sid) : undefined;
+  const payload = getCanvasLRU(sid);
   if (!payload) {
     return {
       hasCanvas: false,
@@ -1690,15 +811,14 @@ function buildActiveCanvasContext(sid) {
   if (runState && runState.waitingLead) {
     const wl = runState.waitingLead;
     const loopHint = wl.loopFeedback
-      ? ('（↺ 第 ' + wl.loopFeedback.retry + '/' + wl.loopFeedback.max + ' 次回环修正，打回理由：' + (wl.loopFeedback.reason || '未达预期') + '）')
+      ? ('（↺ ' + wl.loopFeedback.retry + '/' + wl.loopFeedback.max + '：' + (wl.loopFeedback.reason || '未达预期') + '）')
       : '';
     return [
       '[Workflow Canvas Active — Paused at Lead Step]',
-      '当前会话的工作流画布正暂停在中间 Lead 节点「' + wl.label + '」（分工：' + (wl.role || wl.label) + '）' + loopHint + '。',
-      '- 若用户的当前消息是在拍板、确认、补充决策或要求继续：请整理决策结论并直接调用 `canvas_workflow({ leadResult: "..." })` 恢复下游节点运行。',
-      '- 若用户要求取消、结束或终止当前工作流：直接调用 `canvas_workflow({ cancel: true })` 解除暂停状态。',
-      '- 若用户要求放弃当前进度从头重跑：调用 `canvas_workflow({ reset: true })`。',
-      '- 若用户要求修改画布结构、分工、参考清单、分支或回环：先 `canvas_inspect` 再用 `canvas_patch`。',
+      '画布暂停在中间 Lead「' + wl.label + '」（' + (wl.role || wl.label) + '）' + loopHint + '：',
+      '- 拍板/继续：整理结论调用 `canvas_workflow({ leadResult: "..." })`。',
+      '- 取消：`canvas_workflow({ cancel: true })`；重跑：`canvas_workflow({ reset: true })`。',
+      '- 改画布：先 `canvas_inspect` 再 `canvas_patch`。',
     ].join('\n');
   }
 
@@ -1712,26 +832,26 @@ function buildActiveCanvasContext(sid) {
   const prefix = String(sid) + '::';
   const hasMemory = nodes.some((n) => n.keepSession && (liveChild.has(prefix + n.id) || childByNode.has(prefix + n.id)));
   const metaParts = [
-    '共 ' + nodes.length + ' 个执行节点：' + preview,
-    '入口总任务：' + (hasTask ? '已填写' : '未填写'),
+    nodes.length + ' 节点：' + preview,
+    '总任务' + (hasTask ? '已填' : '未填'),
   ];
-  if (loopCount > 0) metaParts.push('含 ' + loopCount + ' 条受控回环（引擎自动按条件带反馈重试并在超限时熔断交 Lead，无需你手动循环调用）');
+  if (loopCount > 0) metaParts.push(loopCount + ' 条受控回环（自动按条件重试与超限熔断）');
   if (globalRefs.length > 0) metaParts.push('全局参考 ×' + globalRefs.length);
   const lines = [
     '[Workflow Canvas Active]',
-    '当前会话的右侧工作流画布处于「● 已启用」状态（' + metaParts.join('；') + '）。',
-    '- 若用户发出任务请求、布置工作或说「开始 / 执行 / 跑一次」：请直接调用 `canvas_workflow` 按画布编排执行（'
-      + (hasTask ? '可直接沿用入口总任务；若用户给出了新任务则通过 task 参数传入' : '请将用户的任务内容作为 task 参数传入')
-      + '），不要绕过画布直接自己完成。',
-    '- 若用户在讨论或要求修改画布结构、模型、分工、参考清单、条件分支、回环或连线：请先 `canvas_inspect` 再用 `canvas_patch` 就地修改，不要直接运行。',
-    '- 仅当用户明确只是闲聊、问无关问题或要求先停用画布时，才无需调用 `canvas_workflow`。',
+    '右侧画布「● 已启用」（' + metaParts.join('；') + '）。',
+    '- 用户布置任务或说「开始/执行/跑一次」：直接调 `canvas_workflow`（'
+      + (hasTask ? '沿用入口任务，有新任务则传 task' : '传入 task 参数')
+      + '），勿绕过画布直接手做。',
+    '- 修改画布结构/模型/分工/参考清单、条件分支、回环或连线：先 `canvas_inspect` 再 `canvas_patch`，勿直接运行。',
+    '- 仅闲聊、无关问题或要求停用画布时不调 `canvas_workflow`。',
   ];
   if (hasMemory) {
-    lines.push('- 本会话已有开启「记忆」节点的历史子代理会话：若用户说「再跑一次 / 换个任务重跑」，请先简短询问用户是保留上次记忆继续（reset: true）还是清空记忆全新开跑（reset: true, clearMemory: true）。');
+    lines.push('- 已有开启「记忆」的子代理会话：若用户要求重跑，先问保留记忆（`reset: true`）或清空记忆（`reset: true, clearMemory: true`）。');
   }
   const stdCount = nodes.filter((n) => n.kind !== 'lead' && n.kind !== 'condition' && n.preset !== 'minimal').length;
   if (stdCount >= 2) {
-    lines.push('- 本画布包含 ' + stdCount + ' 个可写/命令型（standard）子代理，受主对话权限上限约束；若任务涉及改代码、写文件或跑终端命令且当前主对话权限偏严格，请先简短提醒用户放开主对话权限再调 `canvas_workflow`，避免中途报错白耗额度。');
+    lines.push('- 含 ' + stdCount + ' 个可写/命令型（standard）子代理，受主对话权限上限约束；若涉及改文件/跑命令且权限偏严，先简短提醒用户放开权限再跑。');
   }
   const prevRun = lastRunBySession.get(String(sid));
   if (prevRun) {
@@ -1740,21 +860,11 @@ function buildActiveCanvasContext(sid) {
       ...Object.values(prevRun.emptyOutputs || {}).map((e) => e.label || e.id),
     ].filter((v, i, arr) => v && arr.indexOf(v) === i);
     if (prevRun.halted || badNames.length) {
-      lines.push('- 上次运行存在失败/熔断节点（' + (badNames.join('、') || '部分未完成')
-        + '）：若用户要求只重跑失败部分或继续未完成段，请调用 `canvas_workflow({ retryFailed: true })` 局部续跑（自动复用已成功节点缓存，零重复消耗）；也可传 `fromNodes: ["节点id"]` 指定从某个节点开始重跑。');
+      lines.push('- 上次有失败/熔断节点（' + (badNames.join('、') || '部分未完成')
+        + '）：局部续跑调 `canvas_workflow({ retryFailed: true })`（复用成功缓存）或指定 `fromNodes`。');
     }
   }
   return lines.join('\n');
-}
-
-/** Detect permission / sandbox denial outcomes so we can circuit-break before burning downstream tokens. */
-const PERMISSION_ERR_RE = /permission denied|access is denied|sandbox-local|windows-acl|win32error|eacces|eperm|approval required|not permitted|拒绝访问|权限不足|无权执行|沙箱拒绝/i;
-function isPermissionFailure(outcome) {
-  if (!outcome) return false;
-  const text = String(outcome.text || '');
-  if (!outcome.ok && PERMISSION_ERR_RE.test(text)) return true;
-  if (text.includes('【未完全交付】') && PERMISSION_ERR_RE.test(text)) return true;
-  return false;
 }
 
 /** Takes a plan directly so tests can feed any plan shape (sync, generate, patch). */
@@ -1772,6 +882,9 @@ async function executePlan(scope, plan, args, exec) {
         ? '已终止暂停中的工作流并解除等待拍板状态。'
         : '已终止当前工作流执行。',
     };
+  }
+  if (sid && activeRunBySession.has(sid)) {
+    return { error: '当前会话已有工作流正在执行中，请等待完成，或先调用 canvas_workflow({ cancel: true }) / 点击「⏹ 终止」。' };
   }
   if (!plan || !Array.isArray(plan.nodes) || !plan.nodes.length) {
     return { error: '画布没有可执行的节点。' };
@@ -1838,8 +951,28 @@ async function executePlan(scope, plan, args, exec) {
   const sig = JSON.stringify(plan);
   let state = runBySession.get(sid);
   const wantRetryFailed = opts.retryFailed === true;
+  if (opts.fromNodes !== undefined && !Array.isArray(opts.fromNodes)) {
+    return { error: '参数 fromNodes 必须是节点 ID 或名称的字符串数组，例如 ["n1"]。' };
+  }
   const rawFromNodes = Array.isArray(opts.fromNodes) ? opts.fromNodes.filter((x) => typeof x === 'string' && x.trim()) : [];
-  const wantPartial = wantRetryFailed || rawFromNodes.length > 0;
+  const resolvedFromIds = [];
+  if (rawFromNodes.length > 0) {
+    const unmatched = [];
+    for (const ref of rawFromNodes) {
+      const trimmed = ref.trim();
+      if (byId.has(trimmed)) resolvedFromIds.push(trimmed);
+      else {
+        const match = runnable.find((n) => n.label === trimmed);
+        if (match) resolvedFromIds.push(match.id);
+        else unmatched.push(trimmed);
+      }
+    }
+    if (unmatched.length) {
+      const validList = runnable.map((n) => n.id + (n.label && n.label !== n.id ? '(' + n.label + ')' : '')).join('、');
+      return { error: 'fromNodes 中以下节点不存在或不可达：' + unmatched.join('、') + '。当前可执行节点：' + validList };
+    }
+  }
+  const wantPartial = wantRetryFailed || resolvedFromIds.length > 0;
   let reused = [];
   let reusedIds = [];
 
@@ -1892,14 +1025,7 @@ async function executePlan(scope, plan, args, exec) {
         for (const id of Object.keys(state.failed)) seeds.add(id);
         for (const id of Object.keys(state.emptyOutputs)) seeds.add(id);
       }
-      for (const ref of rawFromNodes) {
-        const trimmed = ref.trim();
-        if (byId.has(trimmed)) seeds.add(trimmed);
-        else {
-          const match = runnable.find((n) => n.label === trimmed);
-          if (match) seeds.add(match.id);
-        }
-      }
+      for (const id of resolvedFromIds) seeds.add(id);
       const invalid = new Set(seeds);
       const q = Array.from(seeds);
       for (let i = 0; i < q.length; i += 1) {
@@ -2030,7 +1156,7 @@ async function executePlan(scope, plan, args, exec) {
 
   const snapshotLastRun = (haltedFlag) => {
     if (!sid) return;
-    lastRunBySession.set(sid, {
+    touchMapLRU(lastRunBySession, sid, {
       sig: state.sig,
       done: new Set(state.done),
       results: { ...state.results },
@@ -2043,7 +1169,7 @@ async function executePlan(scope, plan, args, exec) {
       fallbackLinks: state.fallbackLinks.map((fl) => ({ ...fl })),
       nodeStats: Object.fromEntries(Object.entries(state.nodeStats || {}).map(([k, v]) => [k, { ...v }])),
       halted: Boolean(haltedFlag),
-    });
+    }, MAX_LAST_RUNS);
   };
   const depsOf = (node) => {
     const out = new Set();
@@ -2866,9 +1992,11 @@ export function apply(ctx) {
             try {
               const id = agent && agent.id !== undefined ? String(agent.id) : '';
               if (!id) return { kind: 'error', text: 'no session' };
-              canvasBySession.set(id, parsePayload(rawInput));
-              runBySession.delete(id);
-              publishRunState(ctx, id, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
+              touchMapLRU(canvasBySession, id, parsePayload(rawInput), MAX_STORED_SESSIONS);
+              if (!activeRunBySession.has(id)) {
+                runBySession.delete(id);
+                publishRunState(ctx, id, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
+              }
               saveStore();
               return { kind: 'success', text: 'canvas synced' };
             } catch (error) {
@@ -3018,10 +2146,10 @@ export function apply(ctx) {
                 };
                 const entryRefs = normalizeRefs(entryNode && entryNode.refs);
                 if (entryRefs) planObj.refs = entryRefs;
-                canvasBySession.set(sid, {
+                touchMapLRU(canvasBySession, sid, {
                   enabled: nextEnabled,
                   plan: planObj,
-                });
+                }, MAX_STORED_SESSIONS);
                 runBySession.delete(sid);
                 lastRunBySession.delete(sid);
                 publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
@@ -3081,7 +2209,7 @@ export function apply(ctx) {
               if (!payload || !payload.plan) return { error: '当前会话还没有画布数据，先用「启用」同步一次。' };
               const patched = applyPatch(payload.plan, args);
               const nextPlan = patched.plan;
-              canvasBySession.set(sid, { enabled: payload.enabled, plan: nextPlan });
+              touchMapLRU(canvasBySession, sid, { enabled: payload.enabled, plan: nextPlan }, MAX_STORED_SESSIONS);
               runBySession.delete(sid);
               publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
               saveStore();
@@ -3095,7 +2223,10 @@ export function apply(ctx) {
               if (patched.taskPatched) patchDoc.task = nextPlan.task;
               if (patched.refsPatched) patchDoc.refs = nextPlan.refs || [];
               const delivered = publishCanvas(scope, sid, patchDoc);
-              const warnings = analyzeCanvasWarnings(nextPlan.nodes, nextPlan.edges);
+              const warnings = [
+                ...(Array.isArray(patched.warnings) ? patched.warnings : []),
+                ...analyzeCanvasWarnings(nextPlan.nodes, nextPlan.edges),
+              ];
               const summary = '已更新 ' + patched.touched.length + ' 个节点'
                 + (patched.taskPatched ? '、已更新总任务' : '')
                 + '、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条';
@@ -3354,12 +2485,15 @@ export {
   orderNodes,
   upstreamOf,
   downstreamLabels,
+  parsePayload,
+  clipUpstreamOutput,
   briefFor,
   normalizeBranches,
   normalizeRefs,
   normalizeMaxIterations,
   loopMemberIds,
   validateLoopEdges,
+  parseStrictConditionJson,
   parseConditionDecision,
   withoutEntry,
   analyzeCanvasWarnings,
@@ -3369,6 +2503,12 @@ export {
   sessionIdFromContext,
   buildActiveCanvasContext,
   isPermissionFailure,
+  isTransientFailure,
+  safeSessionFileBase,
+  writeFileAtomic,
+  pruneMapLRU,
+  touchMapLRU,
+  cleanupStaleCanvasFiles,
   buildRunSummarySnapshot,
   abortSessionRun,
   runPlan,

@@ -12,8 +12,8 @@ at run time, and how memory cold-resume, fallbacks, and live status tracking wor
 ## 1. Architecture: Bidirectional Client ↔ Host Bridge
 
 The plugin splits cleanly into two halves:
-- **Client (`client.js`)**: Mounted as a right-sidebar `Workflow` tab (`keepMounted: true`, keyed by `sessionId` for isolation, preserving state while collapsed). Owns visual editing, live cross-tab preset sync, global layout preferences, shortcuts, visual effects, and live status rendering.
-- **Host (`index.js`)**: Registers the bundled `workflow-canvas` skill, per-session `systemPrompt.context`, two commands (`/canvas-sync` and `/canvas-stop`), and four tools (`canvas_inspect`, `canvas_generate`, `canvas_patch`, `canvas_workflow`). Owns real subagent execution, unified cancellation, and durable state persistence.
+- **Client (`client.js`)**: Mounted as a right-sidebar `Workflow` tab (`keepMounted: true`, keyed by `sessionId` for isolation, preserving state while collapsed). Owns visual editing, live cross-tab preset sync, global layout preferences, `rAF`-coalesced rendering, visibility-aware adaptive polling, shortcuts, visual effects, and live status rendering.
+- **Host (`index.js` + `lib/graph.js` + `lib/telemetry.js`)**: Registers the bundled `workflow-canvas` skill, compact per-session `systemPrompt.context`, two commands (`/canvas-sync` and `/canvas-stop`), and four tools (`canvas_inspect`, `canvas_generate`, `canvas_patch`, `canvas_workflow`). Owns real subagent execution, head+tail upstream output clipping, safe read-only transient backoff retry, unified cancellation, LRU memory/disk hygiene, and atomic state persistence.
 
 ```mermaid
 flowchart LR
