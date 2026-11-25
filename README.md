@@ -89,7 +89,7 @@ Drop a **Condition** node anywhere in the graph to route downstream automaticall
 - Once judged, a compact verdict pill appears right under the condition card (click to inspect the full verdict reason), while unchosen branch edges and skipped nodes dim automatically.
 - **Controlled retry loops (`↺`)**:
   - **Two ways to create**: Select one or more connected nodes → right-click **`↺ Create loop`** (auto-inserts a lightweight condition gate if the tail is a regular subagent), or drag a condition branch wire directly back to a strict ancestor node.
-  - **Clear visuals & free limit control**: Loop members get a color-coded outer dashed outline & `↺` badge (never clashing with running/done/failed borders), connected by an outer bypass rail; click the midpoint **`↺ ×3`** pill to adjust max retries (`1–10`) or remove the loop.
+  - **Clear visuals, live progress & free limit control**: Loop members get a color-coded outer dashed outline & `↺` badge (never clashing with running/done/failed borders), connected by an outer bypass rail; idle midpoint pills show **`↺ ×3`** (click to adjust max retries `1–10` or remove the loop), switching immediately during Round 1 to live **`↺ 0/N`** progress (hover for dual-metric `Round R/T (k/N retries)`), highlighting red **`↺ Exhausted N/N`** on circuit-break, and staying consistent across pills, node badges, Run Summary, and `canvas_workflow`'s `loops` payload (preserving final counts after stop or completion).
   - **Feedback & circuit-break**: Retries reset only strict loop members (bypass nodes are never re-run), inject the condition's rejection reason while reusing healthy warm sessions, and circuit-break at max retries by handing all round summaries to the nearest downstream Lead.
 - **Per-node & global `+ Refs` list**: Click **`+ Refs`** in the top-right title bar of any node (Entry Lead global refs, downstream Leads, Subagents, or Condition nodes) to attach up to 16 reference file paths, URLs, or constraints — deduplicated and injected into prompts automatically at run time.
 - **Comment frames & standalone notes (`C` / right-click)**: Select nodes and press `C` (or right-click **`💬 Group with comment`**) to wrap them in a real-time geometric comment frame, or press `C` on blank canvas for a standalone note; drag the header to move contained nodes together (hold `Alt` for box only), resize from 3 edges or any of the 4 corners, click title/note to edit inline, customize 6 theme-safe colors / S-M-L font size / zoomed-out title readability, and let the agent inspect/create/patch comments semantically via `nodeIds` (zero subagent execution tokens).
@@ -109,7 +109,7 @@ Press **`● ON`** at the top-left of the canvas, then either click **`▶ Run`*
 - If the entry Lead's task is blank, `▶ Run` stays disabled with a hint and you can still send your chat message directly as `task`.
 - At an intermediate **Lead** node, the canvas shows **`⏸ Ready`** (and Entry Lead shows `⏸ Awaiting Lead`) while handing control to chat; once you reply, downstream nodes resume automatically through the final Lead review.
 - **Unified `⏹ Stop` button**: Always visible beside `● ON` (muted when idle; lights up red alongside a compact `⏹` button on the Entry Lead card whenever a run is active or paused at **`⏸ Awaiting Lead`**) — clicking it immediately cancels the root turn, interrupts all live subagents, clears any Lead pause, and preserves completed-node cache (you can also ask in chat to cancel via `canvas_workflow({ cancel: true })`).
-- **Zero-token Run Summary**: Once a workflow runs, a compact bottom-left summary pill (and `⋯ → 📊 Run summary`) displays live elapsed time, per-node duration bars, fallback/session-continuation tags, condition verdicts, and round-by-round loop retry history, with one-click node focus, child-chat jump (`↗`), and **Copy Markdown** export — computed purely from local `.run.json` telemetry with zero extra LLM calls or prompt tokens.
+- **Zero-token Run Summary**: A compact bottom-left summary pill stays visible (muted gray before the first run, lighting up live once a run starts; also under `⋯ → 📊 Run summary`) and displays live elapsed time, per-node duration bars, fallback/session-continuation tags, condition verdicts, and round-by-round loop retry history, with one-click node focus, child-chat jump (`↗`), and **Copy Markdown** export — computed purely from local `.run.json` telemetry with zero extra LLM calls or prompt tokens.
 - Re-running in the same chat supports `reset: true`; if any node has saved **Memory**, the agent confirms whether to keep memory or clear it (`clearMemory: true`).
 
 ![Auto-run enabled canvas, pause at Lead decision, and finish](docs/images/lead-pause-resume.gif)
@@ -158,6 +158,10 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 - See [**Mechanism & Architecture**](docs/MECHANISM.md) ([中文](docs/MECHANISM.zh.md)) for the Client ↔ Host bridge, event-driven concurrency pool, link semantics, and cold resume.
 - Edit `client.js` / `index.js` and reload (Host changes require restart). Run `npm test` for the test suite. Compact plugin page: [docs/DETAIL.md](docs/DETAIL.md).
+
+## Acknowledgements
+
+Special thanks to [@youli42](https://github.com/youli42) as a major community contributor for continuously proposing high-impact feature ideas and feedback across the project (including conditional branching, controlled retry loops & live round progress, vertical layout, context menus, Lead→Lead stages, unified stop, AI preset switching, and comment frames).
 
 ## License
 

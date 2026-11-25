@@ -1852,6 +1852,96 @@ window.__ModuleLoader__.load({
       return { leadReadyIds, leadDoneIds };
     }
 
+    /**
+     * Format unified loop progress labels & tooltips for the loop bypass pill and node corner badge.
+     * Idle / legacy `.run.json` without `loopCounts` fall back cleanly to design limits (`↺ ×N` / `↺index`).
+     */
+    function loopProgressDisplay({ maxIterations, live, runStatus, index, lang }) {
+      const max = normalizeMaxIterationsUI(maxIterations);
+      const en = lang === 'en';
+      const dict = I18N[en ? 'en' : 'zh'];
+      const isTerminal = runStatus === 'done' || runStatus === 'halted';
+      const editedAfterTerminal = Boolean(
+        isTerminal && live && typeof live === 'object' && live.max !== undefined
+        && normalizeMaxIterationsUI(live.max) !== max
+      );
+      const hasLive = Boolean(live && typeof live === 'object' && runStatus && runStatus !== 'idle' && !editedAfterTerminal);
+      if (!hasLive) {
+        return {
+          isLive: false,
+          used: 0,
+          max,
+          round: 0,
+          totalRounds: max + 1,
+          exhausted: false,
+          active: false,
+          pillText: '↺ ×' + max,
+          nodeTagText: '↺' + (index || 1),
+          pillTip: dict['loopTipPill'],
+          nodeTip: '',
+        };
+      }
+      const rawUsed = live.count !== undefined ? live.count : live.retry;
+      const used = Math.max(0, Number(rawUsed) || 0);
+      const effMax = normalizeMaxIterationsUI(live.max !== undefined ? live.max : max);
+      const exhausted = Boolean(live.exhausted);
+      const active = live.active !== undefined ? Boolean(live.active) : true;
+      const round = active ? Math.max(1, Number(live.round) || (used + 1)) : 0;
+      const totalRounds = Math.max(effMax + 1, Number(live.totalRounds) || (effMax + 1));
+      const globalLimit = typeof live.globalLimit === 'number' && live.globalLimit > 0 ? live.globalLimit : 0;
+
+      let statusLine;
+      if (exhausted) {
+        if (globalLimit && used < effMax) {
+          statusLine = en
+            ? ('Loop circuit-broken (global cap ' + globalLimit + '): ran ' + round + '/' + totalRounds + ' rounds (' + used + '/' + effMax + ' retries)')
+            : ('已达全局上限（' + globalLimit + ' 次）熔断：共执行第 ' + round + '/' + totalRounds + ' 轮（已重试 ' + used + '/' + effMax + ' 次）');
+        } else {
+          statusLine = en
+            ? ('Loop exhausted: ran ' + round + '/' + totalRounds + ' rounds (' + used + '/' + effMax + ' retries)')
+            : ('已达上限熔断：共执行第 ' + round + '/' + totalRounds + ' 轮（已重试 ' + used + '/' + effMax + ' 次）');
+        }
+      } else if (!active && isTerminal) {
+        statusLine = en
+          ? ('Not entered (0/' + effMax + ' retries)')
+          : ('未执行（已重试 0/' + effMax + ' 次）');
+      } else if (!active) {
+        statusLine = en
+          ? ('Pending round 1/' + totalRounds + ' (0/' + effMax + ' retries)')
+          : ('等待进入第 1/' + totalRounds + ' 轮（已重试 0/' + effMax + ' 次）');
+      } else if (isTerminal) {
+        statusLine = en
+          ? ('Finished at round ' + round + '/' + totalRounds + ' (' + used + '/' + effMax + ' retries)')
+          : ('最终停在第 ' + round + '/' + totalRounds + ' 轮（已重试 ' + used + '/' + effMax + ' 次）');
+      } else {
+        statusLine = en
+          ? ('Round ' + round + '/' + totalRounds + ' (' + used + '/' + effMax + ' retries)')
+          : ('当前第 ' + round + '/' + totalRounds + ' 轮（已重试 ' + used + '/' + effMax + ' 次）');
+      }
+      const unenteredTerminal = !active && isTerminal && !exhausted;
+      return {
+        isLive: true,
+        used,
+        max: effMax,
+        round,
+        totalRounds,
+        exhausted,
+        active,
+        pillText: unenteredTerminal
+          ? ('↺ ×' + effMax)
+          : (exhausted
+            ? (en ? ('↺ Exhausted ' + used + '/' + effMax) : ('↺ 已用尽 ' + used + '/' + effMax))
+            : ('↺ ' + used + '/' + effMax)),
+        nodeTagText: unenteredTerminal
+          ? ('↺' + (index || 1))
+          : (exhausted
+            ? ('↺ ' + used + '/' + effMax + '!')
+            : ('↺ ' + used + '/' + effMax)),
+        pillTip: statusLine + '\n' + dict['loopTipPill'],
+        nodeTip: statusLine,
+      };
+    }
+
     /** Format millisecond durations cleanly for badges, KPI cards and Markdown tables. */
     function formatDurationMs(ms) {
       if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '—';
@@ -1986,7 +2076,22 @@ window.__ModuleLoader__.load({
         ? Math.max(0, (endedAt !== null ? endedAt : (isLive ? clock : (runState.at || clock))) - startedAt)
         : (maxNodeMs > 0 ? maxNodeMs : null);
 
-      const loops = sum && Array.isArray(sum.loops) ? sum.loops : [];
+      const loops = (sum && Array.isArray(sum.loops) ? sum.loops : []).map((lp) => {
+        const used = Math.max(0, Number(lp && lp.used) || 0);
+        const max = normalizeMaxIterationsUI(lp && lp.max);
+        const active = lp && lp.active !== undefined ? Boolean(lp.active) : true;
+        const globalLimit = lp && typeof lp.globalLimit === 'number' && lp.globalLimit > 0 ? lp.globalLimit : 0;
+        return {
+          ...lp,
+          used,
+          max,
+          round: active ? Math.max(1, Number(lp && lp.round) || (used + 1)) : 0,
+          totalRounds: Math.max(max + 1, Number(lp && lp.totalRounds) || (max + 1)),
+          active,
+          exhausted: Boolean(lp && lp.exhausted),
+          ...(globalLimit ? { globalLimit } : {}),
+        };
+      });
       const totalLoops = sum && typeof sum.totalLoops === 'number'
         ? sum.totalLoops
         : loops.reduce((acc, l) => acc + (Number(l && l.used) || 0), 0);
@@ -2071,7 +2176,19 @@ window.__ModuleLoader__.load({
         lines.push('');
         lines.push('#### ' + dict.runSummaryLoopsHead);
         for (const lp of view.loops) {
-          lines.push('- **' + esc(lp.fromLabel) + ' ↺ ' + esc(lp.toLabel) + '** (' + lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + dict.runSummaryExhausted : '') + ')');
+          let meta;
+          if (lp.active === false) {
+            meta = en
+              ? ('Not entered · 0/' + lp.max + ' retries')
+              : ('未执行 · 重试 0/' + lp.max);
+          } else {
+            const round = Math.max(1, Number(lp.round) || ((Number(lp.used) || 0) + 1));
+            const totalRounds = Math.max((Number(lp.max) || 1) + 1, Number(lp.totalRounds) || ((Number(lp.max) || 3) + 1));
+            meta = en
+              ? ('Round ' + round + '/' + totalRounds + ' · ' + lp.used + '/' + lp.max + ' retries' + (lp.exhausted ? ' · ' + dict.runSummaryExhausted : ''))
+              : ('第 ' + round + '/' + totalRounds + ' 轮 · 重试 ' + lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + dict.runSummaryExhausted : ''));
+          }
+          lines.push('- **' + esc(lp.fromLabel) + ' ↺ ' + esc(lp.toLabel) + '** (' + meta + ')');
           for (const r of (lp.rounds || [])) {
             lines.push('  - R' + r.round + ': ' + esc(r.reason));
           }
@@ -7041,7 +7158,7 @@ window.__ModuleLoader__.load({
             midX: loopArc.midX,
             midY: loopArc.midY,
             maxIterations: normalizeMaxIterationsUI(edge.maxIterations),
-            liveCount: live ? Number(live.count || 0) : 0,
+            live,
             dimmed: isPrunedEdge,
           });
         }
@@ -7908,18 +8025,29 @@ window.__ModuleLoader__.load({
                     runSummary.loops.length > 0 && h(React.Fragment, null,
                       h('div', { style: { flex: '0 0 auto', fontSize: '11px', fontWeight: 600, color: C.dim, marginTop: '2px' } }, t('runSummaryLoopsHead')),
                       h('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px', flex: '0 0 auto' } },
-                        runSummary.loops.map((lp, idx) => h('div', { key: idx, style: S.summaryRow },
-                          h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
-                            h('span', { style: { fontSize: '11px', fontWeight: 600, color: '#d29922', flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-                              lp.fromLabel + ' ↺ ' + lp.toLabel),
-                            h('span', { style: { ...S.summaryChip, color: lp.exhausted ? '#e5534b' : '#d29922' } },
-                              lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + t('runSummaryExhausted') : '')),
-                          ),
-                          (lp.rounds || []).map((r, rIdx) => h('div', {
-                            key: rIdx,
-                            style: { fontSize: '10px', color: C.dim, lineHeight: '1.4', paddingLeft: '6px', borderLeft: '2px solid ' + C.border },
-                          }, 'R' + r.round + ': ' + r.reason)),
-                        )),
+                        runSummary.loops.map((lp, idx) => {
+                          const lpUnentered = lp.active === false;
+                          const lpRound = lpUnentered ? 0 : Math.max(1, Number(lp.round) || ((Number(lp.used) || 0) + 1));
+                          const lpTotal = Math.max((Number(lp.max) || 1) + 1, Number(lp.totalRounds) || ((Number(lp.max) || 3) + 1));
+                          const lpBadge = lpUnentered
+                            ? (lang === 'en' ? ('Not entered · 0/' + lp.max) : ('未执行 · 0/' + lp.max))
+                            : (lang === 'en'
+                              ? ('R' + lpRound + '/' + lpTotal + ' · ' + lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + t('runSummaryExhausted') : ''))
+                              : ('第 ' + lpRound + '/' + lpTotal + ' 轮 · ' + lp.used + '/' + lp.max + (lp.exhausted ? ' · ' + t('runSummaryExhausted') : '')));
+                          const lpColor = lp.exhausted ? '#e5534b' : (lpUnentered ? C.dim : '#d29922');
+                          return h('div', { key: idx, style: S.summaryRow },
+                            h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                              h('span', { style: { fontSize: '11px', fontWeight: 600, color: lpColor, flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+                                lp.fromLabel + ' ↺ ' + lp.toLabel),
+                              h('span', { style: { ...S.summaryChip, color: lpColor, fontVariantNumeric: 'tabular-nums' } },
+                                lpBadge),
+                            ),
+                            (lp.rounds || []).map((r, rIdx) => h('div', {
+                              key: rIdx,
+                              style: { fontSize: '10px', color: C.dim, lineHeight: '1.4', paddingLeft: '6px', borderLeft: '2px solid ' + C.border },
+                            }, 'R' + r.round + ': ' + r.reason)),
+                          );
+                        }),
                       ),
                     ),
                     ),
@@ -8222,26 +8350,42 @@ window.__ModuleLoader__.load({
               menuRow('clr', t('clearCanvasBtn'), () => { setCtxMenu(null); clearCanvas(); }, { danger: true }),
             );
           })(),
-          runSummary.hasData && (() => {
-            const pillIcon = runSummary.status === 'done' ? '✓'
-              : runSummary.status === 'running' ? '●'
-                : runSummary.status === 'need-lead' ? '⏸'
-                  : '⏹';
-            const pillColor = runSummary.status === 'done'
-              ? (runSummary.failedCount ? '#d29922' : '#3fb950')
-              : runSummary.status === 'running' || runSummary.status === 'need-lead'
-                ? '#2f81f7'
-                : '#e5534b';
+          (() => {
+            const hasData = Boolean(runSummary.hasData);
+            const pillIcon = !hasData ? '📊'
+              : runSummary.status === 'done' ? '✓'
+                : runSummary.status === 'running' ? '●'
+                  : runSummary.status === 'need-lead' ? '⏸'
+                    : '⏹';
+            const pillColor = !hasData ? C.dim
+              : runSummary.status === 'done'
+                ? (runSummary.failedCount ? '#d29922' : '#3fb950')
+                : runSummary.status === 'running' || runSummary.status === 'need-lead'
+                  ? '#2f81f7'
+                  : '#e5534b';
             const elapsedStyle = { flex: '0 0 auto', color: C.dim, fontVariantNumeric: 'tabular-nums' };
-            const elapsedText = runSummary.elapsedMs !== null ? ' · ' + formatDurationMs(runSummary.elapsedMs) : '';
-            const loopText = runSummary.totalLoops > 0 ? ' · ↺' + runSummary.totalLoops : '';
+            const elapsedText = hasData && runSummary.elapsedMs !== null ? ' · ' + formatDurationMs(runSummary.elapsedMs) : '';
+            const loopText = hasData && runSummary.totalLoops > 0 ? ' · ↺' + runSummary.totalLoops : '';
+            const baseBorder = hasData && runSummary.isLive ? pillColor : C.border;
             return h('button', {
               type: 'button',
-              style: { ...S.floatSummaryBtn, borderColor: runSummary.isLive ? pillColor : C.border },
-              title: t('runSummaryTip'),
+              'data-summary-pill': hasData ? 'active' : 'idle',
+              style: {
+                ...S.floatSummaryBtn,
+                borderColor: baseBorder,
+                color: hasData ? C.text : C.dim,
+                opacity: hasData ? 1 : 0.6,
+              },
+              title: hasData ? t('runSummaryTip') : t('runSummaryEmpty'),
               onMouseDown: (e) => e.stopPropagation(),
-              onMouseEnter: (e) => { e.currentTarget.style.borderColor = pillColor; },
-              onMouseLeave: (e) => { e.currentTarget.style.borderColor = runSummary.isLive ? pillColor : C.border; },
+              onMouseEnter: (e) => {
+                e.currentTarget.style.borderColor = hasData ? pillColor : C.text;
+                if (!hasData) e.currentTarget.style.opacity = '0.85';
+              },
+              onMouseLeave: (e) => {
+                e.currentTarget.style.borderColor = baseBorder;
+                if (!hasData) e.currentTarget.style.opacity = '0.6';
+              },
               onClick: () => {
                 setMenuOpen(false);
                 setPresetOpen(null);
@@ -8255,8 +8399,10 @@ window.__ModuleLoader__.load({
             },
               h('span', { style: { color: pillColor, flex: '0 0 auto' } }, pillIcon),
               h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } },
-                t('runSummaryBtn') + ' · ' + runSummary.doneCount + '/' + runSummary.totalCount + loopText),
-              runSummary.isLive && typeof runSummary.startedAt === 'number'
+                hasData
+                  ? (t('runSummaryBtn') + ' · ' + runSummary.doneCount + '/' + runSummary.totalCount + loopText)
+                  : t('runSummaryBtn')),
+              hasData && runSummary.isLive && typeof runSummary.startedAt === 'number'
                 ? h(LiveElapsedText, { active: true, startedAt: runSummary.startedAt, endedAt: runSummary.endedAt, style: elapsedStyle })
                 : (elapsedText && h('span', { style: elapsedStyle }, elapsedText)),
             );
@@ -8669,9 +8815,13 @@ window.__ModuleLoader__.load({
             ),
             loopPillItems.map((item) => {
               const isOpen = loopEditEdgeId === item.edge.id;
-              const pillText = item.liveCount > 0
-                ? ('↺ ' + item.liveCount + '/' + item.maxIterations)
-                : ('↺ ×' + item.maxIterations);
+              const lpDisp = loopProgressDisplay({
+                maxIterations: item.maxIterations,
+                live: item.live,
+                runStatus: enabled ? runStatusForSync : '',
+                lang,
+              });
+              const pillColor = lpDisp.exhausted ? '#e5534b' : item.color;
               const commitLoopDraft = (closeAfter) => {
                 const v = parseInt(String(loopDraft || '').trim(), 10);
                 if (Number.isFinite(v)) updateLoopMaxIterations(item.edge.id, v);
@@ -8680,16 +8830,18 @@ window.__ModuleLoader__.load({
               };
               return h('div', {
                 key: 'loop-pill-' + item.edge.id,
+                'data-loop-pill': item.edge.id,
                 style: {
                   ...S.loopPill,
                   left: item.midX + 'px',
                   top: item.midY + 'px',
-                  border: '1.5px solid ' + item.color,
-                  color: item.color,
+                  border: '1.5px solid ' + pillColor,
+                  color: pillColor,
                   opacity: item.dimmed && !isOpen ? 0.42 : 1,
                   zIndex: isOpen ? 55 : 18,
+                  fontVariantNumeric: 'tabular-nums',
                 },
-                title: t('loopTipPill'),
+                title: lpDisp.pillTip,
                 onMouseDown: (e) => e.stopPropagation(),
                 onContextMenu: (e) => {
                   e.preventDefault();
@@ -8704,7 +8856,7 @@ window.__ModuleLoader__.load({
                   else openLoopEditor(item.edge);
                 },
               },
-                h('span', null, pillText),
+                h('span', null, lpDisp.pillText),
                 isOpen && h('div', {
                   style: S.loopPopover,
                   onMouseDown: (e) => e.stopPropagation(),
@@ -8833,15 +8985,30 @@ window.__ModuleLoader__.load({
                 onMouseDown: (e) => onNodeDown(e, node.id),
                 onContextMenu: (e) => onNodeContextMenu(e, node),
               },
-                nodeLoop && h('div', {
-                  style: {
-                    ...S.loopNodeTag,
-                    color: nodeLoop.color,
-                    border: '1px solid ' + nodeLoop.color,
-                  },
-                }, nodeAttempt && nodeAttempt.retry > 0
-                  ? ('↺ ' + nodeAttempt.retry + '/' + nodeAttempt.max)
-                  : ('↺' + nodeLoop.index)),
+                nodeLoop && (() => {
+                  const loopLive = nodeAttempt
+                    || (nodeLoop.edge && (loopCountsMap[nodeLoop.edge.id] || loopCountsMap[edgeKeyForState(nodeLoop.edge)]))
+                    || null;
+                  const tagDisp = loopProgressDisplay({
+                    maxIterations: nodeLoop.maxIterations,
+                    live: loopLive,
+                    runStatus: enabled ? runStatusForSync : '',
+                    index: nodeLoop.index,
+                    lang,
+                  });
+                  const tagColor = tagDisp.exhausted ? '#e5534b' : nodeLoop.color;
+                  return h('div', {
+                    'data-loop-tag': node.id,
+                    style: {
+                      ...S.loopNodeTag,
+                      color: tagColor,
+                      border: '1px solid ' + tagColor,
+                      pointerEvents: tagDisp.nodeTip ? 'auto' : 'none',
+                      fontVariantNumeric: 'tabular-nums',
+                    },
+                    title: tagDisp.nodeTip || undefined,
+                  }, tagDisp.nodeTagText);
+                })(),
                 h('div', {
                   className: (isRunning || isLeadReady) && fxLevel === 'vivid' ? 'dsh-wc-topbar-vivid' : undefined,
                   style: {
@@ -9324,7 +9491,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, COMMENT_COLORS, COMMENT_FONT_SIZES, normalizeCommentsUI, nodesInsideComment, boundsForNodes, refitCommentsAfterLayout, commentHeaderScale, resizeCommentBox, mergeCommentsForDoc, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, loopProgressDisplay, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, COMMENT_COLORS, COMMENT_FONT_SIZES, normalizeCommentsUI, nodesInsideComment, boundsForNodes, refitCommentsAfterLayout, commentHeaderScale, resizeCommentBox, mergeCommentsForDoc, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

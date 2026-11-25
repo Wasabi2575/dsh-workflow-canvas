@@ -1549,3 +1549,175 @@ test('comment box helpers: normalizeCommentsUI, geometric membership, layout ref
   assert.equal(keptManual[0].w, manualWide[0].w, 'same nodeIds set preserves user manual resize');
   assert.equal(keptManual[0].h, manualWide[0].h);
 });
+
+test('loopProgressDisplay & WorkflowCanvas unify round/retry/exhausted progress across pill, badge & summary (#17)', () => {
+  const c = loadClientTestExports();
+
+  // 1) Idle / legacy `.run.json` without `loopCounts` -> falls back cleanly to design limit `↺ ×3` / `↺1`
+  const idle = c.loopProgressDisplay({ maxIterations: 3, live: null, runStatus: 'running', index: 1, lang: 'zh' });
+  assert.equal(idle.isLive, false);
+  assert.equal(idle.pillText, '↺ ×3');
+  assert.equal(idle.nodeTagText, '↺1');
+
+  const idleStatus = c.loopProgressDisplay({ maxIterations: 3, live: { count: 0, max: 3 }, runStatus: 'idle', index: 2, lang: 'en' });
+  assert.equal(idleStatus.pillText, '↺ ×3');
+  assert.equal(idleStatus.nodeTagText, '↺2');
+
+  // 2) Round 1 in progress -> immediately shows `↺ 0/3` + dual-metric tooltip in zh & en
+  const r1Zh = c.loopProgressDisplay({
+    maxIterations: 3,
+    live: { count: 0, max: 3, round: 1, totalRounds: 4, active: true, exhausted: false },
+    runStatus: 'running',
+    index: 1,
+    lang: 'zh',
+  });
+  assert.equal(r1Zh.pillText, '↺ 0/3');
+  assert.equal(r1Zh.nodeTagText, '↺ 0/3');
+  assert.ok(r1Zh.pillTip.includes('当前第 1/4 轮（已重试 0/3 次）'));
+  assert.equal(r1Zh.nodeTip, '当前第 1/4 轮（已重试 0/3 次）');
+
+  const r1En = c.loopProgressDisplay({
+    maxIterations: 3,
+    live: { count: 0, max: 3, round: 1, totalRounds: 4, active: true, exhausted: false },
+    runStatus: 'running',
+    index: 1,
+    lang: 'en',
+  });
+  assert.equal(r1En.pillText, '↺ 0/3');
+  assert.ok(r1En.pillTip.includes('Round 1/4 (0/3 retries)'));
+
+  // 3) Exhausted circuit-break -> explicit exhausted label on pill & `!` on compact node badge
+  const exZh = c.loopProgressDisplay({
+    maxIterations: 3,
+    live: { count: 3, max: 3, round: 4, totalRounds: 4, active: true, exhausted: true },
+    runStatus: 'done',
+    index: 1,
+    lang: 'zh',
+  });
+  assert.equal(exZh.pillText, '↺ 已用尽 3/3');
+  assert.equal(exZh.nodeTagText, '↺ 3/3!');
+  assert.ok(exZh.pillTip.includes('已达上限熔断'));
+
+  const exEn = c.loopProgressDisplay({
+    maxIterations: 10,
+    live: { count: 10, max: 10, round: 11, totalRounds: 11, active: true, exhausted: true },
+    runStatus: 'done',
+    index: 1,
+    lang: 'en',
+  });
+  assert.equal(exEn.pillText, '↺ Exhausted 10/10');
+  assert.equal(exEn.nodeTagText, '↺ 10/10!');
+
+  // 3b) Global-cap exhaustion (< max) explains global cap in tooltip
+  const exGlobalZh = c.loopProgressDisplay({
+    maxIterations: 3,
+    live: { count: 1, max: 3, round: 2, totalRounds: 4, active: true, exhausted: true, globalLimit: 20 },
+    runStatus: 'done',
+    index: 1,
+    lang: 'zh',
+  });
+  assert.ok(exGlobalZh.pillTip.includes('全局上限（20 次）'));
+
+  // 3c) Unentered / pruned loop on terminal run shows Not entered (round=0) instead of falsely claiming Round 1
+  const prunedZh = c.loopProgressDisplay({
+    maxIterations: 3,
+    live: { count: 0, max: 3, round: 0, totalRounds: 4, active: false, exhausted: false },
+    runStatus: 'done',
+    index: 2,
+    lang: 'zh',
+  });
+  assert.equal(prunedZh.round, 0);
+  assert.equal(prunedZh.pillText, '↺ ×3');
+  assert.equal(prunedZh.nodeTagText, '↺2');
+  assert.ok(prunedZh.nodeTip.includes('未执行'));
+  assert.ok(!prunedZh.nodeTip.includes('第 1/4 轮'));
+
+  // 3d) Editing maxIterations after a terminal run immediately reflects the new design limit instead of locking to stale live.max
+  const editedAfterDone = c.loopProgressDisplay({
+    maxIterations: 5,
+    live: { count: 1, max: 3, round: 2, totalRounds: 4, active: true, exhausted: false },
+    runStatus: 'done',
+    index: 1,
+    lang: 'zh',
+  });
+  assert.equal(editedAfterDone.isLive, false);
+  assert.equal(editedAfterDone.pillText, '↺ ×5');
+  assert.equal(editedAfterDone.nodeTagText, '↺1');
+
+  // 4) Run Summary view & Markdown show round + retry consistently even at used=0 (Round 1) and mark unentered loops
+  const sumView = c.buildRunSummaryView({
+    runState: {
+      status: 'running',
+      summary: {
+        status: 'running',
+        startedAt: 1000,
+        nodes: [{ id: 'a', label: 'A', kind: 'agent', status: 'running', startedAt: 1000, durationMs: 0, runs: 1 }],
+        loops: [
+          { fromLabel: '门禁', toLabel: 'A', used: 0, max: 3, round: 1, totalRounds: 4, active: true, exhausted: false, rounds: [] },
+          { fromLabel: '旁路门禁', toLabel: 'B', used: 0, max: 2, round: 0, totalRounds: 3, active: false, exhausted: false, rounds: [] },
+        ],
+      },
+    },
+    nodes: [{ id: 'lead', kind: 'lead' }, { id: 'a', kind: 'agent', label: 'A' }],
+    now: 2000,
+  });
+  assert.equal(sumView.loops.length, 2);
+  assert.equal(sumView.loops[0].round, 1);
+  assert.equal(sumView.loops[0].totalRounds, 4);
+  assert.equal(sumView.loops[1].round, 0);
+  assert.equal(sumView.loops[1].active, false);
+  const mdZh = c.formatRunSummaryMarkdown(sumView, 'zh');
+  const mdEn = c.formatRunSummaryMarkdown(sumView, 'en');
+  assert.ok(mdZh.includes('第 1/4 轮 · 重试 0/3'));
+  assert.ok(mdZh.includes('未执行 · 重试 0/2'));
+  assert.ok(mdEn.includes('Round 1/4 · 0/3 retries'));
+  assert.ok(mdEn.includes('Not entered · 0/2 retries'));
+
+  // 5) Rendered WorkflowCanvas shows matching pill & node tag during Round 1 and on Exhausted in lr & tb
+  const loopNodes = [
+    { id: 'lead', kind: 'lead', x: 40, y: 100, label: 'Lead', task: 'loop ui' },
+    { id: 'impl', kind: 'agent', x: 340, y: 100, label: '实现', role: 'code' },
+    { id: 'gate', kind: 'condition', x: 640, y: 100, label: '门禁', role: 'check' },
+  ];
+  const loopEdges = [
+    { id: 'e0', from: 'lead', to: 'impl', type: 'prompt' },
+    { id: 'e1', from: 'impl', to: 'gate', type: 'prompt' },
+    { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+  ];
+  const findByAttr = (el, attr, val) => {
+    if (!el || typeof el !== 'object') return null;
+    if (Array.isArray(el)) {
+      for (const ch of el) { const hit = findByAttr(ch, attr, val); if (hit) return hit; }
+      return null;
+    }
+    if (el.props && el.props[attr] === val) return el;
+    return el.children ? findByAttr(el.children, attr, val) : null;
+  };
+  for (const dir of ['lr', 'tb']) {
+    const storeR1 = new Map();
+    const cR1 = loadClientTestExports(storeR1, {
+      enabled: true,
+      direction: dir,
+      runState: {
+        status: 'running',
+        loopCounts: { el: { count: 0, max: 3, round: 1, totalRounds: 4, active: true, exhausted: false } },
+        nodeAttempts: { impl: { retry: 0, max: 3, round: 1, totalRounds: 4, active: true, exhausted: false } },
+      },
+    });
+    cR1.saveDoc('s-lp-r1', { nodes: loopNodes, edges: loopEdges, enabled: true, direction: dir }, 1000);
+    const treeR1 = cR1.WorkflowCanvas({ sessionId: 's-lp-r1' });
+    const pillEl = findByAttr(treeR1, 'data-loop-pill', 'el');
+    const tagEl = findByAttr(treeR1, 'data-loop-tag', 'impl');
+    assert.ok(pillEl && pillEl.children[0].children[0] === '↺ 0/3', `Round 1 pill shows ↺ 0/3 in ${dir}`);
+    assert.ok(tagEl && tagEl.children[0] === '↺ 0/3', `Round 1 node badge shows ↺ 0/3 in ${dir}`);
+  }
+
+  // 6) Run Summary pill stays visible and muted (idle) before the canvas has been run
+  const storeIdle = new Map();
+  const cIdle = loadClientTestExports(storeIdle, { enabled: true });
+  cIdle.saveDoc('s-sum-idle', { nodes: loopNodes, edges: loopEdges, enabled: true }, 1000);
+  const treeIdle = cIdle.WorkflowCanvas({ sessionId: 's-sum-idle' });
+  const idleSumPill = findByAttr(treeIdle, 'data-summary-pill', 'idle');
+  assert.ok(idleSumPill, 'Run Summary pill renders in muted idle state before any run');
+  assert.equal(idleSumPill.props.style.opacity, 0.6);
+});

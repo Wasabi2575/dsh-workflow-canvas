@@ -89,13 +89,15 @@ the agent automatically. While running or paused at an intermediate Lead node,
 a unified **`⏹ Stop`** button stays visible beside `● ON` (muted when idle, lighting up red alongside a compact `⏹` on the Entry Lead card while running or paused at an intermediate Lead) to interrupt all running subagents, cancel the root turn, and clear any
 Lead pause via `/canvas-stop`. Intermediate Lead nodes pause with
 `status: "need-lead"` and report `decisions` / `branchSkipped` / `failed` /
-`emptyOutputs` plus `session` handovers and merged `refs`; a terminal Lead
-completes directly with `status: "done"` and `finalLead`. Once a run begins, a
-compact bottom-left **Summary** pill (and `⋯ → 📊 Run summary`) displays live
-elapsed time, per-node duration bars, fallback/session-continuation badges,
-condition verdicts, and loop retry history with node focus, child-chat jump,
-and Markdown copy — computed strictly from `.run.json` telemetry with zero
-extra tokens.
+`emptyOutputs` / `loops` plus `session` handovers and merged `refs`; a terminal Lead
+completes directly with `status: "done"` and `finalLead`. Once a run begins,
+loop bypass pills and member corner badges immediately track live retry/round
+progress from Round 1 (`↺ 0/N`, red `↺ Exhausted N/N` on circuit-break, retained
+after stop/completion), and a compact bottom-left **Summary** pill (and
+`⋯ → 📊 Run summary`) displays live elapsed time, per-node duration bars,
+fallback/session-continuation badges, condition verdicts, and round-by-round
+loop progress with node focus, child-chat jump, and Markdown copy — computed
+strictly from `.run.json` telemetry with zero extra tokens.
 
 ## Memory
 

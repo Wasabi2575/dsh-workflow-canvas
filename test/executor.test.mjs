@@ -3531,3 +3531,199 @@ test('AI comment round-trip (#15 V2): /canvas-sync, canvas_inspect, canvas_gener
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('loop progress telemetry (#17): emits Round 1 progress, exhaustion flag, canvas_workflow loops, and retains final counts on abort', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-loop-prog-'));
+  try {
+    const sid = 's-lp-prog-' + Date.now();
+    const runFilePath = join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.run.json');
+    let round1Snapshot = null;
+    const plan = {
+      task: '循环轮次遥测测试',
+      nodes: [
+        { id: 'impl', kind: 'agent', label: '实现', role: 'code' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+        { id: 'final', kind: 'lead', label: '终审', role: 'ship' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'impl', type: 'prompt' },
+        { id: 'e1', from: 'impl', to: 'gate', type: 'prompt' },
+        { id: 'e2', from: 'gate', to: 'final', type: 'prompt', branch: 'true' },
+        { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 2 },
+      ],
+    };
+
+    // 1) Round 1 pass: snapshot captured mid-Round-1 already exposes count=0, round=1/3, active=true
+    const scopePass = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          const txt = id === 'gate' ? '{"pass": true, "reason": "首轮即通过"}' : 'done:' + id;
+          const result = (id === 'impl' && !round1Snapshot)
+            ? new Promise((resolve) => setTimeout(() => {
+              // Capture .run.json while Round 1 impl is actually in-flight (after launchReadyAgents emits running state)
+              round1Snapshot = JSON.parse(readFileSync(runFilePath, 'utf8'));
+              resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' });
+            }, 0))
+            : Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' });
+          return Promise.resolve({
+            childId: 'kid-' + id,
+            result,
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const resPass = await executePlan(scopePass, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(resPass.status, 'done');
+    assert.ok(round1Snapshot && round1Snapshot.loopCounts && round1Snapshot.loopCounts.el, 'Round 1 .run.json includes loopCounts immediately');
+    assert.equal(round1Snapshot.loopCounts.el.count, 0);
+    assert.equal(round1Snapshot.loopCounts.el.round, 1);
+    assert.equal(round1Snapshot.loopCounts.el.totalRounds, 3);
+    assert.equal(round1Snapshot.loopCounts.el.active, true);
+    assert.equal(round1Snapshot.loopCounts.el.exhausted, false);
+    assert.equal(round1Snapshot.nodeAttempts.impl.round, 1);
+    assert.equal(round1Snapshot.summary.loops.length, 1, 'summary.loops visible during Round 1');
+    assert.equal(round1Snapshot.summary.loops[0].round, 1);
+    assert.equal(resPass.loops.length, 1, 'canvas_workflow returns loops progress on Round 1 pass');
+    assert.equal(resPass.loops[0].used, 0);
+    assert.equal(resPass.loops[0].round, 1);
+    assert.equal(resPass.loops[0].exhausted, false);
+
+    // 2) Exhausted loop sets exhausted=true on loopCounts, nodeAttempts, summary.loops, and return payload
+    const sidEx = sid + '-ex';
+    const exFilePath = join(dir, '.dsh', 'canvas', safeSessionFileBase(sidEx) + '.run.json');
+    const scopeExhaust = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          const txt = id === 'gate' ? '{"pass": false, "reason": "仍未通过"}' : 'attempt:' + id;
+          return Promise.resolve({
+            childId: 'kid-ex-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const resEx = await executePlan(scopeExhaust, plan, {}, { agent: { id: sidEx }, signal: new AbortController().signal });
+    assert.equal(resEx.status, 'done');
+    assert.equal(resEx.loops[0].used, 2);
+    assert.equal(resEx.loops[0].round, 3);
+    assert.equal(resEx.loops[0].exhausted, true);
+    const exRunFile = JSON.parse(readFileSync(exFilePath, 'utf8'));
+    assert.equal(exRunFile.loopCounts.el.count, 2);
+    assert.equal(exRunFile.loopCounts.el.exhausted, true);
+    assert.equal(exRunFile.nodeAttempts.impl.exhausted, true);
+    assert.equal(exRunFile.summary.loops[0].exhausted, true);
+
+    // 3) User abort mid-retry retains final loopCounts & nodeAttempts in .run.json (never wipes to {})
+    const sidAbort = sid + '-abort';
+    const abortFilePath = join(dir, '.dsh', 'canvas', safeSessionFileBase(sidAbort) + '.run.json');
+    let implCalls = 0;
+    let resolveBlockedImpl;
+    const scopeAbort = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        interrupt() {},
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          if (id === 'impl') {
+            implCalls += 1;
+            if (implCalls === 2) {
+              return Promise.resolve({
+                childId: 'kid-hang',
+                result: new Promise((resolve) => { resolveBlockedImpl = resolve; }),
+                dispose: () => Promise.resolve(),
+              });
+            }
+          }
+          const txt = id === 'gate' ? '{"pass": false, "reason": "打回一次"}' : 'first-ok';
+          return Promise.resolve({
+            childId: 'kid-ab-' + id + '-' + implCalls,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const runPromise = executePlan(scopeAbort, plan, {}, { agent: { id: sidAbort }, signal: new AbortController().signal });
+    for (let i = 0; i < 40 && !resolveBlockedImpl; i += 1) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.ok(resolveBlockedImpl, 'reached retry round 2');
+    abortSessionRun(scopeAbort, sidAbort, null, { cancelRootTurn: false });
+    resolveBlockedImpl({ output: [], stopReason: 'aborted' });
+    await runPromise;
+    const haltedFile = JSON.parse(readFileSync(abortFilePath, 'utf8'));
+    assert.equal(haltedFile.status, 'halted');
+    assert.equal(haltedFile.loopCounts.el.count, 1, 'abort preserves final loop retry count (1/2) instead of wiping to {}');
+    assert.equal(haltedFile.loopCounts.el.round, 2);
+    assert.equal(haltedFile.nodeAttempts.impl.retry, 1);
+
+    // 4) Pruned / unentered loop reports active=false & round=0 (never falsely claims Round 1)
+    const sidPruned = sid + '-pruned';
+    const prunedPlan = {
+      task: '剪枝回环测试',
+      nodes: [
+        { id: 'router', kind: 'condition', label: '分流', role: 'route' },
+        { id: 'fast', kind: 'agent', label: '快速路径', role: 'fast' },
+        { id: 'impl', kind: 'agent', label: '实现', role: 'code' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'router', type: 'prompt' },
+        { id: 'ef', from: 'router', to: 'fast', type: 'prompt', branch: 'true' },
+        { id: 'es', from: 'router', to: 'impl', type: 'prompt', branch: 'false' },
+        { id: 'e1', from: 'impl', to: 'gate', type: 'prompt' },
+        { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
+      ],
+    };
+    const scopePruned = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          const txt = id === 'router' ? '{"pass": true, "reason": "走快速路径"}' : 'fast-ok';
+          return Promise.resolve({
+            childId: 'kid-p-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const resPruned = await executePlan(scopePruned, prunedPlan, {}, { agent: { id: sidPruned }, signal: new AbortController().signal });
+    assert.equal(resPruned.status, 'done');
+    assert.equal(resPruned.loops.length, 1);
+    assert.equal(resPruned.loops[0].active, false);
+    assert.equal(resPruned.loops[0].round, 0);
+    assert.equal(resPruned.loops[0].used, 0);
+
+    // 5) canvas_workflow output.render() surfaces loop progress for Round 1 pass, exhausted, and unentered loops
+    const regTools = new Map();
+    const mockCtx = {
+      inject(deps, fn) {
+        if (deps.includes('tools')) {
+          fn({
+            effect: (d) => d(),
+            tools: { register: (t) => { regTools.set(t.name, t); return () => {}; } },
+            subagents: {},
+            sessions: {},
+          });
+        }
+      },
+    };
+    apply(mockCtx);
+    const wfTool = regTools.get('canvas_workflow');
+    assert.ok(wfTool && wfTool.output && typeof wfTool.output.render === 'function');
+    const renderedPass = wfTool.output.render({}, resPass)[0].text;
+    assert.ok(renderedPass.includes('回环进度：门禁 ↺ 实现（第 1/3 轮 · 重试 0/2）'), 'render includes Round 1 loop progress');
+    const renderedPruned = wfTool.output.render({}, resPruned)[0].text;
+    assert.ok(renderedPruned.includes('回环进度：门禁 ↺ 实现（未执行 · 重试 0/3）'), 'render marks unentered loop');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

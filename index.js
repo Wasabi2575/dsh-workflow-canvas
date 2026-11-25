@@ -629,6 +629,74 @@ function publishRunState(scope, sessionId, runState) {
  * Also aborts our local `AbortController`, preserves partial progress in `lastRunBySession`,
  * clears `runBySession` (`waitingLead`), and writes `halted` / `idle` to `.run.json`.
  */
+/** Build unified per-loop and per-node loop telemetry (`loopCounts`, `nodeAttempts`, `loops`). */
+function buildLoopTelemetry(st) {
+  const loopCounts = {};
+  const nodeAttempts = { ...((st && st.nodeAttempts) || {}) };
+  const loops = [];
+  if (!st || !Array.isArray(st.loopMeta) || !st.loopMeta.length) {
+    return { loopCounts, nodeAttempts, loops };
+  }
+  const countsMap = st.loopCounts && typeof st.loopCounts === 'object' ? st.loopCounts : {};
+  const statsMap = st.nodeStats && typeof st.nodeStats === 'object' ? st.nodeStats : {};
+  const exhaustedMap = new Map();
+  if (Array.isArray(st.loopExhausted)) {
+    for (const x of st.loopExhausted) {
+      if (x && x.edgeKey) exhaustedMap.set(x.edgeKey, x);
+    }
+  }
+  for (const lm of st.loopMeta) {
+    const used = Number(countsMap[lm.key]) || 0;
+    const max = Math.max(1, Number(lm.max) || DEFAULT_LOOP_ITERATIONS);
+    const exInfo = exhaustedMap.get(lm.key) || null;
+    const exhausted = Boolean(exInfo);
+    const globalLimit = exInfo && typeof exInfo.globalLimit === 'number' && exInfo.globalLimit > 0
+      ? exInfo.globalLimit
+      : 0;
+    const members = Array.isArray(lm.members) ? lm.members : [];
+    const active = used > 0 || exhausted || members.some((mid) => {
+      const ms = statsMap[mid];
+      return Boolean(ms && ((typeof ms.runs === 'number' && ms.runs > 0) || ms.status === 'running' || ms.status === 'waiting' || ms.status === 'done'));
+    });
+    const round = active ? (used + 1) : 0;
+    const totalRounds = max + 1;
+    const entry = {
+      count: used,
+      max,
+      round,
+      totalRounds,
+      active,
+      exhausted,
+      ...(globalLimit ? { globalLimit } : {}),
+    };
+    loopCounts[lm.key] = entry;
+    if (lm.id) loopCounts[lm.id] = entry;
+    for (const mid of members) {
+      nodeAttempts[mid] = {
+        retry: used,
+        max,
+        round,
+        totalRounds,
+        active,
+        exhausted,
+        ...(globalLimit ? { globalLimit } : {}),
+      };
+    }
+    loops.push({
+      fromLabel: lm.fromLabel,
+      toLabel: lm.toLabel,
+      used,
+      max,
+      round,
+      totalRounds,
+      active,
+      exhausted,
+      ...(globalLimit ? { globalLimit } : {}),
+    });
+  }
+  return { loopCounts, nodeAttempts, loops };
+}
+
 function abortSessionRun(scope, sessionId, rootAgent, opts) {
   const sid = sessionId !== undefined && sessionId !== null ? String(sessionId) : '';
   if (!sid) return { stopped: false, wasRunning: false, wasWaiting: false };
@@ -700,6 +768,7 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
       haltedReason: st.haltedReason,
       now: haltNow,
     });
+    const haltedLoops = buildLoopTelemetry(st);
     runBySession.delete(sid);
     publishRunState(scope, sid, {
       status: 'halted',
@@ -707,8 +776,8 @@ function abortSessionRun(scope, sessionId, rootAgent, opts) {
       decisions: { ...(st.decisions || {}) },
       pruned: Array.from(st.pruned || []),
       blockedEdges: Array.from(st.blockedEdges || []),
-      loopCounts: {},
-      nodeAttempts: { ...(st.nodeAttempts || {}) },
+      loopCounts: haltedLoops.loopCounts,
+      nodeAttempts: haltedLoops.nodeAttempts,
       waitingLead: null,
       summary,
     });
@@ -1146,10 +1215,12 @@ async function executePlan(scope, plan, args, exec) {
   const loopMeta = (plan.edges || [])
     .filter((e) => isLoopEdge(e))
     .map((e) => ({
+      id: e.id || '',
       key: edgeKey(e),
       fromLabel: labelOf.get(e.from) || e.from,
       toLabel: labelOf.get(e.to) || e.to,
       max: normalizeMaxIterations(e.maxIterations),
+      members: Array.from(loopMemberIds(runnable, plan.edges, e)),
     }));
   const rawMaxParallel = opts.maxParallel !== undefined ? opts.maxParallel : plan.maxParallel;
   const parsedMaxParallel = (rawMaxParallel === null || rawMaxParallel === undefined || rawMaxParallel === '' || typeof rawMaxParallel === 'boolean')
@@ -1338,16 +1409,11 @@ async function executePlan(scope, plan, args, exec) {
   state.nodeMeta = nodeMeta;
   state.loopMeta = loopMeta;
 
+  const buildLoopProgressList = () => buildLoopTelemetry(state).loops;
+
   const emitRunState = (status, waitingLead, reasonOverride) => {
     if (!sid) return;
-    const loopCounts = {};
-    for (const e of plan.edges || []) {
-      if (!isLoopEdge(e)) continue;
-      const k = edgeKey(e);
-      const entry = { count: state.loopCounts[k] || 0, max: normalizeMaxIterations(e.maxIterations) };
-      loopCounts[k] = entry;
-      if (e.id) loopCounts[e.id] = entry;
-    }
+    const { loopCounts, nodeAttempts } = buildLoopTelemetry(state);
     const summary = buildRunSummarySnapshot(state, {
       status,
       waitingLead,
@@ -1360,7 +1426,7 @@ async function executePlan(scope, plan, args, exec) {
       pruned: Array.from(state.pruned || []),
       blockedEdges: Array.from(state.blockedEdges || []),
       loopCounts,
-      nodeAttempts: { ...state.nodeAttempts },
+      nodeAttempts,
       waitingLead: waitingLead ? { id: waitingLead.id, label: waitingLead.label } : null,
       summary,
     });
@@ -1580,6 +1646,7 @@ async function executePlan(scope, plan, args, exec) {
       emptyOutputs: Object.values(state.emptyOutputs),
       decisions: Object.values(state.decisions),
       branchSkipped: branchSkippedList(),
+      ...(loopMeta.length ? { loops: buildLoopProgressList() } : {}),
       ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
       reused,
       skipped,
@@ -1654,6 +1721,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(loopMeta.length ? { loops: buildLoopProgressList() } : {}),
         ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         reused,
         skipped,
@@ -1674,6 +1742,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(loopMeta.length ? { loops: buildLoopProgressList() } : {}),
         ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         reused,
         skipped,
@@ -2036,6 +2105,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(loopMeta.length ? { loops: buildLoopProgressList() } : {}),
         ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         sessions: leadSessions,
         reused,
@@ -2087,6 +2157,7 @@ async function executePlan(scope, plan, args, exec) {
         emptyOutputs: Object.values(state.emptyOutputs),
         decisions: Object.values(state.decisions),
         branchSkipped: branchSkippedList(),
+        ...(loopMeta.length ? { loops: buildLoopProgressList() } : {}),
         ...(state.loopExhausted.length ? { loopExhausted: state.loopExhausted } : {}),
         sessions: leadSessions,
         hint: (fallbackNotice ? fallbackNotice + ' ' : '')
@@ -2724,6 +2795,7 @@ export function apply(ctx) {
                 emptyOutputs: { type: 'array' },
                 decisions: { type: 'array' },
                 branchSkipped: { type: 'array' },
+                loops: { type: 'array' },
                 loopExhausted: { type: 'array' },
                 sessions: { type: 'array' },
                 reused: { type: 'array' },
@@ -2770,6 +2842,20 @@ export function apply(ctx) {
               const branchSkipNote = Array.isArray(v.branchSkipped) && v.branchSkipped.length
                 ? '\n\n条件未命中已跳过：' + v.branchSkipped.join('、')
                 : '';
+              const loopProgressNote = Array.isArray(v.loops) && v.loops.length
+                ? '\n\n回环进度：' + v.loops.map((lp) => {
+                  const name = (lp.fromLabel || '') + ' ↺ ' + (lp.toLabel || '');
+                  const used = Number(lp.used) || 0;
+                  const max = Math.max(1, Number(lp.max) || DEFAULT_LOOP_ITERATIONS);
+                  if (lp.active === false) return name + '（未执行 · 重试 0/' + max + '）';
+                  const r = Math.max(1, Number(lp.round) || (used + 1));
+                  const t = Math.max(max + 1, Number(lp.totalRounds) || (max + 1));
+                  const exTag = lp.exhausted
+                    ? (lp.globalLimit ? (' · 已达全局上限 ' + lp.globalLimit + ' 次熔断') : ' · 已达上限熔断')
+                    : '';
+                  return name + '（第 ' + r + '/' + t + ' 轮 · 重试 ' + used + '/' + max + exTag + '）';
+                }).join('；')
+                : '';
               const loopExNote = Array.isArray(v.loopExhausted) && v.loopExhausted.length
                 ? '\n\n⚠ 回环达上限熔断：' + v.loopExhausted.map((lx) => (lx.fromLabel || lx.edgeKey) + ' ↺ ' + (lx.toLabel || '') + '（' + lx.iterations + '/' + lx.maxIterations + '）').join('；')
                 : '';
@@ -2783,6 +2869,7 @@ export function apply(ctx) {
                     + decisionList
                     + failedList
                     + emptyList
+                    + loopProgressNote
                     + loopExNote
                     + (blocks.length ? '\n\n已完成节点结果：\n' + body : '')
                     + branchSkipNote
@@ -2810,6 +2897,7 @@ export function apply(ctx) {
                     + '\n\n已完成节点的结果：\n' + body
                     + handover
                     + branchSkipNote
+                    + loopProgressNote
                     + loopExNote
                     + '\n\n' + (v.hint || ''),
                 }];
@@ -2842,13 +2930,14 @@ export function apply(ctx) {
                       + '\n\n已完成节点的结果：\n' + body
                       + handover
                       + branchSkipNote
+                      + loopProgressNote
                       + loopExNote
                       + reusedNote
                       + skip
                       + '\n\n' + (v.hint || ''),
                   }];
                 }
-                return [{ type: 'text', text: '画布执行完成。' + decisionList + failedList + emptyList + loopExNote + '\n\n' + body + branchSkipNote + reusedNote + skip }];
+                return [{ type: 'text', text: '画布执行完成。' + decisionList + failedList + emptyList + loopProgressNote + loopExNote + '\n\n' + body + branchSkipNote + reusedNote + skip }];
               }
               return [{ type: 'text', text: JSON.stringify(v) }];
             },
