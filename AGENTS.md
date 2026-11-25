@@ -66,6 +66,19 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 - **Dual-direction & bilingual UI**:
   - Every UI change must be checked in both horizontal (`lr`) and vertical (`tb`) layouts and in both `zh` and `en` (longer English labels must not collide with socket labels or badges).
   - Lift cards to elevated `zIndex` while any popover/dropdown is open.
+- **Atomic persistence & path safety**:
+  - Every state or bridge file write (`.workflow-canvas-state.json`, `.dsh/canvas/*.json`, `.dsh/canvas/*.run.json`) must go through `writeFileAtomic` (unique temp file + `renameSync` + Windows lock fallback), never raw `writeFileSync`.
+  - Always sanitize `sessionId` via `safeSessionFileBase` before building file paths, and keep client/host path candidates aligned.
+- **Concurrency, rAF & IME invariants**:
+  - `executePlan` must enforce a single-session re-entrancy lock (`activeRunBySession.has(sid)`), while always allowing `cancel: true`.
+  - Never auto-push `/canvas-sync` on turn start while `runState.status` is `running` or `need-lead` (prevents wiping paused Lead progress when replying in chat).
+  - Debounced `localStorage` saves must record the edit timestamp synchronously (`lastLocalEditAtRef`) so concurrent polling never clobbers unflushed edits; skip redundant mount-time writes.
+  - `rAF`-coalesced drag `mouseup` handlers must resolve final coordinates directly from the `mouseup` event rather than reading pre-frame React state (`marquee` / `pending`).
+  - Global `keydown` listeners must guard `if (ev.isComposing || ev.keyCode === 229) return;` at the top so CJK IME `Escape`/`Enter` never closes modals.
+- **No silent drops on invalid inputs**:
+  - Validate model/user inputs (`fromNodes`, `nodes`, `edges`, `parsePayload`, clipboard imports) and surface actionable errors or explicit `warnings` instead of silently discarding invalid entries.
+- **Proactive unverified-host reporting**:
+  - Whenever a change relies on DSH host/Electron behavior not listed in Section 3, proactively attach a concise, copy-pasteable `app.asar` verification prompt for the user's DSH agent rather than waiting to be asked.
 
 ## 5. Cross-File Sync Matrix
 
