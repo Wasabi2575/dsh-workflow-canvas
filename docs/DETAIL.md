@@ -40,7 +40,7 @@ are performed by the conversation itself.
   away to detach its latest forward wire.
 - Inactive nodes (unreachable from entry, blank-role solo chained Leads with no
   subagent upstream, or dangling dead-end subagents) are drawn dashed and skipped
-  at run time.
+  at run time. Reachability stops at inactive Leads unless another active path exists; dangling chains are pruned until stable. Missing links use one yellow badge and a dashed warning border, including on legal terminal agents without disabling them; the tooltip distinguishes warnings from execution exclusions. The yellow badge retains runtime status (including skipped) with truncation to reserve socket-label space. Raw forward cycles and controlled loops broken by inactive-node filtering are reported before execution; runtime traversals cannot pass through skipped Leads.
 - **Horizontal / vertical layout & slim narrow-sidebar UI**: toggle `⇄ Horiz` /
   `⇅ Vert` (remembered globally for new sessions, saved with custom presets and
   exported JSON, and undoable; top-in / bottom-out curves + condition `Out R / Out L`);

@@ -190,7 +190,7 @@ window.__ModuleLoader__.load({
         condPh: '判断条件或分流规则：例如成功走「是」，失败走「否」',
         delNodeTip: '删除节点（可用 ↶ 撤销 找回）',
         deletedNode: '节点已删除，可点「撤销」找回',
-        orphanTip: '未连线：运行时会被跳过',
+        orphanTip: '没有从入口 Lead 连通的有效路径（可能经过无效 Lead），运行时会被跳过',
         syncOff: '自动同步不可用',
         syncNoSession: '无会话 id',
         syncReadFail: '读取失败: ',
@@ -205,7 +205,7 @@ window.__ModuleLoader__.load({
         scopeMinimal: 'minimal（只读思考）', scopeStandard: 'standard（全部工具）',
         fallbackModel: '备用',
         stPending: '未执行', stRunning: '进行中', stDone: '已完成', stFailed: '失败',
-        stOrphan: '未连线', stLead: '由对话执行', stLeadReady: '待拍板',
+        stOrphan: '未连通', stLead: '由对话执行', stLeadReady: '待拍板',
         presetEmpty: '保存后可在任意新对话一键载入', del: '删除这个预设',
         presetSaveTitle: '保存当前画布（可在新会话一键载入）',
         presetNamePh: '起个名字后回车保存…',
@@ -218,7 +218,7 @@ window.__ModuleLoader__.load({
         cannotOpen: '无法打开会话', undoDone: '已撤销', undoNone: '没有可撤销的操作', redoDone: '已重做', redoNone: '没有可重做的操作',
         leadLocked: '入口 Lead 不能删除',
         tipLead: 'Lead 步骤在主对话执行（暂停待拍板 / 终审完成状态会同步显示在画布上）',
-        tipOrphan: '未连线：运行时会被跳过', tipStatus: '子代理节点的运行状态',
+        tipOrphan: '没有从入口 Lead 连通的有效路径，运行时会被跳过', tipStatus: '子代理节点的运行状态',
         tipResetZoom: '点击回到 100% 并聚焦 Lead；左右拖拽可连续缩放',
         tipLocate: '自适应缩放并居中，让所有节点完整显示在视野内',
         locate: '⊡ 全览',
@@ -240,7 +240,7 @@ window.__ModuleLoader__.load({
           '5. 每个节点可设模型、推理强度、能力范围、备用模型、是否记忆；右上角「+ 参考」可挂载参考文件/规则清单（入口 Lead 为全局参考，其他节点为局部参考）；复杂任务/分工/条件可点 ⤢ 展开大框编辑。',
           '6. 连好后点左上角「● 已启用」，可直接点入口节点「▶ 运行」或在对话说「跑一次」开跑；运行中或停在「⏸ 待拍板」时，点左上角或入口节点旁的「⏹ 终止」即可一键中止全部子代理并解除等待状态。',
           '7. 遇到 Lead 节点会暂停，我做完再把结果交回去继续（或在对话里说「取消」即可结束流程）。',
-          '8. 没连线的节点显示为虚线，运行时会被跳过。',
+          '8. 无有效入口路径的节点显示虚线并跳过；无出边统一用黄色框和虚线警示，合法终端仍可执行。',
           '9. 右键单击节点 / 连线 / 空白处可弹出快捷菜单（含线上插点、设为回环、复制删除、新建节点等）；按住右键划过连线可切断（可在「⋯」开关）。',
           '10. 点右上角「☰ 预设」可保存当前画布（连同横/竖排方向），多会话实时同步并支持点 ↻ 刷新；切换横/竖排会自动记住默认偏好供新会话沿用。',
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
@@ -345,6 +345,10 @@ window.__ModuleLoader__.load({
         tipMaxParallel: '默认 4 路并行（可选 1 / 2 / 4 / 6 / 8）。并发过高容易触发 API 限流（429）、增加多子代理同时写同一工作区的文件冲突，并放大单轮报错时的额度消耗；纯只读调研可适当调高。',
         tipLeadReady: '上游节点已全部完成，正等待在对话里拍板继续',
         stDeadEnd: '无出边',
+        stNoOutput: '下游无效',
+        tipRunState: '运行状态：',
+        tipNoOutput: '该节点的下游均不生效，运行时跳过；请将产出连接到有效节点或 Lead',
+        tipTerminal: '该节点没有出边，仍可作为终端节点执行；需要传递产出时，请连接下游节点或 Lead',
         tipDeadEnd: '该子代理没有下游连线，运行时不生效；请连入下游节点或终审 Lead',
         stSoloLead: '待填分工',
         tipSoloLead: '该 Lead 阶段未连入子代理且分工为空，填写分工后即可作为主对话阶段运行',
@@ -415,7 +419,7 @@ window.__ModuleLoader__.load({
         condPh: 'Condition or switch rule, e.g. pass vs minor fix vs rewrite',
         delNodeTip: 'Delete this node (undo with ↶)',
         deletedNode: 'Node deleted, use Undo to restore it',
-        orphanTip: 'Unlinked: skipped when the canvas runs',
+        orphanTip: 'No active path from entry Lead (possibly blocked by an inactive Lead); skipped at run time',
         syncOff: 'Auto-sync unavailable',
         syncNoSession: 'No session id',
         syncReadFail: 'Read failed: ',
@@ -443,7 +447,7 @@ window.__ModuleLoader__.load({
         cannotOpen: 'Cannot open the session', undoDone: 'Undone', undoNone: 'Nothing to undo', redoDone: 'Redone', redoNone: 'Nothing to redo',
         leadLocked: 'The entry Lead cannot be deleted',
         tipLead: 'Lead steps run in the main chat (paused / completed Lead status syncs to the canvas)',
-        tipOrphan: 'Unlinked: skipped when the canvas runs', tipStatus: 'Subagent run status',
+        tipOrphan: 'No active path from entry Lead; skipped at run time', tipStatus: 'Subagent run status',
         tipResetZoom: 'Click to reset to 100% on Lead; drag left/right to scrub zoom',
         tipLocate: 'Fit all nodes into the visible canvas',
         locate: '⊡ Fit',
@@ -465,7 +469,7 @@ window.__ModuleLoader__.load({
           '5. Each node sets model, reasoning, capability scope, fallback model and memory; use top-right + Refs to attach reference files/rules (global on Entry Lead, local on other nodes); click ⤢ to expand a larger editor for long text.',
           '6. Press ● ON, then click ▶ Run on the Entry Lead or ask in chat to start; while running or paused at a Lead gate, click ⏹ Stop beside ● ON (or on the Entry card) to abort all running subagents and clear the pause.',
           '7. The run pauses at intermediate Lead nodes for your decision (reply to continue, or ask to cancel / click ⏹ Stop).',
-          '8. Unlinked nodes are dashed and skipped at run time.',
+          '8. Nodes without an active entry path are dashed and skipped. No out-link always uses a yellow badge and dashed warning border; legal terminal nodes can still run.',
           '9. Right-click a node, wire, or blank canvas for context actions (insert on wire, create loop, duplicate/delete, add nodes); right-drag across a wire to cut it (toggle under ⋯).',
           '10. Open ☰ Presets to save the current canvas (including horizontal/vertical direction) — presets sync live across open chats with a manual ↻ refresh button; toggling layout direction is remembered for new sessions.',
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
@@ -570,6 +574,10 @@ window.__ModuleLoader__.load({
         tipMaxParallel: 'Default 4 concurrent subagents (1 / 2 / 4 / 6 / 8). Higher concurrency can trigger API rate limits (429), increase workspace file-edit conflicts, and widen token spend on failure; raising it is safest for read-only research.',
         tipLeadReady: 'Upstream steps are done; waiting for Lead in chat',
         stDeadEnd: 'No out-link',
+        stNoOutput: 'Inactive output',
+        tipRunState: 'Run state: ',
+        tipNoOutput: 'All downstream outputs are inactive; this node is skipped. Connect its output to an active node or Lead.',
+        tipTerminal: 'No outgoing link: this node can still run as a terminal node. Connect a downstream node or Lead to pass its output on.',
         tipDeadEnd: 'This subagent has no outgoing link and is skipped at run time; wire it into a downstream node or Lead',
         stSoloLead: 'Needs role',
         tipSoloLead: 'This chained Lead stage has no subagent upstream and an empty role; fill in a role to make it active',
@@ -1648,6 +1656,28 @@ window.__ModuleLoader__.load({
       return { x: node.x, y: node.y + socketCenterY(0, node) };
     }
 
+    /**
+     * Find the closest compatible input socket within a zoom-aware magnetic snap radius
+     * so users never have to pixel-hunt the 12px port dot when wiring nodes.
+     */
+    function findNearestInputSnap(pt, nodes, fromId, direction, zoom) {
+      if (!pt || !Array.isArray(nodes)) return null;
+      const k = Math.max(0.4, Number(zoom) || 1);
+      const radius = Math.max(23, Math.min(36, 21 / k));
+      let best = null;
+      let bestDist = radius;
+      for (const n of nodes) {
+        if (!n || !n.id || n.id === 'lead' || n.id === fromId) continue;
+        const pos = inputSocketPos(n, direction);
+        const dist = Math.hypot(pt.x - pos.x, pt.y - pos.y);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          best = { nodeId: n.id, x: pos.x, y: pos.y, dist };
+        }
+      }
+      return best;
+    }
+
     function outputSocketPos(fromNode, type, branch, direction) {
       if (direction === 'tb') {
         const b = typeof branch === 'string' ? branch.trim() : '';
@@ -2096,67 +2126,110 @@ window.__ModuleLoader__.load({
       return set;
     }
 
-    /**
-     * Reachable non-entry Lead nodes that have zero reachable subagent upstream
-     * AND an empty `role` (blank placeholders). Filling a `role` turns them into
-     * active main-conversation stage gates (Lead -> Lead chaining).
-     */
-    function soloLeadNodeIds(nodes, edges) {
-      const list = Array.isArray(nodes) ? nodes : [];
-      const linkList = forwardEdgesUI(edges);
-      const reachable = reachableFrom(list, linkList);
-      const byId = new Map(list.map((n) => [n.id, n]));
-      const out = new Set();
-      for (const n of list) {
-        if (n.kind !== 'lead' || n.id === 'lead' || !reachable.has(n.id)) continue;
-        const hasAgentUp = linkList.some((e) => {
-          if (!e || e.to !== n.id || !reachable.has(e.from) || e.from === 'lead') return false;
-          const src = byId.get(e.from);
-          return Boolean(src && src.kind !== 'lead');
-        });
-        const hasRole = Boolean(String(n.role || '').trim());
-        if (!hasAgentUp && !hasRole) out.add(n.id);
+    // Keep classification aligned with lib/graph.js: inactiveNodeSets.
+    function classifyCanvasNodes(nodes, edges) {
+      const rawList = (Array.isArray(nodes) ? nodes : []).filter((n) => n && typeof n === 'object' && n.id && n.id !== 'lead');
+      const byId = new Map([{ id: 'lead', kind: 'lead' }, ...rawList].map((n) => [n.id, n]));
+      const list = [...byId.values()].filter((n) => n.id !== 'lead');
+      const links = (Array.isArray(edges) ? edges : []).filter((e) => e && byId.has(e.from) && byId.has(e.to));
+      const fwdLinks = forwardEdgesUI(links);
+      const incoming = new Map();
+      const children = new Map();
+      const indegree = new Map([...byId.keys()].map((id) => [id, 0]));
+      for (const e of fwdLinks) {
+        if (!incoming.has(e.to)) incoming.set(e.to, []);
+        incoming.get(e.to).push(e.from);
+        if (!children.has(e.from)) children.set(e.from, []);
+        children.get(e.from).push(e.to);
+        indegree.set(e.to, indegree.get(e.to) + 1);
       }
-      return out;
+      // Resolve effective reachability in topological order. Inactive Leads are
+      // barriers; an independent active path may still reach a shared descendant.
+      const reachable = new Set(['lead']);
+      const soloLeads = new Set();
+      const queue = [...byId.keys()].filter((id) => indegree.get(id) === 0);
+      for (let i = 0; i < queue.length; i += 1) {
+        const id = queue[i];
+        const n = byId.get(id);
+        const parents = incoming.get(id) || [];
+        if (id !== 'lead' && parents.some((p) => reachable.has(p))) {
+          const hasAgentUp = parents.some((p) => reachable.has(p) && byId.get(p).kind !== 'lead');
+          if (n.kind === 'lead' && !String(n.role || '').trim() && !hasAgentUp) soloLeads.add(id);
+          else reachable.add(id);
+        }
+        for (const next of children.get(id) || []) {
+          indegree.set(next, indegree.get(next) - 1);
+          if (indegree.get(next) === 0) queue.push(next);
+        }
+      }
+      // A structural warning is not the same as an execution exclusion. Count only
+      // forward outgoing edges so loop-only dead islands never mask missing exits.
+      const hasOut = new Set(fwdLinks.map((e) => e.from));
+      const noOutgoing = new Set(list.filter((n) => n.kind !== 'lead' && reachable.has(n.id) && !hasOut.has(n.id)).map((n) => n.id));
+      const activeLeads = list.filter((n) => n.kind === 'lead' && reachable.has(n.id));
+      // Cache only Lead ancestry, once in topological order. BigInt bitsets
+      // avoid rescanning the full ancestor chain for every peeled leaf.
+      const leadBits = new Map(activeLeads.map((n, i) => [n.id, 1n << BigInt(i)]));
+      const allLeadBits = (1n << BigInt(activeLeads.length)) - 1n;
+      const leadAncestors = new Map();
+      if (activeLeads.length) for (const id of queue) {
+        if (!reachable.has(id)) continue;
+        let bits = 0n;
+        for (const p of incoming.get(id) || []) {
+          if (reachable.has(p)) bits |= (leadAncestors.get(p) || 0n) | (leadBits.get(p) || 0n);
+        }
+        leadAncestors.set(id, bits);
+      }
+      const deadEnds = new Set();
+      // Prune dangling chains (over forward edges) to a fixed point before exporting
+      // a plan, so dead leaves and loop-only islands peel cleanly on the first pass.
+      const activeFwdLinks = fwdLinks.filter((e) => reachable.has(e.from) && reachable.has(e.to));
+      const outCount = new Map();
+      const allParents = new Map();
+      for (const e of activeFwdLinks) {
+        outCount.set(e.from, (outCount.get(e.from) || 0) + 1);
+        if (!allParents.has(e.to)) allParents.set(e.to, []);
+        allParents.get(e.to).push(e.from);
+      }
+      const leaves = list.filter((n) => n.kind !== 'lead' && reachable.has(n.id) && !outCount.get(n.id)).map((n) => n.id);
+      if (activeLeads.length) for (let i = 0; i < leaves.length; i += 1) {
+        const id = leaves[i];
+        if (leadAncestors.get(id) === allLeadBits) continue;
+        deadEnds.add(id);
+        for (const p of allParents.get(id) || []) {
+          outCount.set(p, outCount.get(p) - 1);
+          if (!outCount.get(p) && byId.get(p).kind !== 'lead') leaves.push(p);
+        }
+      }
+      return { reachable, soloLeads, deadEnds, noOutgoing };
     }
 
-    /**
-     * Reachable agent nodes with zero outgoing edges when the graph has at least
-     * one active downstream Lead that is NOT an ancestor of that agent (dangling
-     * branch whose output is never consumed). Rendered dashed and skipped at run time.
-     */
+    function canvasActivityKey(nodes, edges) {
+      return JSON.stringify([nodes.map((n) => [n.id, n.kind, String(n.role || '')]),
+        edges.map((e) => [e.from, e.to, e.loop === true])]);
+    }
+
+    function soloLeadNodeIds(nodes, edges) {
+      return classifyCanvasNodes(nodes, edges).soloLeads;
+    }
+
     function deadEndNodeIds(nodes, edges) {
-      const list = Array.isArray(nodes) ? nodes : [];
-      const linkList = Array.isArray(edges) ? edges : [];
-      const fwdLinks = forwardEdgesUI(linkList);
-      const reachable = reachableFrom(list, fwdLinks);
-      const soloLeads = soloLeadNodeIds(list, fwdLinks);
-      const downstreamLeads = list.filter((n) => n.kind === 'lead' && n.id !== 'lead' && reachable.has(n.id) && !soloLeads.has(n.id));
-      if (!downstreamLeads.length) return new Set();
-      const hasOut = new Set(linkList.map((e) => e.from));
-      const parents = new Map();
-      for (const e of fwdLinks) {
-        if (!parents.has(e.to)) parents.set(e.to, []);
-        parents.get(e.to).push(e.from);
-      }
-      const ancestorsOf = (id) => {
-        const seen = new Set();
-        const stack = [id];
-        while (stack.length) {
-          const cur = stack.pop();
-          for (const p of parents.get(cur) || []) {
-            if (!seen.has(p)) { seen.add(p); stack.push(p); }
-          }
-        }
-        return seen;
+      return classifyCanvasNodes(nodes, edges).deadEnds;
+    }
+
+    function nodeActivityStyle(stateStyle, dashed, dimmed = dashed) {
+      const style = {
+        ...(dashed ? { border: S.orphanNode.border } : null),
+        ...(dimmed ? { opacity: S.orphanNode.opacity } : null),
+        ...(stateStyle || null),
       };
-      const out = new Set();
-      for (const n of list) {
-        if (n.kind === 'lead' || !reachable.has(n.id) || hasOut.has(n.id)) continue;
-        const anc = ancestorsOf(n.id);
-        if (downstreamLeads.some((ln) => !anc.has(ln.id))) out.add(n.id);
+      // Keep one border shorthand: mixing border/borderStyle can lose the line
+      // style when React removes a longhand during an inactive -> active update.
+      if (dashed) {
+        const baseBorder = typeof style.border === 'string' && style.border ? style.border : S.orphanNode.border;
+        style.border = baseBorder.replace(/\b(?:solid|dotted|dashed|double|none)\b/, 'dashed');
       }
-      return out;
+      return style;
     }
 
     /** True when adding `fromId -> toId` would create a cycle over forward edges or point into entry Lead. */
@@ -2573,11 +2646,10 @@ window.__ModuleLoader__.load({
       const task = String(entry.task || '').trim();
       const rest = nodes.filter((n) => n.id !== 'lead');
       if (!rest.length) return { error: '画布上还没有可执行的节点' };
+      if (!topoOrder(nodes, edges)) return { error: '原图存在前向环路，请先删除成环连线（受控回环请使用 loop: true）' };
       // Unconnected nodes, solo Lead-to-Lead nodes, and dangling dead-end agents
       // are shown dashed on the canvas and skipped at run time.
-      const reachableIds = reachableFrom(nodes, edges);
-      const soloLeads = soloLeadNodeIds(nodes, edges);
-      const deadEnds = deadEndNodeIds(nodes, edges);
+      const { reachable: reachableIds, soloLeads, deadEnds } = classifyCanvasNodes(nodes, edges);
       const isInactive = (n) => !reachableIds.has(n.id) || soloLeads.has(n.id) || deadEnds.has(n.id);
 
       const skipped = rest.filter((n) => isInactive(n));
@@ -2587,9 +2659,30 @@ window.__ModuleLoader__.load({
       }
 
       const activeIds = new Set(active.map((n) => n.id));
-      const candidateEdges = edges.filter((e) => (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to));
-      const { edges: validEdges } = pruneInvalidLoopEdges(active, candidateEdges);
-      const planEdges = validEdges
+      const activeById = new Map(active.map((n) => [n.id, n]));
+      const candidateEdges = edges.filter((e) => e && (e.from === 'lead' || activeIds.has(e.from)) && activeIds.has(e.to));
+      const seenLoopMembers = new Set();
+      for (const e of edges) {
+        if (!e || e.loop !== true || (!activeIds.has(e.from) && !activeIds.has(e.to))) continue;
+        if (!activeIds.has(e.from) || !activeIds.has(e.to)) {
+          return { error: '回环 ' + e.from + ' → ' + e.to + ' 跨越无效节点或祖先路径已断开，请修复连线或显式删除该回环' };
+        }
+        const src = activeById.get(e.from);
+        if (!src || src.kind !== 'condition') {
+          return { error: '回环 ' + e.from + ' → ' + e.to + ' 的起点必须是条件判断节点，请修复连线或显式删除该回环' };
+        }
+        const members = loopMemberIdsUI(active, candidateEdges, e);
+        if (!members.size) {
+          return { error: '回环 ' + e.from + ' → ' + e.to + ' 跨越无效节点或祖先路径已断开，请修复连线或显式删除该回环' };
+        }
+        for (const mid of members) {
+          if (seenLoopMembers.has(mid)) {
+            return { error: '回环 ' + e.from + ' → ' + e.to + ' 与其他回环交叉或重叠，请调整或删除其中一个回环' };
+          }
+        }
+        for (const mid of members) seenLoopMembers.add(mid);
+      }
+      const planEdges = candidateEdges
         .map((e) => {
           const item = { from: e.from, to: e.to, type: e.type || 'prompt' };
           const b = typeof e.branch === 'string' ? e.branch.trim() : '';
@@ -5016,7 +5109,19 @@ window.__ModuleLoader__.load({
           setSelectedIds(hitTest(next));
         } else if (pending) {
           const p = pointTo(e);
-          setPending((prev) => (prev ? { ...prev, x: p.x, y: p.y } : prev));
+          const snap = pending.dir === 'out'
+            ? findNearestInputSnap(p, nodesRef.current, pending.fromId, directionRef.current, viewRef.current.k)
+            : null;
+          setPending((prev) => (prev
+            ? {
+                ...prev,
+                x: p.x,
+                y: p.y,
+                snapNodeId: snap ? snap.nodeId : '',
+                snapX: snap ? snap.x : undefined,
+                snapY: snap ? snap.y : undefined,
+              }
+            : prev));
         }
       };
 
@@ -5101,34 +5206,39 @@ window.__ModuleLoader__.load({
         if (!handled && pending && pending.dir === 'out') {
           const px = endPt ? endPt.x : pending.x;
           const py = endPt ? endPt.y : pending.y;
-          const dist = Math.hypot(px - pending.sx, py - pending.sy);
-          const wrap = canvasWrapRef.current;
-          if (dist >= 16 && wrap) {
-            const wrapRect = wrap.getBoundingClientRect();
-            const cx = ev && typeof ev.clientX === 'number' ? ev.clientX : (wrapRect.left + wrapRect.width / 2);
-            const cy = ev && typeof ev.clientY === 'number' ? ev.clientY : (wrapRect.top + wrapRect.height / 2);
-            const sx = Math.max(8, Math.min(wrapRect.width - 176, cx - wrapRect.left));
-            const sy = Math.max(8, Math.min(wrapRect.height - 110, cy - wrapRect.top));
-            setAddMenu({
-              sx,
-              sy,
-              wx: px,
-              wy: py,
-              linkFrom: {
-                fromId: pending.fromId,
-                type: pending.type || 'prompt',
-                branch: pending.branch || '',
-                color: pending.color || '#8a8f98',
-                sx: pending.sx,
-                sy: pending.sy,
-                x: px,
-                y: py,
-              },
-            });
-            setMenuOpen(false);
-            setPresetOpen(null);
-            setOpenModelFor(null);
-            setDecisionViewFor(null);
+          const snap = findNearestInputSnap({ x: px, y: py }, nodesRef.current, pending.fromId, directionRef.current, viewRef.current.k);
+          if (snap) {
+            tryAddEdge(pending.fromId, snap.nodeId, pending.type || 'prompt', pending.branch, pending.maxIterations);
+          } else {
+            const dist = Math.hypot(px - pending.sx, py - pending.sy);
+            const wrap = canvasWrapRef.current;
+            if (dist >= 16 && wrap) {
+              const wrapRect = wrap.getBoundingClientRect();
+              const cx = ev && typeof ev.clientX === 'number' ? ev.clientX : (wrapRect.left + wrapRect.width / 2);
+              const cy = ev && typeof ev.clientY === 'number' ? ev.clientY : (wrapRect.top + wrapRect.height / 2);
+              const sx = Math.max(8, Math.min(wrapRect.width - 176, cx - wrapRect.left));
+              const sy = Math.max(8, Math.min(wrapRect.height - 110, cy - wrapRect.top));
+              setAddMenu({
+                sx,
+                sy,
+                wx: px,
+                wy: py,
+                linkFrom: {
+                  fromId: pending.fromId,
+                  type: pending.type || 'prompt',
+                  branch: pending.branch || '',
+                  color: pending.color || '#8a8f98',
+                  sx: pending.sx,
+                  sy: pending.sy,
+                  x: px,
+                  y: py,
+                },
+              });
+              setMenuOpen(false);
+              setPresetOpen(null);
+              setOpenModelFor(null);
+              setDecisionViewFor(null);
+            }
           }
         }
         setPending(null);
@@ -5887,8 +5997,10 @@ window.__ModuleLoader__.load({
 
       const fxName = (level) => (level === 'minimal' ? t('fxMinimal') : (level === 'vivid' ? t('fxVivid') : t('fxStandard')));
       const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
-      // Memoize O(V+E) graph topology & loop analyses so viewport pan/zoom, status polls,
-      // and popover toggles never re-run BFS or loop-body intersections.
+      // Cache classification independently of geometry; other graph metadata still
+      // refreshes on node edits while pan/zoom and status polls reuse both caches.
+      const activityKey = canvasActivityKey(nodes, edges);
+      const activity = useMemo(() => classifyCanvasNodes(nodes, edges), [activityKey]);
       const graphMeta = useMemo(() => {
         const nodeById = new Map(nodes.map((n) => [n.id, n]));
         const inColorByNode = new Map();
@@ -5912,13 +6024,14 @@ window.__ModuleLoader__.load({
           inColorByNode,
           inCountByNode,
           connectedOut,
-          reachableIds: reachableFrom(nodes, edges),
-          soloLeadIds: soloLeadNodeIds(nodes, edges),
-          deadEndIds: deadEndNodeIds(nodes, edges),
+          reachableIds: activity.reachable,
+          soloLeadIds: activity.soloLeads,
+          deadEndIds: activity.deadEnds,
+          noOutgoingIds: activity.noOutgoing,
           loopGroups: loopGroupsForUI(nodes, edges),
         };
-      }, [nodes, edges]);
-      const { nodeById, inColorByNode, inCountByNode, connectedOut, reachableIds, soloLeadIds, deadEndIds, loopGroups } = graphMeta;
+      }, [nodes, edges, activity]);
+      const { nodeById, inColorByNode, inCountByNode, connectedOut, reachableIds, soloLeadIds, deadEndIds, noOutgoingIds, loopGroups } = graphMeta;
 
       // Lead nodes are never spawned, so their status is derived via `deriveLeadStatuses`,
       // honoring authoritative backend `runState.status` (`halted` / `done` / `need-lead`).
@@ -6138,16 +6251,22 @@ window.__ModuleLoader__.load({
         const inCount = inCountByNode.get(node.id) || 0;
         const inText = inCount > 1 ? 'in ×' + inCount : 'in';
         const bandH = nodeHeight(node) - SOCKET_BAND_TOP;
+        const isSnapTarget = Boolean(pending && pending.dir === 'out' && pending.snapNodeId === node.id);
+        const snapColor = isSnapTarget ? (pending.color || C.accent) : null;
         const unifiedInSocket = !isEntry && h('div', {
           style: {
             ...S.socket,
             top: isTB ? (-SOCKET_BAND_TOP - PORT / 2) : ((ROW_H - PORT) / 2),
             left: isTB ? (NODE_W / 2 - PORT / 2) : (-PORT / 2),
-            borderColor: inColor || C.border,
-            background: inColor || C.elevated,
-            boxShadow: inColor
-              ? (fxLevel === 'vivid' ? '0 0 6px ' + inColor : '0 0 0 2px ' + C.elevated)
-              : '0 0 0 3px transparent',
+            borderColor: snapColor || inColor || C.border,
+            background: snapColor || inColor || C.elevated,
+            transform: isSnapTarget ? 'scale(1.18)' : undefined,
+            transition: 'transform 100ms ease, box-shadow 100ms ease',
+            boxShadow: isSnapTarget
+              ? ('0 0 0 2px ' + snapColor + '33')
+              : (inColor
+                ? (fxLevel === 'vivid' ? '0 0 6px ' + inColor : '0 0 0 2px ' + C.elevated)
+                : '0 0 0 3px transparent'),
           },
           title: t('tipSocketOut'),
           onMouseDown: (e) => onInputDown(e, node.id),
@@ -7269,8 +7388,28 @@ window.__ModuleLoader__.load({
               (pending || (addMenu && addMenu.linkFrom)) && (() => {
                 const wire = pending || addMenu.linkFrom;
                 const color = wire.color || (SOCKET_TYPES.find((t) => t.id === wire.type) || SOCKET_TYPES[0]).color;
-                const d = 'M ' + (wire.sx + WORLD_PAD) + ' ' + (wire.sy + WORLD_PAD) + ' L ' + (wire.x + WORLD_PAD) + ' ' + (wire.y + WORLD_PAD);
-                return h('path', { d, stroke: color, strokeWidth: 2, strokeDasharray: '4 4', fill: 'none' });
+                const snapped = Boolean(pending && pending.snapNodeId && typeof pending.snapX === 'number' && typeof pending.snapY === 'number');
+                const dMain = 'M ' + (wire.sx + WORLD_PAD) + ' ' + (wire.sy + WORLD_PAD) + ' L ' + (wire.x + WORLD_PAD) + ' ' + (wire.y + WORLD_PAD);
+                const dTether = snapped
+                  ? ('M ' + (wire.x + WORLD_PAD) + ' ' + (wire.y + WORLD_PAD) + ' L ' + (pending.snapX + WORLD_PAD) + ' ' + (pending.snapY + WORLD_PAD))
+                  : '';
+                return h('g', null,
+                  h('path', {
+                    d: dMain,
+                    stroke: color,
+                    strokeWidth: 2,
+                    strokeDasharray: '4 4',
+                    fill: 'none',
+                  }),
+                  snapped && h('path', {
+                    d: dTether,
+                    stroke: color,
+                    strokeWidth: 1.75,
+                    strokeOpacity: 0.9,
+                    strokeLinecap: 'round',
+                    fill: 'none',
+                  }),
+                );
               })(),
             ),
             loopPillItems.map((item) => {
@@ -7373,9 +7512,10 @@ window.__ModuleLoader__.load({
               const isEntry = node.id === 'lead';
               const isLeadKind = node.kind === 'lead';
               const isCondKind = node.kind === 'condition';
-              const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id);
+              const isOrphan = node.id !== 'lead' && !reachableIds.has(node.id) && !soloLeadIds.has(node.id);
               const isSoloLead = soloLeadIds.has(node.id);
               const isDeadEnd = deadEndIds.has(node.id);
+              const hasNoOutgoing = noOutgoingIds.has(node.id);
               const isInactive = isOrphan || isSoloLead || isDeadEnd;
               const isSelected = selectedSet.has(node.id);
               const nodeStatus = enabled ? statusById[node.id] : undefined;
@@ -7395,7 +7535,7 @@ window.__ModuleLoader__.load({
                     ? { border: '1.5px solid rgba(229,83,75,0.8)', boxShadow: '0 0 12px rgba(229,83,75,0.18)' }
                     : isDone
                       ? { border: '1px solid rgba(63,185,80,0.55)' }
-                      : isDeadEnd
+                      : isDeadEnd || hasNoOutgoing
                         ? { border: '1px solid rgba(210,153,34,0.55)' }
                         : null;
               const topBarBg = (isRunning || isLeadReady) && fxLevel === 'vivid'
@@ -7430,12 +7570,11 @@ window.__ModuleLoader__.load({
                   left: node.x + WORLD_PAD,
                   top: node.y + WORLD_PAD,
                   ...(isLeadKind ? S.leadNode : null),
-                  ...(isInactive || isPruned ? S.orphanNode : null),
-                  ...(stateStyle || null),
+                  ...nodeActivityStyle(stateStyle, isInactive || isPruned || hasNoOutgoing, isInactive || isPruned),
                   ...(nodeLoop ? { outline: '1.5px dashed ' + nodeLoop.color, outlineOffset: '3px' } : null),
                   ...(hasOpenPopover ? { zIndex: 40 } : null),
                 },
-                title: isPruned ? t('tipPruned') : (isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t('tipDeadEnd') : undefined))),
+                title: isPruned ? t('tipPruned') : (isOrphan ? t('orphanTip') : (isSoloLead ? t('tipSoloLead') : (isDeadEnd ? t(hasNoOutgoing ? 'tipDeadEnd' : 'tipNoOutput') : (hasNoOutgoing ? t('tipTerminal') : undefined)))),
                 onMouseDown: (e) => onNodeDown(e, node.id),
                 onContextMenu: (e) => onNodeContextMenu(e, node),
               },
@@ -7535,12 +7674,31 @@ window.__ModuleLoader__.load({
                         }, stopBtn.disabled ? '…' : '⏹'),
                       );
                     })()
-                  : isDeadEnd
-                  ? h('div', {
-                      style: { ...S.warnChip, bottom: (direction === 'tb' && !isCondKind) ? '28px' : '5px' },
-                      title: t('tipDeadEnd'),
-                      onMouseDown: (e) => e.stopPropagation(),
-                    }, '⚠ ', t('stDeadEnd'))
+                  : isDeadEnd || hasNoOutgoing
+                  ? (() => {
+                      // One warning renderer for every missing-link case. Historical
+                      // run statuses must not replace the original yellow badge.
+                      const latestRun = runsById[node.id];
+                      const tipKey = hasNoOutgoing ? (isDeadEnd ? 'tipDeadEnd' : 'tipTerminal') : 'tipNoOutput';
+                      const runtimeLabel = isPruned ? t('stPruned')
+                        : nodeStatus === 'running' ? t('stRunning')
+                          : nodeStatus === 'failed' ? t('stFailed')
+                            : nodeStatus === 'done' ? t('stDone') : '';
+                      const warningLabel = t(hasNoOutgoing ? 'stDeadEnd' : 'stNoOutput');
+                      const label = warningLabel + (runtimeLabel ? ' · ' + runtimeLabel : '');
+                      return h(latestRun ? 'button' : 'div', {
+                        ...(latestRun ? { type: 'button', onClick: (e) => { e.stopPropagation(); openNodeSession(node); } } : null),
+                        style: {
+                          ...S.warnChip,
+                          bottom: (direction === 'tb' && !isCondKind) ? '28px' : '5px',
+                          ...(latestRun ? { cursor: 'pointer', fontFamily: 'inherit', fontWeight: 'inherit', outline: 'none' } : null),
+                          maxWidth: direction === 'tb' ? 'calc(100% - 20px)' : 'calc(100% - 72px)',
+                        },
+                        title: (runtimeLabel ? t('tipRunState') + runtimeLabel + '\n' : '')
+                          + t(isPruned ? 'tipPruned' : tipKey) + (latestRun ? '\n' + t('tipOpenRun') : ''),
+                        onMouseDown: (e) => e.stopPropagation(),
+                      }, '⚠ ', h('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 } }, label), latestRun ? ' ↗' : null);
+                    })()
                   : (() => {
                       const latestRun = !isLeadKind ? runsById[node.id] : null;
                       const statusColor = isLeadReady ? '#2f81f7'
@@ -7896,7 +8054,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, topoOrder, wouldCycle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

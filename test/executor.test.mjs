@@ -739,6 +739,79 @@ test('solo chained Leads and dead-end subagents are warned and skipped cleanly a
   assert.ok(res.skipped.includes('L2') && res.skipped.includes('无出边'));
 });
 
+
+test('runtime condition pruning cannot traverse skipped Leads, including judge failure fallback', async () => {
+  for (const fail of [false, true]) {
+    const spawned = [];
+    const scope = { subagents: { startActivation: async spec => {
+      const id = spec.label.split('#').pop();
+      spawned.push(id);
+      return { childId: 'kid-barrier-' + id, dispose: async () => {}, result: Promise.resolve(id === 'router'
+        ? (fail ? { output: [], diagnostic: 'judge unavailable', stopReason: 'error' } : { output: [], structured: { pass: false, reason: 'false only' }, stopReason: 'completed' })
+        : { output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }) };
+    } } };
+    const nodes = [{ id: 'router', kind: 'condition' }, { id: 'solo', kind: 'lead' }, { id: 'rejected', kind: 'agent' }, { id: 'chosen', kind: 'agent' }, { id: 'final', kind: 'lead' }].map(n => ({ ...n, label: n.id }));
+    const edges = [{ from: 'lead', to: 'router' }, { from: 'lead', to: 'solo' }, { from: 'solo', to: 'rejected' }, { from: 'router', to: 'rejected', branch: 'true' }, { from: 'router', to: 'chosen', branch: 'false' }, { from: 'rejected', to: 'final' }, { from: 'chosen', to: 'final' }];
+    const result = await executePlan(scope, { task: 't', nodes, edges }, {}, { agent: { id: 's-barrier-' + fail }, signal: new AbortController().signal });
+    assert.equal(result.status, 'done');
+    assert.deepEqual(spawned, fail ? ['router', 'router'] : ['router', 'chosen'], 'judge schema fallback remains intact; rejected branch never spawns');
+    assert.ok(result.branchSkipped.includes('rejected'));
+    assert.ok(result.skipped.includes('solo'));
+  }
+});
+
+test('effective graph rejects loops crossing inactive Leads before spawning', async () => {
+  const nodes = [{ id: 'a', kind: 'agent' }, { id: 'stage', kind: 'lead' }, { id: 'solo', kind: 'lead' }, { id: 'c', kind: 'condition' }].map(n => ({ ...n, label: n.id }));
+  const edges = [{ from: 'lead', to: 'a' }, { from: 'a', to: 'stage' }, { from: 'stage', to: 'solo' }, { from: 'solo', to: 'c' }, { from: 'lead', to: 'c' }, { from: 'c', to: 'a', loop: true, branch: 'false' }];
+  let spawned = 0;
+  const scope = { subagents: { startActivation: () => { spawned++; throw Error('must not spawn'); } } };
+  const result = await executePlan(scope, { task: 't', nodes, edges }, { clearMemory: true }, { agent: { id: 's-invalid-effective-loop' }, signal: new AbortController().signal });
+  assert.match(result.error, /回环.*无效节点/);
+  assert.equal(spawned, 0);
+});
+
+test('inactive Lead descendants never spawn, alternative paths and role-bearing gates still execute', async () => {
+  const spawned = [];
+  const scope = { subagents: { startActivation(spec) {
+    const id = spec.label.split('#').pop();
+    spawned.push(id);
+    return Promise.resolve({
+      childId: 'kid-validity-' + id,
+      result: Promise.resolve({ output: [{ type: 'text', text: 'ok:' + id }], stopReason: 'completed' }),
+      dispose: () => Promise.resolve(),
+    });
+  } } };
+  const nodes = [
+    { id: 'solo', kind: 'lead', label: 'Solo', role: '' },
+    { id: 'tail', kind: 'agent', label: 'Tail' },
+    { id: 'safe', kind: 'agent', label: 'Safe' },
+  ];
+  const edges = [{ from: 'lead', to: 'solo' }, { from: 'solo', to: 'tail' }, { from: 'lead', to: 'safe' }];
+  const run = (plan, id, args = {}) => executePlan(scope, plan, args, { agent: { id }, signal: new AbortController().signal });
+  const blocked = await run({ task: 't', nodes, edges }, 's-validity-blocked');
+  assert.equal(blocked.status, 'done');
+  assert.deepEqual(spawned, ['safe']);
+  assert.ok(blocked.skipped.includes('Solo') && blocked.skipped.includes('Tail'));
+  const warnings = analyzeCanvasWarnings(nodes, edges);
+  assert.ok(warnings.some(w => w.includes('Solo') && w.includes('未填写分工')));
+  assert.ok(warnings.some(w => w.includes('Tail') && w.includes('跳过')));
+  spawned.length = 0;
+  const alternate = await run({ task: 't', nodes, edges: [...edges, { from: 'lead', to: 'tail' }] }, 's-validity-alternate');
+  assert.equal(alternate.status, 'done');
+  assert.deepEqual([...spawned].sort(), ['safe', 'tail']);
+  spawned.length = 0;
+  const plan = {
+    task: 't', nodes: nodes.slice(0, 2).map(n => n.id === 'solo' ? { ...n, role: 'Confirm' } : n),
+    edges: edges.slice(0, 2),
+  };
+  const paused = await run(plan, 's-validity-role');
+  assert.equal(paused.status, 'need-lead');
+  assert.deepEqual(spawned, [], 'tail cannot bypass a valid Lead gate');
+  const resumed = await run(plan, 's-validity-role', { leadResult: 'approved' });
+  assert.equal(resumed.status, 'done');
+  assert.deepEqual(spawned, ['tail']);
+});
+
 test('clearMemory forgets saved keepSession child sessions and active context prompts memory confirmation', async () => {
   let seq = 0;
   const seenChildIds = [];

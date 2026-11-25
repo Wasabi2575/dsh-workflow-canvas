@@ -929,6 +929,20 @@ async function executePlan(scope, plan, args, exec) {
   const skipped = order.filter((n) => isInactive(n)).map((n) => n.label || n.id);
   if (!runnable.length) return { error: '没有从入口 Lead 连通的有效节点，无法执行。' };
 
+  // Every runtime traversal must use the same effective graph, not raw paths
+  // through skipped Leads. Validate loops again before any run state is mutated.
+  const runnableIds = new Set(runnable.map((n) => n.id));
+  const effectiveEdges = (plan.edges || []).filter((e) => e && (e.from === 'lead' || runnableIds.has(e.from)) && runnableIds.has(e.to));
+  const partialLoop = (plan.edges || []).find((e) => e && e.loop === true
+    && (runnableIds.has(e.from) || runnableIds.has(e.to))
+    && (!runnableIds.has(e.from) || !runnableIds.has(e.to)));
+  const effectiveLoopErrors = validateLoopEdges(runnable, effectiveEdges);
+  if (partialLoop || effectiveLoopErrors.length) {
+    return { error: '回环跨越无效节点或有效祖先路径已断开，请修复连线或显式删除回环：'
+      + (partialLoop ? partialLoop.from + ' → ' + partialLoop.to : effectiveLoopErrors[0]) };
+  }
+  plan = { ...plan, nodes: runnable, edges: effectiveEdges };
+
   if (opts.clearMemory === true && sid) {
     const prefix = String(sid) + '::';
     for (const key of Array.from(childByNode.keys())) {

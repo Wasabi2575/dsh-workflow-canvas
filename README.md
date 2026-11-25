@@ -60,7 +60,9 @@ Output socket colour indicates the channel type:
 | Purple | `session` | Continues inside the upstream child session without reloading context |
 
 - **Disconnect & right-click menus**: **Right-click any node, edge, or blank canvas** to open a context menu (edit role, manage refs, duplicate/delete, insert a subagent/condition directly onto a wire, add nodes, auto-layout, undo); **right-drag across any wire** still cuts links cleanly without conflict.
-- **Dashed nodes (inactive)**: Unreachable nodes, blank-role solo chained Lead nodes with no subagent upstream, and dangling dead-end subagents render **dashed** and are skipped at run time.
+- **Inactive-node borders**: Nodes without an active entry path, blank-role Leads without active direct subagent input, and dangling branches beside an active non-ancestor Lead render **dashed** and are skipped. Paths stop at inactive Leads; independent active paths remain valid.
+- **No out-link** is separate from execution eligibility. Reachable nodes with missing links always use the original yellow badge and a dashed warning border, even with historical run status; legal terminal agents (including final steps after a Lead) stay at full brightness and still run, while only skipped or pruned nodes dim. Upstream nodes losing all effective outputs to a skipped dangling branch are marked **Inactive output** and skipped. The same yellow badge also shows running/failed/skipped status; a skipped node never claims current execution eligibility.
+- **Validation before execution**: Forward cycles in the original graph are rejected before filtering. Controlled loops broken by inactive nodes report an error instead of disappearing. Runtime condition pruning uses only the effective graph.
 
 ![Right-drag to cut a link and re-wire](docs/images/connect-and-cut.gif)
 

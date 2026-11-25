@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { inactiveNodeSets } from '../lib/graph.js';
 
-function loadClientTestExports(storageMap) {
+function loadClientTestExports(storageMap, stateOverrides = {}) {
   let loaded = null;
   const store = storageMap instanceof Map ? storageMap : null;
   const mockLocalStorage = store
@@ -42,14 +43,22 @@ function loadClientTestExports(storageMap) {
     decodeURIComponent,
   };
   const code = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
+  // Seed real component state by hook declaration order, without rewriting the
+  // renderer or mocking graph decisions. Each fixture gets a fresh component.
+  const stateNames = [...code.slice(code.indexOf('function WorkflowCanvas(')).matchAll(/const \[(\w+),\s*\w+\] = useState\(/g)].map(m => m[1]);
+  for (const key of Object.keys(stateOverrides)) assert.ok(stateNames.includes(key), 'known state fixture: ' + key);
+  let stateIndex = 0;
   vm.runInNewContext(code, sandbox);
   assert.ok(loaded, 'client module registered');
   assert.equal(loaded.id, 'dsh-workflow-canvas', 'module id matches published package name');
   const mod = loaded.factory((name) => {
     if (name === 'react') {
       return {
-        createElement: () => null,
-        useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
+        createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
+        useState: (v) => {
+          const name = stateNames[stateIndex++];
+          return [Object.hasOwn(stateOverrides, name) ? stateOverrides[name] : (typeof v === 'function' ? v() : v), () => {}];
+        },
         useRef: (v) => ({ current: v }),
         useEffect: () => {},
         Component: class {},
@@ -193,6 +202,383 @@ test('deadEndNodeIds warns on unlinked agents before/beside a Lead, but not on t
     ],
   );
   assert.equal(leafAfterLead.size, 0, 'terminal agent strictly downstream of an intermediate Lead is not a dead-end');
+});
+
+test('no-outgoing warnings survive sequential cuts without disabling legal terminal agents', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't' },
+    { id: 'a', kind: 'agent' }, { id: 'b', kind: 'agent' },
+    { id: 'review', kind: 'lead' },
+  ];
+  const roots = [{ from: 'lead', to: 'a' }, { from: 'lead', to: 'b' }];
+  for (const first of ['a', 'b']) {
+    const other = first === 'a' ? 'b' : 'a';
+    const oneCut = client.classifyCanvasNodes(nodes, [...roots, { from: other, to: 'review' }]);
+    assert.deepEqual([...oneCut.noOutgoing], [first]);
+    assert.deepEqual([...oneCut.deadEnds], [first]);
+    const bothCut = client.classifyCanvasNodes(nodes, roots);
+    assert.deepEqual([...bothCut.noOutgoing].sort(), ['a', 'b']);
+    assert.equal(bothCut.deadEnds.size, 0, 'terminal-agent execution remains compatible');
+    assert.deepEqual([...client.buildPlan(nodes, roots).plan.nodes].map(n => n.id), ['a', 'b']);
+    const last = client.classifyCanvasNodes(nodes, [{ from: 'lead', to: other }]);
+    assert.deepEqual([...last.noOutgoing], [other]);
+  }
+});
+
+test('inactive Leads block descendants but independent paths and role-bearing Lead stages remain valid', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't' }, { id: 'solo', kind: 'lead' },
+    { id: 'tail', kind: 'agent' }, { id: 'review', kind: 'lead' },
+  ];
+  const edges = [{ from: 'lead', to: 'solo' }, { from: 'solo', to: 'tail' }, { from: 'tail', to: 'review' }];
+  const blocked = client.classifyCanvasNodes(nodes, edges);
+  assert.deepEqual([...blocked.soloLeads], ['solo']);
+  assert.deepEqual([...blocked.reachable], ['lead']);
+  assert.ok(client.buildPlan(nodes, edges).error, 'never exports an orphan tail');
+  const roleNodes = nodes.map(n => n.id === 'solo' ? { ...n, role: 'Confirm' } : n);
+  assert.equal(client.buildPlan(roleNodes, edges).plan.nodes.length, 3);
+  const alternate = [...edges, { from: 'lead', to: 'tail' }];
+  const plan = client.buildPlan(nodes, alternate).plan;
+  assert.deepEqual([...plan.nodes].map(n => n.id), ['tail', 'review']);
+  assert.ok(!plan.edges.some(e => e.from === 'solo' || e.to === 'solo'));
+  assert.ok(inactiveNodeSets(plan.nodes, plan.edges).reachable.has('review'));
+});
+
+test('client/backend classification and projected plans agree across DAGs, node orders and controlled loops', () => {
+  const ids = ['lead', 'stage', 'worker', 'gate'];
+  const candidates = ids.flatMap((from, i) => ids.slice(i + 1).map(to => ({ from, to })));
+  for (const role of ['', 'Confirm']) for (const kind of ['lead', 'agent', 'condition']) {
+    for (let mask = 0; mask < (1 << candidates.length); mask += 1) {
+      const nodes = [
+        { id: 'lead', kind: 'lead', task: 't' }, { id: 'stage', kind: 'lead', role },
+        { id: 'worker', kind: 'agent' }, { id: 'gate', kind },
+      ];
+      const edges = candidates.filter((_, i) => mask & (1 << i));
+      if (kind === 'condition' && edges.some(e => e.from === 'worker' && e.to === 'gate')) {
+        edges.push({ from: 'gate', to: 'worker', loop: true, branch: 'false' });
+      }
+      const host = inactiveNodeSets(nodes, edges);
+      for (const ordered of [nodes, [...nodes].reverse()]) {
+        const ui = client.classifyCanvasNodes(ordered, edges);
+        for (const key of ['reachable', 'soloLeads', 'deadEnds', 'noOutgoing']) {
+          assert.deepEqual([...ui[key]].sort(), [...host[key]].sort(), key + ':' + mask);
+        }
+        const built = client.buildPlan(ordered, edges);
+        if (built.plan) {
+          const projected = inactiveNodeSets(built.plan.nodes, built.plan.edges);
+          assert.ok(built.plan.nodes.every(n => projected.reachable.has(n.id) && !projected.deadEnds.has(n.id)), JSON.stringify({ role, kind, mask, edges, plan: built.plan }));
+        }
+      }
+    }
+  }
+});
+
+test('inactive border stays dashed over selection, warning and historical run borders', () => {
+  for (const state of [null, client.S.nodeSel, { border: '1px solid orange' }, { border: '1.5px solid blue' }, { border: '1px solid green' }]) {
+    const style = client.nodeActivityStyle(state, true);
+    assert.match(style.border, /\bdashed\b/);
+    assert.equal(style.borderStyle, undefined, 'no shorthand/longhand conflicts on React updates');
+    assert.equal(style.opacity, 0.65);
+    if (state?.border) assert.equal(style.border, state.border.replace('solid', 'dashed'), 'state color/width preserved');
+    assert.deepEqual({ ...client.nodeActivityStyle(state, false) }, { ...(state || {}) });
+  }
+});
+
+test('rendered warning and inactive cards agree in zh/en, lr/tb, enabled and disabled canvases', () => {
+  const descendants = (tree) => {
+    if (Array.isArray(tree)) return tree.flatMap(descendants);
+    if (tree && typeof tree === 'object') return [tree, ...descendants(tree.children)];
+    return [];
+  };
+  const textOf = tree => Array.isArray(tree) ? tree.map(textOf).join('') : tree && typeof tree === 'object' ? textOf(tree.children) : typeof tree === 'string' ? tree : '';
+  for (const lang of ['zh', 'en']) for (const direction of ['lr', 'tb']) for (const enabled of [false, true]) {
+    const sid = 'render-validity';
+    const nodes = [
+      { id: 'lead', kind: 'lead', task: 't', x: 0, y: 0 },
+      { id: 'solo', kind: 'lead', x: 300, y: 0 },
+      { id: 'blocked', kind: 'agent', x: 600, y: 0 },
+      { id: 'a', kind: 'agent', x: 300, y: 300 },
+      { id: 'b', kind: 'agent', x: 300, y: 600 },
+    ];
+    const edges = [
+      { from: 'lead', to: 'solo' }, { from: 'solo', to: 'blocked' },
+      { from: 'lead', to: 'a' }, { from: 'lead', to: 'b' },
+    ];
+    const store = new Map([[client.storageKey(sid), JSON.stringify({ nodes, edges, direction, enabled })]]);
+    store.set('dsh-workflow-canvas:v1:lang', lang);
+    const c = loadClientTestExports(store);
+    const tree = c.WorkflowCanvas({ sessionId: sid });
+    const cards = new Map(descendants(tree).filter(el => el.props['data-node']).map(el => [el.props['data-node'], el]));
+    assert.equal(cards.size, 5);
+    for (const id of ['solo', 'blocked']) assert.match(cards.get(id).props.style.border, /\bdashed\b/);
+    for (const id of ['a', 'b']) {
+      assert.match(cards.get(id).props.style.border, /\bdashed\b/);
+      assert.ok(textOf(cards.get(id)).includes(c.I18N[lang].stDeadEnd));
+      const chip = descendants(cards.get(id)).find(el => el.props.title === c.I18N[lang].tipTerminal && el.props.style?.bottom);
+      assert.ok(chip, 'terminal warning chip rendered');
+      for (const key of ['border', 'background', 'color', 'borderRadius', 'fontSize', 'padding']) {
+        assert.equal(chip.props.style[key], c.S.warnChip[key], 'original yellow warning style: ' + key);
+      }
+      assert.equal(chip.props.style.bottom, direction === 'tb' ? '28px' : '5px');
+    }
+  }
+});
+
+test('entry -> agent -> agent always renders the original yellow no-outgoing badge and dashed terminal border', () => {
+  const all = tree => Array.isArray(tree) ? tree.flatMap(all) : tree && typeof tree === 'object' ? [tree, ...all(tree.children)] : [];
+  const text = tree => Array.isArray(tree) ? tree.map(text).join('') : tree && typeof tree === 'object' ? text(tree.children) : typeof tree === 'string' ? tree : '';
+  for (const lang of ['zh', 'en']) for (const direction of ['lr', 'tb']) for (const enabled of [false, true]) {
+    for (const historical of [undefined, 'running', 'done', 'failed']) {
+      const sid = 'no-outgoing-chain';
+      const nodes = [
+        { id: 'lead', kind: 'lead', task: 't', x: 0, y: 0 },
+        { id: 'a', kind: 'agent', x: 300, y: 0 },
+        { id: 'b', kind: 'agent', x: 600, y: 0 },
+      ];
+      const edges = [{ from: 'lead', to: 'a' }, { from: 'a', to: 'b' }];
+      const store = new Map([
+        [client.storageKey(sid), JSON.stringify({ nodes, edges, direction, enabled })],
+        ['dsh-workflow-canvas:v1:lang', lang],
+      ]);
+      const c = loadClientTestExports(store, {
+        selectedIds: ['b'], statusById: historical ? { b: historical } : {},
+        runsById: historical ? { b: { childId: 'kid-b' } } : {},
+      });
+      const tree = c.WorkflowCanvas({ sessionId: sid });
+      const cards = new Map(all(tree).filter(el => el.props['data-node']).map(el => [el.props['data-node'], el]));
+      const b = cards.get('b');
+      assert.match(b.props.style.border, /\bdashed\b/);
+      assert.equal(b.props.style.opacity, undefined, 'legal terminal stays full brightness (opacity: 1), only dashed border + yellow badge');
+      assert.ok(!text(cards.get('a')).includes(c.I18N[lang].stDeadEnd), 'a has an outgoing link');
+      const badges = all(b).filter(el => el.props.style?.border === c.S.warnChip.border);
+      assert.equal(badges.length, 1, 'exactly one original yellow warning, even with historical state');
+      const badge = badges[0];
+      const runtimeKey = enabled && historical ? { running: 'stRunning', done: 'stDone', failed: 'stFailed' }[historical] : null;
+      assert.equal(text(badge), '⚠ ' + c.I18N[lang].stDeadEnd + (runtimeKey ? ' · ' + c.I18N[lang][runtimeKey] : '') + (historical ? ' ↗' : ''));
+      if (runtimeKey) assert.ok(badge.props.title.includes(c.I18N[lang][runtimeKey]));
+      assert.equal(badge.props.style.color, c.S.warnChip.color);
+      assert.equal(badge.props.style.background, c.S.warnChip.background);
+      assert.equal(badge.props.style.bottom, direction === 'tb' ? '28px' : '5px');
+      if (historical) {
+        assert.equal(badge.type, 'button');
+        assert.equal(badge.props.style.outline, 'none');
+        assert.equal(typeof badge.props.onClick, 'function', 'history remains accessible');
+      }
+      assert.deepEqual([...c.buildPlan(nodes, edges).plan.nodes].map(n => n.id), ['a', 'b'], 'execution compatibility preserved');
+    }
+  }
+});
+
+test('terminal and skipped no-outgoing nodes use identical yellow badges, not two status styles', () => {
+  const all = tree => Array.isArray(tree) ? tree.flatMap(all) : tree && typeof tree === 'object' ? [tree, ...all(tree.children)] : [];
+  const sid = 'no-outgoing-two-styles';
+  const nodes = [
+    { id: 'lead', kind: 'lead', task: 't' },
+    { id: 'review', kind: 'lead', role: 'Confirm' },
+    { id: 'terminal', kind: 'agent' }, { id: 'dangling', kind: 'agent' },
+  ].map((n, i) => ({ ...n, x: i * 300, y: 0 }));
+  const edges = [{ from: 'lead', to: 'review' }, { from: 'review', to: 'terminal' }, { from: 'lead', to: 'dangling' }];
+  const c = loadClientTestExports(new Map([[client.storageKey(sid), JSON.stringify({ nodes, edges, enabled: true })]]));
+  const activity = c.classifyCanvasNodes(nodes, edges);
+  assert.deepEqual([...activity.deadEnds], ['dangling']);
+  const cards = new Map(all(c.WorkflowCanvas({ sessionId: sid })).filter(el => el.props['data-node']).map(el => [el.props['data-node'], el]));
+  const styles = ['terminal', 'dangling'].map(id => {
+    assert.match(cards.get(id).props.style.border, /\bdashed\b/);
+    return all(cards.get(id)).find(el => el.props.style?.border === c.S.warnChip.border).props.style;
+  });
+  assert.equal(cards.get('terminal').props.style.opacity, undefined, 'executable terminal stays full brightness');
+  assert.equal(cards.get('dangling').props.style.opacity, 0.65, 'truly skipped dead-end is dimmed');
+  assert.deepEqual({ ...styles[0] }, { ...styles[1] });
+});
+
+
+test('buildPlan rejects raw forward cycles before inactive-node filtering', () => {
+  const nodes = [{ id: 'lead', kind: 'lead', task: 't' }, { id: 'a' }, { id: 'b' }, { id: 'safe', kind: 'lead', role: 'Confirm' }];
+  const edges = [{ from: 'lead', to: 'a' }, { from: 'a', to: 'b' }, { from: 'b', to: 'a' }, { from: 'lead', to: 'safe' }];
+  const built = client.buildPlan(nodes, edges);
+  assert.match(built.error, /前向环/);
+  assert.equal(built.plan, undefined);
+});
+
+test('buildPlan reports loops broken only by inactive Lead barriers, never silently drops them', () => {
+  const nodes = [{ id: 'lead', kind: 'lead', task: 't' }, { id: 'a', kind: 'agent' }, { id: 'stage', kind: 'lead' }, { id: 'solo', kind: 'lead' }, { id: 'c', kind: 'condition' }];
+  const edges = [{ from: 'lead', to: 'a' }, { from: 'a', to: 'stage' }, { from: 'stage', to: 'solo' }, { from: 'solo', to: 'c' }, { from: 'lead', to: 'c' }, { from: 'c', to: 'a', loop: true, branch: 'false' }];
+  assert.match(client.buildPlan(nodes, edges).error, /回环.*无效节点/);
+  const fixed = nodes.map(n => n.id === 'solo' ? { ...n, role: 'Review' } : n);
+  assert.equal(client.buildPlan(fixed, edges).plan.edges.filter(e => e.loop).length, 1);
+});
+
+test('classification cache ignores geometry but invalidates roles, kinds, endpoints and loops', () => {
+  const nodes = [{ id: 'lead', kind: 'lead' }, { id: 'a', kind: 'agent' }];
+  const edges = [{ from: 'lead', to: 'a' }];
+  const key = client.canvasActivityKey(nodes, edges);
+  assert.equal(client.canvasActivityKey(nodes.map(n => ({ ...n, x: 4, y: 7, label: 'Renamed', task: 'Changed' })), edges), key);
+  assert.notEqual(client.canvasActivityKey(nodes.map(n => ({ ...n, role: 'Review' })), edges), key);
+  assert.notEqual(client.canvasActivityKey(nodes.map(n => ({ ...n, kind: 'lead' })), edges), key);
+  assert.notEqual(client.canvasActivityKey(nodes, [{ from: 'a', to: 'lead' }]), key);
+  assert.notEqual(client.canvasActivityKey(nodes, [{ ...edges[0], loop: true }]), key);
+});
+
+test('Lead ancestry bitsets support many Leads, preserve terminals and prune long chains', () => {
+  const leads = Array.from({ length: 80 }, (_, i) => ({ id: 'l' + i, kind: 'lead', role: 'Review' }));
+  const chain = Array.from({ length: 8000 }, (_, i) => ({ id: 'a' + i, kind: 'agent' }));
+  const nodes = [{ id: 'lead', kind: 'lead' }, ...leads, { id: 'terminal', kind: 'agent' }, { id: 'beforeLast', kind: 'agent' }, ...chain];
+  const edges = [{ from: 'lead', to: 'l0' }, ...leads.slice(1).map((n, i) => ({ from: 'l' + i, to: n.id })), { from: 'l79', to: 'terminal' }, { from: 'l78', to: 'beforeLast' }, { from: 'lead', to: 'a0' }, ...chain.slice(1).map((n, i) => ({ from: 'a' + i, to: n.id }))];
+  for (const classify of [client.classifyCanvasNodes, inactiveNodeSets]) {
+    const result = classify(nodes, edges);
+    assert.equal(result.deadEnds.size, chain.length + 1);
+    assert.ok(result.deadEnds.has('beforeLast'), 'missing even one Lead bit above bit 64 prevents terminal exemption');
+    assert.ok(!result.deadEnds.has('terminal'), 'all 80 Leads are terminal ancestors');
+    assert.ok(result.deadEnds.has('a0') && result.deadEnds.has('a7999'));
+  }
+});
+
+
+test('optimized Lead ancestry matches independent full ancestor walks on seeded DAGs', () => {
+  let seed = 91;
+  const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296);
+  for (let sample = 0; sample < 200; sample++) {
+    const nodes = [{ id: 'lead', kind: 'lead' }, ...Array.from({ length: 12 }, (_, i) => ({ id: 'n' + i, kind: rnd() < 0.4 ? 'lead' : 'agent', role: rnd() < 0.5 ? 'Review' : '' }))];
+    const edges = nodes.flatMap((n, i) => nodes.slice(i + 1).filter(() => rnd() < 0.22).map(to => ({ from: n.id, to: to.id })));
+    const result = inactiveNodeSets(nodes, edges);
+    const activeLeads = nodes.filter(n => n.id !== 'lead' && n.kind === 'lead' && result.reachable.has(n.id));
+    const expected = new Set();
+    let changed;
+    do {
+      changed = false;
+      for (const n of nodes) {
+        if (n.kind === 'lead' || !result.reachable.has(n.id) || expected.has(n.id)) continue;
+        if (edges.some(e => e.from === n.id && result.reachable.has(e.to) && !expected.has(e.to))) continue;
+        const ancestors = new Set(), stack = [n.id];
+        while (stack.length) {
+          const id = stack.pop();
+          for (const e of edges) if (e.to === id && result.reachable.has(e.from) && !ancestors.has(e.from)) {
+            ancestors.add(e.from); stack.push(e.from);
+          }
+        }
+        if (activeLeads.some(l => !ancestors.has(l.id))) { expected.add(n.id); changed = true; }
+      }
+    } while (changed);
+    assert.deepEqual([...result.deadEnds].sort(), [...expected].sort(), 'sample ' + sample);
+    assert.deepEqual([...client.classifyCanvasNodes(nodes, edges).deadEnds].sort(), [...expected].sort());
+  }
+});
+
+test('yellow warnings retain pruned runtime state and never claim a skipped node will execute', () => {
+  const all = tree => Array.isArray(tree) ? tree.flatMap(all) : tree && typeof tree === 'object' ? [tree, ...all(tree.children)] : [];
+  const text = tree => Array.isArray(tree) ? tree.map(text).join('') : tree && typeof tree === 'object' ? text(tree.children) : typeof tree === 'string' ? tree : '';
+  for (const lang of ['zh', 'en']) for (const direction of ['lr', 'tb']) {
+    const sid = 'pruned-warning';
+    const doc = { enabled: true, direction, nodes: [{ id: 'lead', kind: 'lead', task: 't', x: 0, y: 0 }, { id: 'b', kind: 'agent', x: 300, y: 0 }], edges: [{ from: 'lead', to: 'b' }] };
+    const c = loadClientTestExports(new Map([[client.storageKey(sid), JSON.stringify(doc)], ['dsh-workflow-canvas:v1:lang', lang]]), { statusById: { b: 'done' }, runState: { status: 'done', pruned: ['b'] }, runsById: { b: { childId: 'old' } } });
+    const card = all(c.WorkflowCanvas({ sessionId: sid })).find(el => el.props['data-node'] === 'b');
+    const badge = all(card).find(el => el.props.style?.border === c.S.warnChip.border);
+    assert.ok(text(badge).includes(c.I18N[lang].stPruned));
+    assert.ok(!text(badge).includes(c.I18N[lang].stDone));
+    assert.ok(badge.props.title.includes(c.I18N[lang].tipPruned));
+    assert.ok(!badge.props.title.includes(c.I18N[lang].tipTerminal));
+    assert.equal(card.props.style.opacity, 0.65, 'pruned node is dimmed');
+    assert.equal(badge.props.style.maxWidth, direction === 'tb' ? 'calc(100% - 20px)' : 'calc(100% - 72px)', 'reserve socket-label room in lr and use full width in tb');
+    assert.equal(badge.type, 'button', 'old history stays accessible without implying this run executed');
+    assert.ok(text(badge).endsWith(' ↗'), 'clickable yellow history badge shows open-chat arrow');
+  }
+});
+
+test('buildPlan rejects overlapping/non-condition loops, dead loop islands peel cleanly, and null/duplicate nodes never crash', () => {
+  // 1) Non-condition loop source rejected in buildPlan
+  const nonCond = client.buildPlan(
+    [{ id: 'lead', kind: 'lead', task: 't' }, { id: 'a', kind: 'agent' }, { id: 'b', kind: 'agent' }],
+    [{ from: 'lead', to: 'a' }, { from: 'a', to: 'b' }, { from: 'b', to: 'a', loop: true }],
+  );
+  assert.match(nonCond.error, /条件判断节点/);
+
+  // 2) Overlapping loops rejected in buildPlan
+  const overlap = client.buildPlan(
+    [
+      { id: 'lead', kind: 'lead', task: 't' },
+      { id: 'a', kind: 'agent' },
+      { id: 'b', kind: 'agent' },
+      { id: 'c1', kind: 'condition' },
+      { id: 'c2', kind: 'condition' },
+      { id: 'end', kind: 'lead', role: 'Done' },
+    ],
+    [
+      { from: 'lead', to: 'a' }, { from: 'a', to: 'b' }, { from: 'b', to: 'c1' },
+      { from: 'c1', to: 'c2', branch: 'true' }, { from: 'c2', to: 'end', branch: 'true' },
+      { from: 'c1', to: 'a', branch: 'false', loop: true },
+      { from: 'c2', to: 'b', branch: 'false', loop: true },
+    ],
+  );
+  assert.match(overlap.error, /交叉或重叠/);
+
+  // 3) Loop-only dead island beside an active Lead is caught by both noOutgoing and deadEnds (client & backend)
+  const islandNodes = [
+    { id: 'lead', kind: 'lead', task: 't' },
+    { id: 'review', kind: 'lead', role: 'Confirm' },
+    { id: 'w', kind: 'agent' },
+    { id: 'g', kind: 'condition' },
+  ];
+  const islandEdges = [
+    { from: 'lead', to: 'review' },
+    { from: 'lead', to: 'w' },
+    { from: 'w', to: 'g' },
+    { from: 'g', to: 'w', branch: 'false', loop: true },
+  ];
+  for (const fn of [client.classifyCanvasNodes, inactiveNodeSets]) {
+    const cls = fn(islandNodes, islandEdges);
+    assert.deepEqual([...cls.noOutgoing], ['g'], 'condition with only a loop back-edge has no forward exit');
+    assert.deepEqual([...cls.deadEnds].sort(), ['g', 'w'], 'dead loop island beside active Lead peels cleanly');
+  }
+  const builtIsland = client.buildPlan(islandNodes, islandEdges);
+  assert.ok(!builtIsland.error);
+  assert.deepEqual([...builtIsland.plan.nodes].map((n) => n.id), ['review']);
+
+  // 4) Null elements & duplicate Lead IDs never crash or corrupt allLeadBits
+  const dirtyNodes = [
+    null,
+    { id: 'lead', kind: 'lead' },
+    { id: 'l1', kind: 'lead', role: 'R' },
+    { id: 'l1', kind: 'lead', role: 'R' },
+    { id: 'term', kind: 'agent' },
+  ];
+  const dirtyEdges = [null, { from: 'lead', to: 'l1' }, { from: 'l1', to: 'term' }];
+  for (const fn of [client.classifyCanvasNodes, inactiveNodeSets]) {
+    const cls = fn(dirtyNodes, dirtyEdges);
+    assert.equal(cls.deadEnds.size, 0, 'duplicate Lead ID must not corrupt allLeadBits and misclassify terminal');
+    assert.deepEqual([...cls.noOutgoing], ['term']);
+  }
+
+  // 5) nodeActivityStyle supports dashed-without-dimming and handles missing border safely
+  const brightDashed = client.nodeActivityStyle({ boxShadow: '0 0 4px gold' }, true, false);
+  assert.match(brightDashed.border, /\bdashed\b/);
+  assert.equal(brightDashed.opacity, undefined);
+});
+
+test('findNearestInputSnap magnetically captures nearby input sockets in lr/tb and ignores self or entry Lead', () => {
+  const nodes = [
+    { id: 'lead', kind: 'lead', x: 0, y: 0 },
+    { id: 'a', kind: 'agent', x: 300, y: 100 },
+    { id: 'b', kind: 'agent', x: 600, y: 100 },
+  ];
+  // Horizontal (lr): input socket of `b` is at (600, 100 + socketCenterY(0))
+  const inB = client.inputSocketPos(nodes[2], 'lr');
+  const hitLR = client.findNearestInputSnap({ x: inB.x - 16, y: inB.y + 12 }, nodes, 'a', 'lr', 1);
+  assert.ok(hitLR && hitLR.nodeId === 'b' && hitLR.x === inB.x && hitLR.y === inB.y);
+
+  // Outside 23px radius at 100% zoom -> returns null so blank-space drag stays crisp
+  assert.equal(client.findNearestInputSnap({ x: inB.x - 30, y: inB.y }, nodes, 'a', 'lr', 1), null);
+
+  // Never snaps to entry Lead or to source node itself
+  const inA = client.inputSocketPos(nodes[1], 'lr');
+  assert.equal(client.findNearestInputSnap({ x: inA.x, y: inA.y }, nodes, 'a', 'lr', 1), null);
+  const inLead = client.inputSocketPos(nodes[0], 'lr');
+  assert.equal(client.findNearestInputSnap({ x: inLead.x, y: inLead.y }, nodes, 'a', 'lr', 1), null);
+
+  // Vertical (tb) + zoomed out (0.5x expands snap radius gently up to 36px)
+  const inBTB = client.inputSocketPos(nodes[2], 'tb');
+  const hitZoomedOut = client.findNearestInputSnap({ x: inBTB.x + 32, y: inBTB.y }, nodes, 'a', 'tb', 0.5);
+  assert.ok(hitZoomedOut && hitZoomedOut.nodeId === 'b' && hitZoomedOut.x === inBTB.x && hitZoomedOut.y === inBTB.y);
+  assert.equal(client.findNearestInputSnap({ x: inBTB.x + 42, y: inBTB.y }, nodes, 'a', 'tb', 0.5), null);
 });
 
 test('nextEffectLevel cycles minimal -> standard -> vivid -> minimal', () => {
@@ -609,8 +995,8 @@ test('controlled loop helpers: membership, validation, multi-select analysis, by
   assert.equal(pruned.removedCount, 1);
   assert.equal(pruned.edges.some((e) => e.loop), false);
   const builtBroken = client.buildPlan(nodes, brokenEdges);
-  assert.ok(!builtBroken.error);
-  assert.equal(builtBroken.plan.edges.some((e) => e.loop), false, 'buildPlan strips broken loop edges');
+  assert.match(builtBroken.error, /回环/, 'stale/imported broken loops must not silently disappear at run time');
+  assert.ok(!client.buildPlan(nodes, pruned.edges).error, 'explicit editor pruning still works');
 
   // Built-in full-showcase retry loop starter template is valid in both zh/en and lr/tb
   for (const lang of ['zh', 'en']) {
