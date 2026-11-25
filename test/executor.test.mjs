@@ -3307,6 +3307,9 @@ test('canvas_preset (#14): syncs user presets via /canvas-sync, lists/applies pr
             { id: 'p1', kind: 'agent', label: '打包检查', role: 'pack' },
           ],
           edges: [{ from: 'lead', to: 'p1', type: 'prompt' }],
+          comments: [
+            { id: 'cm-rel', x: 20, y: 10, w: 300, h: 200, title: '发布前检查', body: '核对版本号', color: 'green', fontSize: 'md', zoomScale: true },
+          ],
         },
       },
     }));
@@ -3342,6 +3345,10 @@ test('canvas_preset (#14): syncs user presets via /canvas-sync, lists/applies pr
     assert.equal(published.canvas.direction, 'lr', 'user preset preserves its saved direction');
     assert.equal(published.canvas.enabled, true);
     assert.equal(published.canvas.nodes.find((n) => n.id === 'lead').task, '发 v1.7.0');
+    assert.equal(Array.isArray(published.canvas.comments) && published.canvas.comments.length, 1, 'user preset preserves comments on UI canvasDoc');
+    assert.equal(published.canvas.comments[0].title, '发布前检查');
+    assert.equal(inspectPlan(sid).comments[0].title, '发布前检查', 'canvas_inspect surfaces preset comments for AI awareness');
+    assert.equal(buildActiveCanvasContext(sid).includes('发布前检查'), false, 'active prompt context never dumps raw comment text');
 
     // 5) Toggle disabled in place (preserves nodes, publishes merge toggle)
     const disabledRes = presetTool.execute({ action: 'toggle', enabled: false }, { agent: { id: sid } });
@@ -3386,6 +3393,140 @@ test('canvas_preset (#14): syncs user presets via /canvas-sync, lists/applies pr
     assert.ok(handleCanvasPreset(null, sid, { action: 'apply', name: 'tpl-swe' }).error.includes('待拍板'));
     assert.ok(handleCanvasPreset(null, sid, { action: 'toggle', enabled: false }).error.includes('待拍板'));
     syncPresetsCatalog({});
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('AI comment round-trip (#15 V2): /canvas-sync, canvas_inspect, canvas_generate & canvas_patch with semantic nodeIds and minimal context', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-comments-'));
+  try {
+    const commands = new Map();
+    const tools = new Map();
+    const fakeCtx = {
+      inject(_names, fn) {
+        const scope = {
+          effect: (cb) => cb(),
+          commands: { register: (c) => { commands.set(c.name, c); return () => {}; } },
+          tools: { register: (t) => { tools.set(t.name, t); return () => {}; } },
+          sessions: { get: () => ({ header: { cwd: dir } }) },
+          subagents: {},
+        };
+        fn(scope);
+      },
+    };
+    apply(fakeCtx);
+    const syncCmd = commands.get('canvas-sync');
+    const inspectTool = tools.get('canvas_inspect');
+    const genTool = tools.get('canvas_generate');
+    const patchTool = tools.get('canvas_patch');
+    const sid = 's-cm-v2-' + Date.now();
+
+    // 1) Client syncs canvas with a comment box via /canvas-sync
+    const syncPayload = encodeURIComponent(JSON.stringify({
+      enabled: true,
+      plan: {
+        task: '注释感知测试',
+        nodes: [
+          { id: 'scan', kind: 'agent', label: '扫描', role: 'scan repo' },
+          { id: 'fix', kind: 'agent', label: '修复', role: 'apply fix' },
+        ],
+        edges: [
+          { from: 'lead', to: 'scan', type: 'prompt' },
+          { from: 'scan', to: 'fix', type: 'prompt' },
+        ],
+      },
+      comments: [
+        { id: 'cm-user', title: '调研段', body: '只读不改文件', color: 'blue', nodeIds: ['scan'] },
+      ],
+    }));
+    assert.equal(syncCmd.handler({ agent: { id: sid }, rawInput: syncPayload }).kind, 'success');
+
+    // Active context stays ultra-compact (just "注释 ×1", never dumping comment bodies)
+    const activeCtx = buildActiveCanvasContext(sid);
+    assert.ok(activeCtx.includes('注释 ×1'), 'active context hints comment count');
+    assert.equal(activeCtx.includes('只读不改文件'), false, 'active context never dumps raw comment body into every turn');
+
+    // 2) canvas_inspect exposes full comment details + renders readable list
+    const insp = inspectTool.execute({}, { agent: { id: sid } });
+    assert.equal(insp.comments.length, 1);
+    assert.equal(insp.comments[0].id, 'cm-user');
+    assert.deepEqual(insp.comments[0].nodeIds, ['scan']);
+    const inspText = inspectTool.output.render({}, insp)[0].text;
+    assert.ok(inspText.includes('注释（1）') && inspText.includes('调研段') && inspText.includes('包裹: scan'));
+
+    // 3) canvas_patch updates existing comment, adds a new comment, removes none -> publishes merge patch
+    const patched = patchTool.execute({
+      comments: [
+        { id: 'cm-user', title: '调研与分析', color: 'green' },
+        { id: 'cm-fix', title: '修复段', body: '跑完单测再交付', color: 'amber', nodeIds: ['fix'] },
+      ],
+    }, { agent: { id: sid } });
+    assert.equal(patched.delivered, true);
+    assert.ok(patched.summary.includes('更新注释 2 条'));
+    const patchFile = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.json'), 'utf8'));
+    assert.equal(patchFile.canvas.mode, 'merge');
+    assert.equal(patchFile.canvas.comments.length, 2);
+    assert.equal(inspectPlan(sid).comments.length, 2);
+
+    // 4) canvas_patch removes one comment
+    const removedRes = patchTool.execute({ removeComments: ['cm-user'] }, { agent: { id: sid } });
+    assert.ok(removedRes.summary.includes('删除注释 1 条'));
+    assert.equal(inspectPlan(sid).comments.length, 1);
+    assert.equal(inspectPlan(sid).comments[0].id, 'cm-fix');
+
+    // 5) canvas_generate supports semantic nodeIds comments and computes bounding boxes
+    const genRes = genTool.execute({
+      task: '带注释生成',
+      nodes: [
+        { id: 'entry_lead', ref: 'r0', kind: 'lead', label: '入口', task: '总控' },
+        { id: 'a', kind: 'agent', label: 'A', role: 'r1' },
+        { id: 'b', kind: 'agent', label: 'B', role: 'r2' },
+      ],
+      edges: [
+        { from: 'entry_lead', to: 'a', type: 'prompt' },
+        { from: 'a', to: 'b', type: 'prompt' },
+      ],
+      comments: [
+        { id: 'cm-gen', title: '核心流水线', body: '顺序执行', color: 'purple', nodeIds: ['entry_lead', 'a', 'b'] },
+        { id: 'cm-2', title: '显式ID', color: 'gray' },
+        { title: '自动ID不撞车', color: 'green' },
+      ],
+    }, { agent: { id: sid } });
+    assert.equal(genRes.delivered, true);
+    assert.equal(genRes.canvas.comments.length, 3, 'auto-generated comment id never collides with explicit cm-2');
+    assert.equal(genRes.canvas.comments[0].title, '核心流水线');
+    assert.deepEqual(genRes.canvas.comments[0].nodeIds, ['lead', 'a', 'b'], 'promoted rootLead id remaps inside comment.nodeIds');
+    assert.ok(typeof genRes.canvas.comments[0].x === 'number' && genRes.canvas.comments[0].w >= 180);
+    assert.equal(inspectPlan(sid).comments[0].id, 'cm-gen');
+
+    // 6) Metadata-only canvas_patch on existing comment does NOT send stale nodeIds or stale x/y/w/h
+    const metaPatch = patchTool.execute({
+      comments: [
+        { id: 'cm-gen', title: '核心流水线（已改名）', color: 'blue' },
+      ],
+    }, { agent: { id: sid } });
+    assert.equal(metaPatch.delivered, true);
+    const metaDoc = JSON.parse(readFileSync(join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.json'), 'utf8'));
+    assert.equal(metaDoc.canvas.comments[0].title, '核心流水线（已改名）');
+    assert.equal(metaDoc.canvas.comments[0].nodeIds, undefined, 'metadata-only patch omits nodeIds so client preserves manual geometry');
+    assert.equal(metaDoc.canvas.comments[0].x, undefined, 'metadata-only patch omits stale x/y');
+
+    // 7) Same-ms auto-IDs never overwrite each other & removeComments+comments collision stays clean
+    const multiAuto = patchTool.execute({
+      comments: [
+        { title: '便签1' },
+        { title: '便签2' },
+        { id: 'cm-temp', title: '即删' },
+      ],
+      removeComments: ['cm-temp', 'non-existent-id'],
+    }, { agent: { id: sid } });
+    assert.ok(multiAuto.summary.includes('更新注释 2 条') && !multiAuto.summary.includes('删除注释'), 'net-deleted brand-new comment and nonexistent id are not counted as removed');
+    assert.equal(inspectPlan(sid).comments.length, 5);
+
+    // 8) Removing node 'b' prunes 'b' out of untouched comment's nodeIds in canvas_inspect
+    patchTool.execute({ removeNodes: ['b'] }, { agent: { id: sid } });
+    assert.deepEqual(inspectPlan(sid).comments.find((c) => c.id === 'cm-gen').nodeIds, ['lead', 'a']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

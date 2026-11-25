@@ -83,6 +83,7 @@ window.__ModuleLoader__.load({
     const SHORTCUTS_KEY = STORAGE_PREFIX + 'shortcuts';
     const DEFAULT_SHORTCUTS = {
       addNode: 'Shift+A',
+      addComment: 'C',
       duplicate: 'Shift+D',
       delete: 'Delete',
       undo: 'Ctrl+Z',
@@ -91,7 +92,22 @@ window.__ModuleLoader__.load({
       autoLayout: '',
       toggleDir: '',
     };
-    const SHORTCUT_ORDER = ['addNode', 'duplicate', 'delete', 'undo', 'redo', 'fitView', 'autoLayout', 'toggleDir'];
+    const SHORTCUT_ORDER = ['addNode', 'addComment', 'duplicate', 'delete', 'undo', 'redo', 'fitView', 'autoLayout', 'toggleDir'];
+
+    const COMMENT_MIN_W = 180;
+    const COMMENT_MIN_H = 96;
+    const COMMENT_DEFAULT_W = 260;
+    const COMMENT_DEFAULT_H = 148;
+    const COMMENT_HEADER_H = 30;
+    const COMMENT_COLORS = [
+      { id: 'gray', accent: '#8a8f98', border: 'rgba(138,143,152,0.52)', bg: 'rgba(138,143,152,0.08)', headBg: 'rgba(138,143,152,0.16)' },
+      { id: 'blue', accent: '#2f81f7', border: 'rgba(47,129,247,0.54)', bg: 'rgba(47,129,247,0.08)', headBg: 'rgba(47,129,247,0.16)' },
+      { id: 'green', accent: '#3fb950', border: 'rgba(63,185,80,0.54)', bg: 'rgba(63,185,80,0.08)', headBg: 'rgba(63,185,80,0.16)' },
+      { id: 'amber', accent: '#d29922', border: 'rgba(210,153,34,0.56)', bg: 'rgba(210,153,34,0.08)', headBg: 'rgba(210,153,34,0.16)' },
+      { id: 'purple', accent: '#a371f7', border: 'rgba(163,113,247,0.54)', bg: 'rgba(163,113,247,0.08)', headBg: 'rgba(163,113,247,0.16)' },
+      { id: 'red', accent: '#e5534b', border: 'rgba(229,83,75,0.54)', bg: 'rgba(229,83,75,0.08)', headBg: 'rgba(229,83,75,0.16)' },
+    ];
+    const COMMENT_FONT_SIZES = { sm: 12, md: 15, lg: 19 };
 
     const NODE_W = 216;
     const NODE_H = 234;
@@ -246,7 +262,7 @@ window.__ModuleLoader__.load({
           '11. 你可以直接让我改画布：说「把那三个节点的分工改成…」，我会就地修改，不动你摆的位置。',
           '12. session 线连到 Lead 时，我会在暂停那步拿到那个子代理的会话，可以继续追问它。',
           '13. 按住鼠标中键（或空格 + 左键）拖动画布平移；点击子代理节点左下角状态可直达它的对话记录；运行后左下角「复盘」胶囊（或「⋯ → 📊 执行复盘」）可查看耗时、分支与回环记录并复制 Markdown（零额外 Token）。',
-          '14. 快捷键与历史：顶栏提供 ↶ 撤销 / ↷ 重做按钮（支持撤销节点移动与横竖排切换）；默认 Shift+A 新建，Shift+D 复制，Delete 删除，Ctrl+Z / Ctrl+Shift+Z（Ctrl+Y）撤销重做，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
+          '14. 快捷键与历史：顶栏提供 ↶ 撤销 / ↷ 重做按钮（支持撤销节点移动与横竖排切换）；默认 Shift+A 新建，C 添加注释/框选分组（拖注释标题连带框内节点，按住 Alt 仅移注释框），Shift+D 复制，Delete 删除，Ctrl+Z / Ctrl+Shift+Z（Ctrl+Y）撤销重做，Esc 关闭弹窗（可在「⋯ → 快捷键设置」自定义）。',
         ].join('\n'),
         openChat: '会话',
         tipOpenRun: '点击打开该子代理的对话记录',
@@ -337,6 +353,32 @@ window.__ModuleLoader__.load({
         scFitView: '全览居中',
         scAutoLayout: '自动排版',
         scToggleDir: '切换横排 / 竖排',
+        scAddComment: '添加注释 / 框选分组',
+        addComment: '💬 注释',
+        ctxGroupComment: '💬 用注释框分组',
+        ctxAddComment: '💬 添加注释',
+        ctxCommentTitle: '注释操作',
+        ctxEditComment: '编辑备注与样式',
+        ctxRenameComment: '重命名标题',
+        ctxDupComment: '复制注释',
+        ctxDelComment: '删除注释',
+        commentDefaultTitle: '分组注释',
+        commentNoteTitle: '备注',
+        commentTitlePh: '输入注释标题…',
+        commentBodyPh: '输入补充说明、约定或设计备注…',
+        commentBodyHint: '点击编辑备注…',
+        commentHeaderTip: '点击改标题；按住拖动移动注释框与框内节点（按住 Alt 仅移动注释框）',
+        commentStyleTip: '编辑备注、颜色、字号与缩放可读性',
+        commentDelTip: '仅删除注释框（保留框内节点）',
+        commentResizeTip: '拖动调整注释框大小',
+        commentColorLabel: '颜色',
+        commentSizeLabel: '字号',
+        commentZoomLabel: '缩小时保持标题可读',
+        commentSizeSm: '小',
+        commentSizeMd: '中',
+        commentSizeLg: '大',
+        commentDeleted: '已删除注释（可用 ↶ 撤销）',
+        commentAdded: '已添加注释',
         fxLabel: '视觉效果',
         fxMinimal: '极简',
         fxStandard: '标准',
@@ -475,7 +517,7 @@ window.__ModuleLoader__.load({
           '11. You can ask me to edit the canvas; I patch it in place and keep your layout.',
           '12. A session link into a Lead step hands me that child agent, so I can follow up with it.',
           '13. Hold the middle mouse button (or Space + drag) to pan; click a subagent status badge at the bottom-left to open its chat; click the bottom-left Summary pill (or ⋯ → 📊 Run summary) for live timing, branch & retry breakdown and Markdown export (zero extra tokens).',
-          '14. History & shortcuts: toolbar ↶ Undo / ↷ Redo buttons undo structural edits, node drags, and layout flips; Shift+A adds at cursor, Shift+D duplicates, Delete removes, Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) undo/redo, Esc closes popups (customizable under ⋯ → Shortcuts).',
+          '14. History & shortcuts: toolbar ↶ Undo / ↷ Redo buttons undo structural edits, node drags, and layout flips; Shift+A adds at cursor, C adds a comment / groups selected nodes (drag header to move nodes inside, hold Alt for box only), Shift+D duplicates, Delete removes, Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) undo/redo, Esc closes popups (customizable under ⋯ → Shortcuts).',
         ].join('\n'),
         openChat: 'Chat',
         tipOpenRun: 'Click to open this subagent conversation',
@@ -566,6 +608,32 @@ window.__ModuleLoader__.load({
         scFitView: 'Fit all in view',
         scAutoLayout: 'Auto layout',
         scToggleDir: 'Toggle Horiz / Vert layout',
+        scAddComment: 'Add comment / group selection',
+        addComment: '💬 Comment',
+        ctxGroupComment: '💬 Group with comment',
+        ctxAddComment: '💬 Add comment',
+        ctxCommentTitle: 'Comment',
+        ctxEditComment: 'Edit note & style',
+        ctxRenameComment: 'Rename title',
+        ctxDupComment: 'Duplicate comment',
+        ctxDelComment: 'Delete comment',
+        commentDefaultTitle: 'Comment',
+        commentNoteTitle: 'Note',
+        commentTitlePh: 'Comment title…',
+        commentBodyPh: 'Add notes, rules, or rationale…',
+        commentBodyHint: 'Click to write note…',
+        commentHeaderTip: 'Click to rename; drag to move box & nodes inside (hold Alt for box only)',
+        commentStyleTip: 'Edit note, color, font size & zoom readability',
+        commentDelTip: 'Delete comment box only (keeps nodes inside)',
+        commentResizeTip: 'Drag to resize comment box',
+        commentColorLabel: 'Color',
+        commentSizeLabel: 'Size',
+        commentZoomLabel: 'Keep title readable when zoomed out',
+        commentSizeSm: 'S',
+        commentSizeMd: 'M',
+        commentSizeLg: 'L',
+        commentDeleted: 'Comment deleted (use Undo to restore)',
+        commentAdded: 'Comment added',
         fxLabel: 'Visual effects',
         fxMinimal: 'Minimal',
         fxStandard: 'Standard',
@@ -1095,6 +1163,162 @@ window.__ModuleLoader__.load({
         padding: '0 6px', borderRadius: '4px', border: '1px solid ' + C.border,
         background: C.base, color: C.text, fontSize: '10px', outline: 'none', userSelect: 'text',
       },
+      commentBox: {
+        position: 'absolute',
+        boxSizing: 'border-box',
+        userSelect: 'none',
+      },
+      commentBody: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top: COMMENT_HEADER_H + 'px',
+        bottom: 0,
+        borderRadius: '0 0 10px 10px',
+        boxSizing: 'border-box',
+        pointerEvents: 'none',
+      },
+      commentHeader: {
+        position: 'absolute',
+        left: 0,
+        height: COMMENT_HEADER_H + 'px',
+        boxSizing: 'border-box',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '4px',
+        padding: '0 8px',
+        cursor: 'grab',
+        pointerEvents: 'auto',
+        userSelect: 'none',
+      },
+      commentTitleText: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        fontWeight: 600,
+        color: C.text,
+        lineHeight: '1.25',
+      },
+      commentTitleInput: {
+        flex: '1 1 auto',
+        minWidth: 0,
+        height: '22px',
+        boxSizing: 'border-box',
+        padding: '0 5px',
+        borderRadius: '4px',
+        border: '1px solid ' + C.accent,
+        background: C.base,
+        color: C.text,
+        fontWeight: 600,
+        outline: 'none',
+        userSelect: 'text',
+      },
+      commentHeadBtn: {
+        flex: '0 0 auto',
+        width: '20px',
+        height: '20px',
+        padding: 0,
+        border: 'none',
+        borderRadius: '4px',
+        background: 'transparent',
+        color: C.dim,
+        fontSize: '11px',
+        lineHeight: '20px',
+        textAlign: 'center',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      },
+      commentNoteBody: {
+        position: 'absolute',
+        left: '10px',
+        right: '10px',
+        top: (COMMENT_HEADER_H + 8) + 'px',
+        bottom: '14px',
+        overflowY: 'auto',
+        whiteSpace: 'pre-wrap',
+        wordBreak: 'break-word',
+        fontSize: '11.5px',
+        lineHeight: '1.5',
+        color: C.text,
+        pointerEvents: 'auto',
+        cursor: 'text',
+      },
+      commentNoteArea: {
+        position: 'absolute',
+        left: '8px',
+        right: '8px',
+        top: (COMMENT_HEADER_H + 6) + 'px',
+        bottom: '14px',
+        boxSizing: 'border-box',
+        padding: '6px 7px',
+        borderRadius: '6px',
+        border: '1px solid ' + C.accent,
+        background: C.base,
+        color: C.text,
+        fontSize: '11.5px',
+        lineHeight: '1.5',
+        resize: 'none',
+        outline: 'none',
+        userSelect: 'text',
+        pointerEvents: 'auto',
+      },
+      commentResize: {
+        position: 'absolute',
+        right: '2px',
+        bottom: '2px',
+        width: '14px',
+        height: '14px',
+        cursor: 'nwse-resize',
+        pointerEvents: 'auto',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
+        padding: '2px',
+        boxSizing: 'border-box',
+        color: C.dim,
+        opacity: 0.72,
+      },
+      commentPopover: {
+        position: 'absolute',
+        top: (COMMENT_HEADER_H + 6) + 'px',
+        right: '0',
+        width: '256px',
+        background: C.elevated,
+        color: C.text,
+        border: '1px solid ' + C.border,
+        borderRadius: '8px',
+        padding: '9px 10px',
+        zIndex: 74,
+        boxShadow: '0 14px 32px rgba(0,0,0,0.42)',
+        pointerEvents: 'auto',
+      },
+      commentColorDot: {
+        width: '18px',
+        height: '18px',
+        borderRadius: '50%',
+        padding: 0,
+        cursor: 'pointer',
+        boxSizing: 'border-box',
+      },
+      commentPopArea: {
+        width: '100%',
+        height: '92px',
+        boxSizing: 'border-box',
+        padding: '6px 7px',
+        borderRadius: '5px',
+        border: '1px solid ' + C.border,
+        background: C.base,
+        color: C.text,
+        fontSize: '11px',
+        lineHeight: '1.5',
+        resize: 'vertical',
+        outline: 'none',
+        userSelect: 'text',
+      },
     };
 
     let hostCtx = null;
@@ -1112,6 +1336,263 @@ window.__ModuleLoader__.load({
         out.push(s);
       }
       return out;
+    }
+
+    function commentPalette(colorId) {
+      return COMMENT_COLORS.find((c) => c.id === colorId) || COMMENT_COLORS[0];
+    }
+
+    function normalizeCommentsUI(rawComments) {
+      if (!Array.isArray(rawComments) || !rawComments.length) return [];
+      const out = [];
+      const seen = new Set();
+      for (let i = 0; i < rawComments.length && out.length < 80; i += 1) {
+        const c = rawComments[i];
+        if (!c || typeof c !== 'object') continue;
+        const id = typeof c.id === 'string' && c.id.trim() ? c.id.trim().slice(0, 80) : ('cm-' + i);
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const x = typeof c.x === 'number' && Number.isFinite(c.x) ? Math.round(c.x) : 0;
+        const y = typeof c.y === 'number' && Number.isFinite(c.y) ? Math.round(c.y) : 0;
+        const w = typeof c.w === 'number' && Number.isFinite(c.w)
+          ? Math.max(COMMENT_MIN_W, Math.min(4000, Math.round(c.w)))
+          : COMMENT_DEFAULT_W;
+        const h = typeof c.h === 'number' && Number.isFinite(c.h)
+          ? Math.max(COMMENT_MIN_H, Math.min(4000, Math.round(c.h)))
+          : COMMENT_DEFAULT_H;
+        const color = COMMENT_COLORS.some((p) => p.id === c.color) ? c.color : 'gray';
+        const fontSize = Object.prototype.hasOwnProperty.call(COMMENT_FONT_SIZES, c.fontSize) ? c.fontSize : 'md';
+        out.push({
+          id,
+          x,
+          y,
+          w,
+          h,
+          title: typeof c.title === 'string' ? c.title.slice(0, 120) : '',
+          body: typeof c.body === 'string' ? c.body.slice(0, 4000) : '',
+          color,
+          fontSize,
+          zoomScale: c.zoomScale !== false,
+        });
+      }
+      return out;
+    }
+
+    /** Real-time geometric membership: nodes whose centers currently lie inside a comment box. */
+    function nodesInsideComment(comment, nodes) {
+      if (!comment || !Array.isArray(nodes) || !nodes.length) return [];
+      const x1 = comment.x;
+      const y1 = comment.y;
+      const x2 = comment.x + comment.w;
+      const y2 = comment.y + comment.h;
+      return nodes.filter((n) => {
+        if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') return false;
+        const cx = n.x + NODE_W / 2;
+        const cy = n.y + nodeHeight(n) / 2;
+        return cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2;
+      });
+    }
+
+    /** Compute a padded comment frame around a list of nodes. */
+    function boundsForNodes(nodes, pad) {
+      const list = Array.isArray(nodes) ? nodes.filter((n) => n && typeof n.x === 'number' && typeof n.y === 'number') : [];
+      if (!list.length) return null;
+      const padX = (pad && typeof pad.x === 'number') ? pad.x : 24;
+      const padTop = (pad && typeof pad.top === 'number') ? pad.top : (COMMENT_HEADER_H + 20);
+      const padBottom = (pad && typeof pad.bottom === 'number') ? pad.bottom : 24;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const n of list) {
+        if (n.x < minX) minX = n.x;
+        if (n.y < minY) minY = n.y;
+        if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
+        const ny2 = n.y + nodeHeight(n);
+        if (ny2 > maxY) maxY = ny2;
+      }
+      return {
+        x: Math.round(minX - padX),
+        y: Math.round(minY - padTop),
+        w: Math.max(COMMENT_MIN_W, Math.round(maxX - minX + padX * 2)),
+        h: Math.max(COMMENT_MIN_H, Math.round(maxY - minY + padTop + padBottom)),
+      };
+    }
+
+    /**
+     * After `autoLayout` or `toggleDirection`, refit every group comment around the new positions
+     * of the nodes that were geometrically inside it right before layout. Standalone notes stay put.
+     */
+    function refitCommentsAfterLayout(comments, prevNodes, nextNodes) {
+      if (!Array.isArray(comments) || !comments.length) return [];
+      const nextById = new Map((Array.isArray(nextNodes) ? nextNodes : []).map((n) => [n.id, n]));
+      return comments.map((c) => {
+        const inside = nodesInsideComment(c, prevNodes);
+        if (!inside.length) return { ...c };
+        const relocated = inside.map((n) => nextById.get(n.id)).filter(Boolean);
+        const box = boundsForNodes(relocated);
+        return box ? { ...c, ...box } : { ...c };
+      });
+    }
+
+    /** Inverse header scale when zoomed out (`view.k < 1`) so comment titles stay readable in overview. */
+    function commentHeaderScale(viewK, zoomScale) {
+      if (zoomScale === false) return 1;
+      const k = typeof viewK === 'number' && Number.isFinite(viewK) && viewK > 0 ? viewK : 1;
+      if (k >= 1) return 1;
+      return 1 / Math.max(0.38, k);
+    }
+
+    /** Compute `{ x, y, w, h }` when resizing a comment box from any edge or corner (`w`/`e`/`s`/`n`/`nw`/`ne`/`sw`/`se`). */
+    function resizeCommentBox(orig, dir, dx, dy) {
+      const d = String(dir || 'se');
+      let x = orig.x;
+      let y = orig.y;
+      let w = orig.w;
+      let h = orig.h;
+      if (d.includes('e')) {
+        w = Math.max(COMMENT_MIN_W, Math.min(4000, Math.round(orig.w + dx)));
+      } else if (d.includes('w')) {
+        const right = orig.x + orig.w;
+        w = Math.max(COMMENT_MIN_W, Math.min(4000, Math.round(orig.w - dx)));
+        x = right - w;
+      }
+      if (d.includes('s')) {
+        h = Math.max(COMMENT_MIN_H, Math.min(4000, Math.round(orig.h + dy)));
+      } else if (d.includes('n')) {
+        const bottom = orig.y + orig.h;
+        h = Math.max(COMMENT_MIN_H, Math.min(4000, Math.round(orig.h - dy)));
+        y = bottom - h;
+      }
+      return { x, y, w, h };
+    }
+
+    /**
+     * Resolve incoming comments from `canvas_generate` (`!merge`) or `canvas_patch` (`merge`)
+     * against the final laid-out/merged `finalNodes`, turning semantic `nodeIds` into exact boxes.
+     */
+    function mergeCommentsForDoc(existingComments, incomingComments, removeIds, finalNodes, merge, forceRefitByNodeIds) {
+      const nodeById = new Map((Array.isArray(finalNodes) ? finalNodes : []).map((n) => [n.id, n]));
+      let minX = 60;
+      let minY = 80;
+      if (Array.isArray(finalNodes) && finalNodes.length) {
+        minX = Infinity;
+        minY = Infinity;
+        for (const n of finalNodes) {
+          if (!n || typeof n.x !== 'number' || typeof n.y !== 'number') continue;
+          if (n.x < minX) minX = n.x;
+          if (n.y < minY) minY = n.y;
+        }
+        if (!Number.isFinite(minX)) { minX = 60; minY = 80; }
+      }
+      const noteBaseX = Math.round(minX);
+      const noteBaseY = Math.round(minY - COMMENT_DEFAULT_H - 36);
+      let noteIdx = 0;
+
+      const sanitizeOne = (raw, prev, idx, usedIds) => {
+        let id = typeof raw.id === 'string' && raw.id.trim()
+          ? raw.id.trim().slice(0, 80)
+          : (prev && prev.id ? prev.id : '');
+        if (!id) {
+          let seq = idx + 1;
+          while (usedIds && usedIds.has('cm-' + seq)) seq += 1;
+          id = 'cm-' + seq;
+        }
+        const matched = Array.isArray(raw.nodeIds) && raw.nodeIds.length
+          ? raw.nodeIds.map((nid) => nodeById.get(nid)).filter(Boolean)
+          : [];
+        const prevMatchesSameSet = (() => {
+          if (!prev || !matched.length) return false;
+          const prevInside = nodesInsideComment(prev, finalNodes).map((n) => n.id);
+          if (prevInside.length !== matched.length) return false;
+          const prevSet = new Set(prevInside);
+          return matched.every((n) => prevSet.has(n.id));
+        })();
+        let box = null;
+        if (matched.length && (forceRefitByNodeIds || !prev || (!prevMatchesSameSet && typeof raw.x !== 'number' && typeof raw.y !== 'number'))) {
+          box = boundsForNodes(matched);
+        }
+        let x;
+        let y;
+        let w;
+        let h;
+        if (box) {
+          x = box.x;
+          y = box.y;
+          w = box.w;
+          h = box.h;
+        } else if (prev) {
+          x = typeof raw.x === 'number' && Number.isFinite(raw.x) ? Math.round(raw.x) : prev.x;
+          y = typeof raw.y === 'number' && Number.isFinite(raw.y) ? Math.round(raw.y) : prev.y;
+          w = typeof raw.w === 'number' && Number.isFinite(raw.w) ? Math.max(COMMENT_MIN_W, Math.min(4000, Math.round(raw.w))) : prev.w;
+          h = typeof raw.h === 'number' && Number.isFinite(raw.h) ? Math.max(COMMENT_MIN_H, Math.min(4000, Math.round(raw.h))) : prev.h;
+        } else if (typeof raw.x === 'number' && Number.isFinite(raw.x) && typeof raw.y === 'number' && Number.isFinite(raw.y)) {
+          x = Math.round(raw.x);
+          y = Math.round(raw.y);
+          w = typeof raw.w === 'number' && Number.isFinite(raw.w) ? Math.max(COMMENT_MIN_W, Math.min(4000, Math.round(raw.w))) : COMMENT_DEFAULT_W;
+          h = typeof raw.h === 'number' && Number.isFinite(raw.h) ? Math.max(COMMENT_MIN_H, Math.min(4000, Math.round(raw.h))) : COMMENT_DEFAULT_H;
+        } else {
+          x = noteBaseX + noteIdx * (COMMENT_DEFAULT_W + 24);
+          y = noteBaseY;
+          w = COMMENT_DEFAULT_W;
+          h = COMMENT_DEFAULT_H;
+          noteIdx += 1;
+        }
+        const defaultColor = matched.length ? 'blue' : 'amber';
+        const color = COMMENT_COLORS.some((p) => p.id === raw.color)
+          ? raw.color
+          : ((prev && prev.color) || defaultColor);
+        const fontSize = Object.prototype.hasOwnProperty.call(COMMENT_FONT_SIZES, raw.fontSize)
+          ? raw.fontSize
+          : ((prev && prev.fontSize) || 'md');
+        const zoomScale = typeof raw.zoomScale === 'boolean'
+          ? raw.zoomScale
+          : (prev ? prev.zoomScale !== false : true);
+        return {
+          id,
+          x,
+          y,
+          w,
+          h,
+          title: typeof raw.title === 'string' ? raw.title.slice(0, 120) : ((prev && prev.title) || ''),
+          body: typeof raw.body === 'string' ? raw.body.slice(0, 4000) : ((prev && prev.body) || ''),
+          color,
+          fontSize,
+          zoomScale,
+        };
+      };
+
+      const incList = Array.isArray(incomingComments) ? incomingComments.filter((c) => c && typeof c === 'object') : [];
+      if (!merge) {
+        const out = [];
+        const seen = new Set();
+        for (let i = 0; i < incList.length && out.length < 80; i += 1) {
+          const item = sanitizeOne(incList[i], null, i, seen);
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          out.push(item);
+        }
+        return out;
+      }
+      const rmSet = new Set((Array.isArray(removeIds) ? removeIds : []).filter((x) => typeof x === 'string').map((x) => x.trim().slice(0, 80)));
+      const cur = (Array.isArray(existingComments) ? existingComments : [])
+        .filter((c) => c && !rmSet.has(c.id))
+        .map((c) => ({ ...c }));
+      const idxById = new Map(cur.map((c, idx) => [c.id, idx]));
+      for (let i = 0; i < incList.length; i += 1) {
+        const raw = incList[i];
+        const rid = typeof raw.id === 'string' ? raw.id.trim().slice(0, 80) : '';
+        if (rid && rmSet.has(rid)) continue;
+        if (rid && idxById.has(rid)) {
+          const idx = idxById.get(rid);
+          cur[idx] = sanitizeOne(raw, cur[idx], i, idxById);
+        } else if (cur.length < 80) {
+          const item = sanitizeOne(raw, null, i, idxById);
+          idxById.set(item.id, cur.length);
+          cur.push(item);
+        }
+      }
+      return cur;
     }
 
     /**
@@ -3190,6 +3671,11 @@ window.__ModuleLoader__.load({
         return initialDir === 'tb' ? layoutGraph(dn, defaultEdges(), 'tb') : dn;
       });
       const [edges, setEdges] = useState(() => (initial ? initial.edges : defaultEdges()));
+      const [comments, setComments] = useState(() => normalizeCommentsUI(initial && initial.comments));
+      const [commentEditFor, setCommentEditFor] = useState(null);
+      const [commentTitleEditId, setCommentTitleEditId] = useState(null);
+      const [commentBodyEditId, setCommentBodyEditId] = useState(null);
+      const [nodeTitleEditId, setNodeTitleEditId] = useState(null);
       const [selectedIds, setSelectedIds] = useState([]);
       const [marquee, setMarquee] = useState(null);
       const [dragging, setDragging] = useState(false);
@@ -3241,6 +3727,8 @@ window.__ModuleLoader__.load({
       const [loopDraft, setLoopDraft] = useState('');
       const rightClickRef = useRef(null);
       const nodeDrag = useRef(null);
+      const commentDrag = useRef(null);
+      const commentResize = useRef(null);
       const panDrag = useRef(null);
       const zoomScrubbing = useRef(false);
       const [panning, setPanning] = useState(false);
@@ -3318,6 +3806,8 @@ window.__ModuleLoader__.load({
       nodesRef.current = nodes;
       const edgesRef = useRef(edges);
       edgesRef.current = edges;
+      const commentsRef = useRef(comments);
+      commentsRef.current = comments;
       const selectedIdsRef = useRef(selectedIds);
       selectedIdsRef.current = selectedIds;
       const skipDirtyOnce = useRef(false);
@@ -3334,6 +3824,7 @@ window.__ModuleLoader__.load({
       const activePresetRef = useRef((initial && typeof initial.presetName === 'string') ? initial.presetName : '');
       const lastSyncedPresetsRef = useRef('');
       const lastSyncedPresetNameRef = useRef('');
+      const lastSyncedCommentsRef = useRef('');
       const lastLocalEditAtRef = useRef(initial && typeof initial.at === 'number' ? initial.at : 0);
       useEffect(() => {
         if (!didInitSaveRef.current) {
@@ -3342,7 +3833,14 @@ window.__ModuleLoader__.load({
         }
         const stamp = applyStamp.current;
         applyStamp.current = null;
-        const payload = { nodes, edges, enabled, direction, presetName: activePresetRef.current || '' };
+        const payload = {
+          nodes,
+          edges,
+          ...(comments.length ? { comments } : null),
+          enabled,
+          direction,
+          presetName: activePresetRef.current || '',
+        };
         if (pendingSaveRef.current && pendingSaveRef.current.timer) {
           clearTimeout(pendingSaveRef.current.timer);
         }
@@ -3364,7 +3862,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(flush, 250);
         pendingSaveRef.current = { sessionId, payload, stamp: editAt, timer };
         return undefined;
-      }, [sessionId, nodes, edges, enabled, direction]);
+      }, [sessionId, nodes, edges, comments, enabled, direction]);
 
       useEffect(() => {
         const flushNow = () => {
@@ -3408,7 +3906,7 @@ window.__ModuleLoader__.load({
           }
           return;
         }
-        if (!enabled || nodeDrag.current) return;
+        if (!enabled || nodeDrag.current || commentDrag.current) return;
         const sig = planSig(true, nodes, edges);
         if (lastSync.current && sig === lastSync.current) {
           setDirty(false);
@@ -3461,26 +3959,35 @@ window.__ModuleLoader__.load({
         return () => document.removeEventListener('mousedown', onDown);
       }, [openModelFor]);
 
+      const serializeWireComments = (curComments, curNodes) => (Array.isArray(curComments) ? curComments : []).map((c) => {
+        const inside = nodesInsideComment(c, curNodes).map((n) => n.id);
+        return { ...c, ...(inside.length ? { nodeIds: inside } : null) };
+      });
+
       // Publishing costs one visible command row in the conversation, so it only
       // happens when the user enables the canvas, loads a preset/import, clears,
       // or asks for it explicitly.
-      const pushPlan = (nextEnabled, overrideNodes, overrideEdges, overrideParallel) => {
+      const pushPlan = (nextEnabled, overrideNodes, overrideEdges, overrideParallel, overrideComments) => {
         try {
           const face = sessionFace(sessionId);
           if (!face || typeof face.command !== 'function') { flash(t('syncFailed')); return Promise.resolve(false); }
           const curNodes = Array.isArray(overrideNodes) ? overrideNodes : nodesRef.current;
           const curEdges = Array.isArray(overrideEdges) ? overrideEdges : edgesRef.current;
+          const curComments = Array.isArray(overrideComments) ? overrideComments : commentsRef.current;
           const sig = planSig(nextEnabled, curNodes, curEdges, overrideParallel);
           const curPresets = loadPresets();
           const presetsSig = JSON.stringify(curPresets);
           const curPresetName = activePresetRef.current || '';
-          if (sig === lastSync.current && presetsSig === lastSyncedPresetsRef.current && curPresetName === lastSyncedPresetNameRef.current) {
+          const wireComments = serializeWireComments(curComments, curNodes);
+          const commentsSig = JSON.stringify(wireComments);
+          if (sig === lastSync.current && presetsSig === lastSyncedPresetsRef.current && curPresetName === lastSyncedPresetNameRef.current && commentsSig === lastSyncedCommentsRef.current) {
             setDirty(false);
             flash(t('upToDate'));
             return Promise.resolve(true);
           }
           const wireObj = JSON.parse(sig);
           if (curPresetName) wireObj.presetName = curPresetName;
+          if (wireComments.length) wireObj.comments = wireComments;
           wireObj.presets = curPresets;
           const line = '/canvas-sync ' + encodeURIComponent(JSON.stringify(wireObj));
           const hasStandardAgent = nextEnabled && curNodes.some((n) => n && n.kind !== 'lead' && n.kind !== 'condition' && (n.preset || 'standard') !== 'minimal');
@@ -3489,6 +3996,7 @@ window.__ModuleLoader__.load({
               lastSync.current = sig;
               lastSyncedPresetsRef.current = presetsSig;
               lastSyncedPresetNameRef.current = curPresetName;
+              lastSyncedCommentsRef.current = commentsSig;
               setDirty(false);
               setRunState(null);
               setDecisionViewFor(null);
@@ -3997,11 +4505,12 @@ window.__ModuleLoader__.load({
         window.addEventListener('blur', onBlurScrub);
       };
 
-      /** Zoom and pan so every node sits comfortably inside the viewport. */
-      const fitView = (targetNodes) => {
+      /** Zoom and pan so every node and comment sits comfortably inside the viewport. */
+      const fitView = (targetNodes, targetComments) => {
         const el = canvasElRef.current;
         const list = Array.isArray(targetNodes) && targetNodes.length ? targetNodes : nodesRef.current;
-        if (!el || !list.length) return;
+        const cmList = Array.isArray(targetComments) ? targetComments : commentsRef.current;
+        if (!el || (!list.length && !cmList.length)) return;
         let minX = Infinity;
         let minY = Infinity;
         let maxX = -Infinity;
@@ -4013,6 +4522,13 @@ window.__ModuleLoader__.load({
           if (n.x + NODE_W > maxX) maxX = n.x + NODE_W;
           const nh = nodeHeight(n);
           if (n.y + nh > maxY) maxY = n.y + nh;
+        }
+        for (const c of cmList) {
+          if (!c || typeof c.x !== 'number' || typeof c.y !== 'number') continue;
+          if (c.x < minX) minX = c.x;
+          if (c.y < minY) minY = c.y;
+          if (c.x + c.w > maxX) maxX = c.x + c.w;
+          if (c.y + c.h > maxY) maxY = c.y + c.h;
         }
         if (!Number.isFinite(minX)) return;
         const hasLoopEdges = edgesRef.current.some((e) => e && e.loop === true);
@@ -4060,6 +4576,7 @@ window.__ModuleLoader__.load({
         historyRef.current.push({
           nodes: nodesRef.current,
           edges: edgesRef.current,
+          comments: commentsRef.current.map((c) => ({ ...c })),
           direction: directionRef.current,
         });
         if (historyRef.current.length > 50) historyRef.current.shift();
@@ -4072,6 +4589,7 @@ window.__ModuleLoader__.load({
         redoRef.current.push({
           nodes: nodesRef.current,
           edges: edgesRef.current,
+          comments: commentsRef.current.map((c) => ({ ...c })),
           direction: directionRef.current,
         });
         if (redoRef.current.length > 50) redoRef.current.shift();
@@ -4081,6 +4599,11 @@ window.__ModuleLoader__.load({
         }
         setNodes(prev.nodes);
         setEdges(prev.edges);
+        setComments(Array.isArray(prev.comments) ? prev.comments : []);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         setSelectedIds([]);
         flash(t('undoDone'));
       };
@@ -4091,6 +4614,7 @@ window.__ModuleLoader__.load({
         historyRef.current.push({
           nodes: nodesRef.current,
           edges: edgesRef.current,
+          comments: commentsRef.current.map((c) => ({ ...c })),
           direction: directionRef.current,
         });
         if (historyRef.current.length > 50) historyRef.current.shift();
@@ -4100,6 +4624,11 @@ window.__ModuleLoader__.load({
         }
         setNodes(next.nodes);
         setEdges(next.edges);
+        setComments(Array.isArray(next.comments) ? next.comments : []);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         setSelectedIds([]);
         flash(t('redoDone'));
       };
@@ -4396,6 +4925,7 @@ window.__ModuleLoader__.load({
         setEdges(cleaned);
         setSelectedIds([]);
         setLoopEditEdgeId(null);
+        setNodeTitleEditId(null);
         flash(t('deletedNode'));
       };
 
@@ -4413,6 +4943,7 @@ window.__ModuleLoader__.load({
         setEdges(cleaned);
         setSelectedIds([]);
         setLoopEditEdgeId(null);
+        setNodeTitleEditId(null);
         flash(targets.length === 1 ? t('deletedNode') : t('deletedNodes') + ' ×' + targets.length);
       };
 
@@ -4433,8 +4964,10 @@ window.__ModuleLoader__.load({
         const dir = overrideDir || directionRef.current;
         pushSnapshot();
         const next = layoutGraph(curNodes, curEdges, dir);
+        const nextComments = refitCommentsAfterLayout(commentsRef.current, curNodes, next);
         setNodes(next);
-        setTimeout(() => fitView(next), 0);
+        setComments(nextComments);
+        setTimeout(() => fitView(next, nextComments), 0);
         flash(t('layoutDone'));
       };
 
@@ -4448,8 +4981,10 @@ window.__ModuleLoader__.load({
         saveDefaultDirection(nextDir);
         if (curNodes.length) {
           const next = layoutGraph(curNodes, curEdges, nextDir);
+          const nextComments = refitCommentsAfterLayout(commentsRef.current, curNodes, next);
           setNodes(next);
-          setTimeout(() => fitView(next), 0);
+          setComments(nextComments);
+          setTimeout(() => fitView(next, nextComments), 0);
         }
       };
 
@@ -4461,10 +4996,15 @@ window.__ModuleLoader__.load({
           skipDirtyOnce.current = true;
           setEnabled(false);
           setDirty(false);
-          pushPlan(false, blank, []);
+          pushPlan(false, blank, [], undefined, []);
         }
         setNodes(blank);
         setEdges([]);
+        setComments([]);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         setSelectedIds([]);
         setRoleEditFor(null);
         setOpenModelFor(null);
@@ -4506,7 +5046,13 @@ window.__ModuleLoader__.load({
           const { runs: _runs, ...rest } = n;
           return rest;
         });
-        const text = JSON.stringify({ nodes: cleanNodes, edges: edgesRef.current, direction: directionRef.current }, null, 2);
+        const doc = {
+          nodes: cleanNodes,
+          edges: edgesRef.current,
+          ...(commentsRef.current.length ? { comments: commentsRef.current } : null),
+          direction: directionRef.current,
+        };
+        const text = JSON.stringify(doc, null, 2);
         copyTextToClipboard(text, t('exportOk'));
       };
 
@@ -4514,6 +5060,187 @@ window.__ModuleLoader__.load({
         const md = formatRunSummaryMarkdown(view, lang);
         if (!md) { flash(t('runSummaryEmpty')); return; }
         copyTextToClipboard(md, t('runSummaryCopied'));
+      };
+
+      const addComment = (atWorld, wrapNodeIds) => {
+        const ids = Array.isArray(wrapNodeIds) ? wrapNodeIds : [];
+        const wrapped = ids.length ? nodesRef.current.filter((n) => ids.includes(n.id)) : [];
+        let box = wrapped.length ? boundsForNodes(wrapped) : null;
+        if (!box) {
+          const pt = (atWorld && typeof atWorld.x === 'number' && typeof atWorld.y === 'number')
+            ? atWorld
+            : viewportCenterWorld();
+          box = {
+            x: Math.round(pt.x - COMMENT_DEFAULT_W / 2),
+            y: Math.round(pt.y - 24),
+            w: COMMENT_DEFAULT_W,
+            h: COMMENT_DEFAULT_H,
+          };
+        }
+        const next = {
+          id: 'cm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5),
+          x: box.x,
+          y: box.y,
+          w: box.w,
+          h: box.h,
+          title: wrapped.length ? t('commentDefaultTitle') : t('commentNoteTitle'),
+          body: '',
+          color: wrapped.length ? 'blue' : 'amber',
+          fontSize: 'md',
+          zoomScale: true,
+        };
+        pushSnapshot();
+        setComments((cs) => cs.concat([next]));
+        setAddMenu(null);
+        setCtxMenu(null);
+        setMenuOpen(false);
+        setPresetOpen(null);
+        setOpenModelFor(null);
+        setRoleEditFor(null);
+        setRefsEditFor(null);
+        setDecisionViewFor(null);
+        setLoopEditEdgeId(null);
+        setCommentEditFor(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
+        setCommentTitleEditId(next.id);
+        flash(t('commentAdded'));
+      };
+
+      const addCommentSmart = () => {
+        if (selectedIdsRef.current.length > 0) {
+          addComment(null, selectedIdsRef.current);
+          return;
+        }
+        const wrap = canvasWrapRef.current;
+        const content = contentRef.current;
+        const mouse = lastMouseRef.current;
+        if (wrap && content && mouse) {
+          const wr = wrap.getBoundingClientRect();
+          if (mouse.clientX >= wr.left && mouse.clientX <= wr.right && mouse.clientY >= wr.top && mouse.clientY <= wr.bottom) {
+            const cr = content.getBoundingClientRect();
+            const k = viewRef.current.k || 1;
+            addComment({ x: (mouse.clientX - cr.left) / k - WORLD_PAD, y: (mouse.clientY - cr.top) / k - WORLD_PAD }, null);
+            return;
+          }
+        }
+        addComment(viewportCenterWorld(), null);
+      };
+
+      const updateComment = (id, patch, recordHistory) => {
+        if (recordHistory) pushSnapshot();
+        setComments((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+      };
+
+      const deleteComment = (id) => {
+        pushSnapshot();
+        setComments((cs) => cs.filter((c) => c.id !== id));
+        setCommentEditFor((cur) => (cur === id ? null : cur));
+        setCommentTitleEditId((cur) => (cur === id ? null : cur));
+        setCommentBodyEditId((cur) => (cur === id ? null : cur));
+        setCtxMenu(null);
+        flash(t('commentDeleted'));
+      };
+
+      const duplicateComment = (id) => {
+        const src = commentsRef.current.find((c) => c.id === id);
+        if (!src) return;
+        const copy = {
+          ...src,
+          id: 'cm-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 5),
+          x: src.x + 28,
+          y: src.y + 28,
+        };
+        pushSnapshot();
+        setComments((cs) => cs.concat([copy]));
+        setCtxMenu(null);
+        flash(t('commentAdded'));
+      };
+
+      const onCommentHeaderDown = (e, cm, clickAction) => {
+        if (e.button === 2) {
+          e.stopPropagation();
+          return;
+        }
+        if (e.button !== 0 || spaceDown.current) return;
+        if (!contentRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setOpenModelFor(null);
+        setAddMenu(null);
+        setCtxMenu(null);
+        setLoopEditEdgeId(null);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
+        const p = pointTo(e);
+        const moveNodes = e.altKey
+          ? []
+          : nodesInsideComment(cm, nodesRef.current).map((n) => ({ id: n.id, x: n.x, y: n.y }));
+        commentDrag.current = {
+          id: cm.id,
+          startX: p.x,
+          startY: p.y,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          origX: cm.x,
+          origY: cm.y,
+          moved: false,
+          clickAction: clickAction || '',
+          moveNodes,
+        };
+        setDragging(true);
+      };
+
+      const onCommentResizeDown = (e, cm, dir) => {
+        if (e.button !== 0 || spaceDown.current) return;
+        if (!contentRef.current) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setOpenModelFor(null);
+        setAddMenu(null);
+        setCtxMenu(null);
+        setLoopEditEdgeId(null);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
+        const p = pointTo(e);
+        commentResize.current = {
+          id: cm.id,
+          dir: dir || 'se',
+          startX: p.x,
+          startY: p.y,
+          origX: cm.x,
+          origY: cm.y,
+          origW: cm.w,
+          origH: cm.h,
+          moved: false,
+        };
+        setDragging(true);
+      };
+
+      const onCommentContextMenu = (e, cm) => {
+        const tag = e.target && e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        e.preventDefault();
+        e.stopPropagation();
+        rightClickRef.current = null;
+        const wrap = canvasWrapRef.current;
+        if (!wrap) return;
+        const wrapRect = wrap.getBoundingClientRect();
+        const pos = clampMenuPos(e.clientX - wrapRect.left, e.clientY - wrapRect.top, wrapRect.width, wrapRect.height, 180, 156);
+        const world = pointTo(e);
+        setCtxMenu({ kind: 'comment', commentId: cm.id, sx: pos.sx, sy: pos.sy, wx: world.x, wy: world.y });
+        setAddMenu(null);
+        setMenuOpen(false);
+        setPresetOpen(null);
+        setOpenModelFor(null);
+        setRoleEditFor(null);
+        setDecisionViewFor(null);
+        setRefsEditFor(null);
+        setLoopEditEdgeId(null);
       };
 
       const openAddMenuAtCursor = () => {
@@ -4540,7 +5267,7 @@ window.__ModuleLoader__.load({
       };
 
       /** Dragging any selected node moves the whole selection together. */
-      const onNodeDown = (e, id) => {
+      const onNodeDown = (e, id, opts) => {
         if (e.button === 2) {
           const tag = e.target && e.target.tagName;
           if (tag !== 'INPUT' && tag !== 'TEXTAREA') e.stopPropagation();
@@ -4558,6 +5285,10 @@ window.__ModuleLoader__.load({
         setAddMenu(null);
         setCtxMenu(null);
         setLoopEditEdgeId(null);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         e.preventDefault();
         e.stopPropagation();
         if (toggledOff) return;
@@ -4565,7 +5296,15 @@ window.__ModuleLoader__.load({
           .map((nid) => nodes.find((n) => n.id === nid))
           .filter(Boolean)
           .map((n) => ({ id: n.id, x: n.x, y: n.y }));
-        nodeDrag.current = { origins, startX: p.x, startY: p.y, moved: false };
+        nodeDrag.current = {
+          origins,
+          startX: p.x,
+          startY: p.y,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          moved: false,
+          clickTitleId: (opts && opts.clickTitle && !additive && id !== 'lead') ? id : '',
+        };
         setDragging(true);
       };
 
@@ -4829,12 +5568,14 @@ window.__ModuleLoader__.load({
         };
       }, []);
 
-      // Configurable canvas keyboard shortcuts (defaults: Shift+A, Shift+D, Delete, Ctrl+Z, Esc).
+      // Configurable canvas keyboard shortcuts (defaults: Shift+A, C, Shift+D, Delete, Ctrl+Z, Esc).
       const keyActionsRef = useRef(null);
       keyActionsRef.current = {
-        undo, redo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, fitView, autoLayout, toggleDirection, flash, t,
+        undo, redo, deleteSelected, duplicateSelected, openAddMenuAtCursor, addNode, addComment, addCommentSmart, fitView, autoLayout, toggleDirection, flash, t,
         addMenu, ctxMenu, loopEditEdgeId, roleEditFor, openModelFor, menuOpen, presetOpen, helpOpen, summaryOpen, shortcutsOpen, recordingAction, decisionViewFor, refsEditFor,
+        commentEditFor, commentTitleEditId, commentBodyEditId, nodeTitleEditId,
         setAddMenu, setCtxMenu, setLoopEditEdgeId, setRoleEditFor, setOpenModelFor, setMenuOpen, setPresetOpen, setHelpOpen, setSummaryOpen, setShortcutsOpen, setRecordingAction, setShortcuts, setDecisionViewFor, setRefsEditFor,
+        setCommentEditFor, setCommentTitleEditId, setCommentBodyEditId, setNodeTitleEditId,
       };
       const summaryIsLive = Boolean(runState && (runState.status === 'running' || runState.status === 'need-lead'));
       // Only tick root `summaryNow` while the Run Summary modal is actually open;
@@ -4879,7 +5620,7 @@ window.__ModuleLoader__.load({
             return;
           }
           if (ev.key === 'Escape') {
-            if (act.addMenu || act.ctxMenu || act.loopEditEdgeId || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.summaryOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor) {
+            if (act.addMenu || act.ctxMenu || act.loopEditEdgeId || act.roleEditFor || act.openModelFor || act.menuOpen || act.presetOpen || act.helpOpen || act.summaryOpen || act.shortcutsOpen || act.decisionViewFor || act.refsEditFor || act.commentEditFor || act.commentTitleEditId || act.commentBodyEditId || act.nodeTitleEditId) {
               ev.preventDefault();
               act.setAddMenu(null);
               act.setCtxMenu(null);
@@ -4894,6 +5635,10 @@ window.__ModuleLoader__.load({
               act.setRecordingAction(null);
               act.setDecisionViewFor(null);
               act.setRefsEditFor(null);
+              act.setCommentEditFor(null);
+              act.setCommentTitleEditId(null);
+              act.setCommentBodyEditId(null);
+              act.setNodeTitleEditId(null);
             }
             return;
           }
@@ -4916,6 +5661,11 @@ window.__ModuleLoader__.load({
               act.addNode('condition', { x: act.addMenu.wx, y: act.addMenu.wy }, lf);
               return;
             }
+            if (ev.key === '4' && !lf) {
+              ev.preventDefault();
+              act.addComment({ x: act.addMenu.wx, y: act.addMenu.wy }, null);
+              return;
+            }
           }
           const root = rootElRef.current;
           const activeInRoot = Boolean(root && document.activeElement && root.contains(document.activeElement));
@@ -4924,6 +5674,11 @@ window.__ModuleLoader__.load({
           if (matchesShortcut(ev, sc.addNode)) {
             ev.preventDefault();
             act.openAddMenuAtCursor();
+            return;
+          }
+          if (matchesShortcut(ev, sc.addComment)) {
+            ev.preventDefault();
+            act.addCommentSmart();
             return;
           }
           const allBound = Object.values(sc).map(normalizeShortcut);
@@ -5010,6 +5765,8 @@ window.__ModuleLoader__.load({
           cancelRaf();
           panDrag.current = null;
           nodeDrag.current = null;
+          commentDrag.current = null;
+          commentResize.current = null;
           rightClickRef.current = null;
           cutRef.current = null;
           cutHits.current = new Set();
@@ -5045,6 +5802,10 @@ window.__ModuleLoader__.load({
         if (roleEditFor) setRoleEditFor(null);
         if (decisionViewFor) setDecisionViewFor(null);
         if (refsEditFor) setRefsEditFor(null);
+        if (commentEditFor) setCommentEditFor(null);
+        if (commentTitleEditId) setCommentTitleEditId(null);
+        if (commentBodyEditId) setCommentBodyEditId(null);
+        if (nodeTitleEditId) setNodeTitleEditId(null);
         if (menuOpen) setMenuOpen(false);
         if (addMenu) setAddMenu(null);
         if (ctxMenu) setCtxMenu(null);
@@ -5077,16 +5838,57 @@ window.__ModuleLoader__.load({
             }
           }
         }
-        if (nodeDrag.current) {
-          const p = pointTo(e);
-          const drag = nodeDrag.current;
-          const dx = p.x - drag.startX;
-          const dy = p.y - drag.startY;
-          // Snapshot once on first actual move (>0.5px) so pure selection clicks do not pollute undo history.
-          if (!drag.moved && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+        if (commentDrag.current) {
+          const drag = commentDrag.current;
+          if (!drag.moved) {
+            if (Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY) < 4) return;
             pushSnapshot();
             drag.moved = true;
           }
+          const p = pointTo(e);
+          const dx = p.x - drag.startX;
+          const dy = p.y - drag.startY;
+          setComments((cs) => cs.map((c) => (c.id === drag.id
+            ? { ...c, x: Math.round(drag.origX + dx), y: Math.round(drag.origY + dy) }
+            : c)));
+          if (drag.moveNodes.length) {
+            const byId = new Map(drag.moveNodes.map((o) => [o.id, o]));
+            setNodes((ns) => ns.map((n) => {
+              const origin = byId.get(n.id);
+              return origin ? { ...n, x: origin.x + dx, y: origin.y + dy } : n;
+            }));
+          }
+          return;
+        }
+        if (commentResize.current) {
+          const p = pointTo(e);
+          const rs = commentResize.current;
+          const dx = p.x - rs.startX;
+          const dy = p.y - rs.startY;
+          if (!rs.moved && (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5)) {
+            pushSnapshot();
+            rs.moved = true;
+          }
+          const nextRect = resizeCommentBox(
+            { x: rs.origX, y: rs.origY, w: rs.origW, h: rs.origH },
+            rs.dir,
+            dx,
+            dy,
+          );
+          setComments((cs) => cs.map((c) => (c.id === rs.id ? { ...c, ...nextRect } : c)));
+          return;
+        }
+        if (nodeDrag.current) {
+          const drag = nodeDrag.current;
+          // 4px screen-pixel hysteresis so pure clicks on node title enter rename cleanly without jitter.
+          if (!drag.moved) {
+            if (Math.hypot(e.clientX - drag.startClientX, e.clientY - drag.startClientY) < 4) return;
+            pushSnapshot();
+            drag.moved = true;
+          }
+          const p = pointTo(e);
+          const dx = p.x - drag.startX;
+          const dy = p.y - drag.startY;
           const byId = new Map(drag.origins.map((o) => [o.id, o]));
           setNodes((ns) => ns.map((n) => {
             const origin = byId.get(n.id);
@@ -5216,7 +6018,23 @@ window.__ModuleLoader__.load({
           panDrag.current = null;
           setPanning(false);
         }
+        const finishedNodeDrag = nodeDrag.current;
+        const finishedCmDrag = commentDrag.current;
         nodeDrag.current = null;
+        commentDrag.current = null;
+        commentResize.current = null;
+        if (finishedNodeDrag && !finishedNodeDrag.moved && finishedNodeDrag.clickTitleId) {
+          setNodeTitleEditId(finishedNodeDrag.clickTitleId);
+        }
+        if (finishedCmDrag && !finishedCmDrag.moved) {
+          if (finishedCmDrag.clickAction === 'title') {
+            setCommentBodyEditId(null);
+            setCommentTitleEditId(finishedCmDrag.id);
+          } else if (finishedCmDrag.clickAction === 'body') {
+            setCommentTitleEditId(null);
+            setCommentBodyEditId(finishedCmDrag.id);
+          }
+        }
         const handled = pendingHandledRef.current;
         pendingHandledRef.current = false;
         if (!handled && pending && pending.dir === 'out') {
@@ -5277,9 +6095,15 @@ window.__ModuleLoader__.load({
           ...(Array.isArray(n.branches) ? { branches: n.branches.map((b) => ({ ...b })) } : null),
         }));
         const savedEdges = edgesRef.current.map((e) => ({ ...e }));
+        const savedComments = commentsRef.current.map((c) => ({ ...c }));
         const next = {
           ...latest,
-          [name]: { nodes: savedNodes, edges: savedEdges, direction: directionRef.current },
+          [name]: {
+            nodes: savedNodes,
+            edges: savedEdges,
+            ...(savedComments.length ? { comments: savedComments } : null),
+            direction: directionRef.current,
+          },
         };
         if (!savePresets(next)) { flash(t('saveFailed')); return; }
         activePresetRef.current = name;
@@ -5305,6 +6129,8 @@ window.__ModuleLoader__.load({
           && (!Array.isArray(doc.edges) || doc.edges.length === 0)
           && (!Array.isArray(doc.removeNodes) || doc.removeNodes.length === 0)
           && (!Array.isArray(doc.removeEdges) || doc.removeEdges.length === 0)
+          && (!Array.isArray(doc.comments) || doc.comments.length === 0)
+          && (!Array.isArray(doc.removeComments) || doc.removeComments.length === 0)
           && doc.task === undefined && doc.refs === undefined
           && typeof doc.enabled === 'boolean';
         if (isPureRemoteToggle) {
@@ -5343,73 +6169,73 @@ window.__ModuleLoader__.load({
         }
         const removedNodes = new Set(normalizedDoc.removeNodes || []);
         const rawIncomingEdges = Array.isArray(normalizedDoc.edges) ? normalizedDoc.edges : [];
-        setNodes((existing) => {
-          const byId = new Map(existing.map((n) => [n.id, n]));
-          const placed = new Map(existing.map((n) => [n.id, { x: n.x, y: n.y }]));
-          let addedCount = 0;
-          const isTB = directionRef.current === 'tb';
-          const incoming = normalizedDoc.nodes.map((n, i) => {
-            const prev = byId.get(n.id) || {};
-            let x = typeof n.x === 'number' ? n.x : prev.x;
-            let y = typeof n.y === 'number' ? n.y : prev.y;
-            if (typeof x !== 'number' || typeof y !== 'number') {
-              // Place a newly patched node downstream of its first upstream node,
-              // respecting the active horizontal (lr) or vertical (tb) flow direction.
-              const parentEdge = rawIncomingEdges.find((e) => e && e.to === n.id && placed.has(e.from));
-              if (parentEdge) {
-                const parentPos = placed.get(parentEdge.from);
-                const parentNode = byId.get(parentEdge.from);
-                if (isTB) {
-                  const targetY = parentPos.y + nodeHeight(parentNode) + 68;
-                  const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.y - targetY) < 40).length;
-                  x = parentPos.x + siblingCount * 292;
-                  y = targetY;
-                } else {
-                  const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.x - (parentPos.x + 300)) < 40).length;
-                  x = parentPos.x + 300;
-                  y = parentPos.y + siblingCount * 240;
-                }
+        const existingNodes = nodesRef.current;
+        const byId = new Map(existingNodes.map((n) => [n.id, n]));
+        const placed = new Map(existingNodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+        let addedCount = 0;
+        const isTB = directionRef.current === 'tb';
+        const incomingNodes = normalizedDoc.nodes.map((n, i) => {
+          const prev = byId.get(n.id) || {};
+          let x = typeof n.x === 'number' ? n.x : prev.x;
+          let y = typeof n.y === 'number' ? n.y : prev.y;
+          if (typeof x !== 'number' || typeof y !== 'number') {
+            // Place a newly patched node downstream of its first upstream node,
+            // respecting the active horizontal (lr) or vertical (tb) flow direction.
+            const parentEdge = rawIncomingEdges.find((e) => e && e.to === n.id && placed.has(e.from));
+            if (parentEdge) {
+              const parentPos = placed.get(parentEdge.from);
+              const parentNode = byId.get(parentEdge.from);
+              if (isTB) {
+                const targetY = parentPos.y + nodeHeight(parentNode) + 68;
+                const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.y - targetY) < 40).length;
+                x = parentPos.x + siblingCount * 292;
+                y = targetY;
               } else {
-                const leadPos = placed.get('lead') || { x: 40, y: 80 };
-                if (isTB) {
-                  x = merge ? leadPos.x + addedCount * 292 : 40 + i * 292;
-                  y = merge ? leadPos.y + NODE_H + 68 : 80;
-                } else {
-                  x = merge ? leadPos.x + 300 : 60 + i * 300;
-                  y = merge ? leadPos.y + (addedCount + 1) * 240 : 80;
-                }
+                const siblingCount = Array.from(placed.values()).filter((p) => Math.abs(p.x - (parentPos.x + 300)) < 40).length;
+                x = parentPos.x + 300;
+                y = parentPos.y + siblingCount * 240;
               }
-              addedCount += 1;
+            } else {
+              const leadPos = placed.get('lead') || { x: 40, y: 80 };
+              if (isTB) {
+                x = merge ? leadPos.x + addedCount * 292 : 40 + i * 292;
+                y = merge ? leadPos.y + NODE_H + 68 : 80;
+              } else {
+                x = merge ? leadPos.x + 300 : 60 + i * 300;
+                y = merge ? leadPos.y + (addedCount + 1) * 240 : 80;
+              }
             }
-            placed.set(n.id, { x, y });
-            if (merge && fromRemote) {
-              // Host merge patches deliver complete canonical node fields; explicitly clear
-              // optional fields that were deleted by `canvas_patch` while keeping visual state.
-              const merged = { ...prev, ...n, x, y };
-              if (!('refs' in n)) delete merged.refs;
-              if (!('branches' in n)) delete merged.branches;
-              if (!('multiMatch' in n)) delete merged.multiMatch;
-              return merged;
-            }
-            return { ...prev, ...n, x, y };
-          });
-          if (!merge) {
-            return (!allHaveCoords || (isTB && !hasExplicitDir))
-              ? layoutGraph(incoming, rawIncomingEdges, directionRef.current)
-              : incoming;
+            addedCount += 1;
           }
-          const touched = new Set(incoming.map((n) => n.id));
-          const kept = existing
-            .filter((n) => !touched.has(n.id) && !removedNodes.has(n.id))
-            .map((n) => {
-              if (n.id !== 'lead') return n;
-              const patch = {};
-              if (typeof doc.task === 'string') patch.task = doc.task;
-              if (Array.isArray(doc.refs)) patch.refs = doc.refs;
-              return Object.keys(patch).length ? { ...n, ...patch } : n;
-            });
-          return kept.concat(incoming);
+          placed.set(n.id, { x, y });
+          if (merge && fromRemote) {
+            // Host merge patches deliver complete canonical node fields; explicitly clear
+            // optional fields that were deleted by `canvas_patch` while keeping visual state.
+            const merged = { ...prev, ...n, x, y };
+            if (!('refs' in n)) delete merged.refs;
+            if (!('branches' in n)) delete merged.branches;
+            if (!('multiMatch' in n)) delete merged.multiMatch;
+            return merged;
+          }
+          return { ...prev, ...n, x, y };
         });
+        const relaidOut = !merge && (!allHaveCoords || (isTB && !hasExplicitDir));
+        const finalNodes = !merge
+          ? (relaidOut ? layoutGraph(incomingNodes, rawIncomingEdges, directionRef.current) : incomingNodes)
+          : (() => {
+              const touched = new Set(incomingNodes.map((n) => n.id));
+              const kept = existingNodes
+                .filter((n) => !touched.has(n.id) && !removedNodes.has(n.id))
+                .map((n) => {
+                  if (n.id !== 'lead') return n;
+                  const patch = {};
+                  if (typeof doc.task === 'string') patch.task = doc.task;
+                  if (Array.isArray(doc.refs)) patch.refs = doc.refs;
+                  return Object.keys(patch).length ? { ...n, ...patch } : n;
+                });
+              return kept.concat(incomingNodes);
+            })();
+        setNodes(finalNodes);
         setEdges((existing) => {
           const incoming = rawIncomingEdges.map((e, i) => {
             const item = {
@@ -5454,8 +6280,30 @@ window.__ModuleLoader__.load({
         setSelectedIds([]);
         snapshotStaleCatalog();
         if (!merge) {
+          const nextComments = mergeCommentsForDoc([], normalizedDoc.comments, [], finalNodes, false, relaidOut);
+          setComments(nextComments);
+          if (fromRemote) {
+            lastSyncedCommentsRef.current = JSON.stringify(serializeWireComments(nextComments, finalNodes));
+          }
+          setCommentEditFor(null);
+          setCommentTitleEditId(null);
+          setCommentBodyEditId(null);
+          setNodeTitleEditId(null);
           setRunsById({});
-          setTimeout(() => fitView(nodesRef.current), 0);
+          setTimeout(() => fitView(finalNodes, nextComments), 0);
+        } else if (Array.isArray(normalizedDoc.comments) || Array.isArray(normalizedDoc.removeComments)) {
+          const nextComments = mergeCommentsForDoc(
+            commentsRef.current,
+            normalizedDoc.comments,
+            normalizedDoc.removeComments,
+            finalNodes,
+            true,
+            false,
+          );
+          setComments(nextComments);
+          if (fromRemote) {
+            lastSyncedCommentsRef.current = JSON.stringify(serializeWireComments(nextComments, finalNodes));
+          }
         }
         return true;
       };
@@ -5751,6 +6599,7 @@ window.__ModuleLoader__.load({
           })),
         }).nodes;
         const clonedEdges = preset.edges.map((e) => ({ ...e }));
+        const clonedComments = normalizeCommentsUI(preset.comments);
         pushSnapshot();
         activePresetRef.current = name;
         if (preset.direction === 'tb' || preset.direction === 'lr') {
@@ -5759,15 +6608,20 @@ window.__ModuleLoader__.load({
         }
         if (enabled) {
           skipDirtyOnce.current = true;
-          pushPlan(true, clonedNodes, clonedEdges);
+          pushPlan(true, clonedNodes, clonedEdges, undefined, clonedComments);
         }
         setNodes(clonedNodes);
         setEdges(clonedEdges);
+        setComments(clonedComments);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         setSelectedIds([]);
         snapshotStaleCatalog();
         setRunsById({});
         setPresetOpen(null);
-        setTimeout(() => fitView(clonedNodes), 0);
+        setTimeout(() => fitView(clonedNodes, clonedComments), 0);
         flash(t('loadedPreset') + ': ' + name);
       };
 
@@ -5779,15 +6633,20 @@ window.__ModuleLoader__.load({
         activePresetRef.current = tpl.name || tpl.id || '';
         if (enabled) {
           skipDirtyOnce.current = true;
-          pushPlan(true, clonedNodes, clonedEdges);
+          pushPlan(true, clonedNodes, clonedEdges, undefined, []);
         }
         setNodes(clonedNodes);
         setEdges(clonedEdges);
+        setComments([]);
+        setCommentEditFor(null);
+        setCommentTitleEditId(null);
+        setCommentBodyEditId(null);
+        setNodeTitleEditId(null);
         setSelectedIds([]);
         snapshotStaleCatalog();
         setRunsById({});
         setPresetOpen(null);
-        setTimeout(() => fitView(clonedNodes), 0);
+        setTimeout(() => fitView(clonedNodes, []), 0);
         flash(t('loadedPreset') + ': ' + tpl.name);
       };
 
@@ -6480,10 +7339,10 @@ window.__ModuleLoader__.load({
         );
       };
 
-      // The canvas grows with its nodes so links past the original size are
+      // The canvas grows with its nodes and comments so links/notes past the original size are
       // still painted instead of being clipped by the SVG viewport.
-      const contentW = Math.max(CONTENT_W, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.x + NODE_W)) + 400);
-      const contentH = Math.max(CONTENT_H, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.y + nodeHeight(n))) + 400);
+      const contentW = Math.max(CONTENT_W, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.x + NODE_W), ...comments.map((c) => c.x + c.w)) + 400);
+      const contentH = Math.max(CONTENT_H, WORLD_PAD + Math.max(0, ...nodes.map((n) => n.y + nodeHeight(n)), ...comments.map((c) => c.y + c.h)) + 400);
 
       const hitTest = (m) => {
         const left = Math.min(m.x1, m.x2);
@@ -7071,6 +7930,7 @@ window.__ModuleLoader__.load({
         shortcutsOpen && (() => {
           const actionLabels = {
             addNode: t('scAddNode'),
+            addComment: t('scAddComment'),
             duplicate: t('scDuplicate'),
             delete: t('scDelete'),
             undo: t('scUndo'),
@@ -7232,6 +8092,12 @@ window.__ModuleLoader__.load({
                 onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
                 onClick: () => addNode('condition', { x: addMenu.wx, y: addMenu.wy }, lf),
               }, h('span', null, t('addCond')), h('span', { style: S.addMenuHint }, '3')),
+              !lf && h('div', {
+                style: S.addMenuRow,
+                onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                onMouseLeave: (e) => { e.currentTarget.style.background = 'transparent'; },
+                onClick: () => addComment({ x: addMenu.wx, y: addMenu.wy }, null),
+              }, h('span', null, t('addComment')), h('span', { style: S.addMenuHint }, '4')),
             );
           })(),
           ctxMenu && (() => {
@@ -7264,6 +8130,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: S.addMenuHead }, t('ctxNodeTitle')),
                 menuRow('edit', t('ctxEditText'), () => { setCtxMenu(null); setRoleEditFor(target.id); }),
                 menuRow('refs', t('ctxManageRefs'), () => { setCtxMenu(null); setRefsEditFor(target.id); }),
+                menuRow('group-cm', t('ctxGroupComment'), () => addComment(null, selList), { hint: shortcuts.addComment || '' }),
                 latestRun && menuRow('chat', t('ctxOpenChat'), () => { setCtxMenu(null); openNodeSession(target); }),
                 existingLoop && h('div', { style: S.ctxDivider }),
                 existingLoop && menuRow('edit-loop', t('ctxEditLoop'), () => {
@@ -7312,6 +8179,28 @@ window.__ModuleLoader__.load({
                     ),
               );
             }
+            if (ctxMenu.kind === 'comment') {
+              const targetCm = comments.find((c) => c.id === ctxMenu.commentId);
+              if (!targetCm) return null;
+              return h('div', {
+                style: { ...S.addMenu, minWidth: '176px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
+                onMouseDown: (e) => e.stopPropagation(),
+                onContextMenu: (e) => e.preventDefault(),
+              },
+                h('div', { style: S.addMenuHead }, t('ctxCommentTitle')),
+                menuRow('cm-rename', t('ctxRenameComment'), () => {
+                  setCtxMenu(null);
+                  setCommentTitleEditId(targetCm.id);
+                }),
+                menuRow('cm-edit', t('ctxEditComment'), () => {
+                  setCtxMenu(null);
+                  setCommentEditFor(targetCm.id);
+                }),
+                menuRow('cm-dup', t('ctxDupComment'), () => duplicateComment(targetCm.id)),
+                h('div', { style: S.ctxDivider }),
+                menuRow('cm-del', t('ctxDelComment'), () => deleteComment(targetCm.id), { danger: true }),
+              );
+            }
             return h('div', {
               style: { ...S.addMenu, minWidth: '176px', left: ctxMenu.sx + 'px', top: ctxMenu.sy + 'px' },
               onMouseDown: (e) => e.stopPropagation(),
@@ -7321,6 +8210,7 @@ window.__ModuleLoader__.load({
               menuRow('add-agent', t('addAgent'), () => addNode('agent', { x: ctxMenu.wx, y: ctxMenu.wy })),
               menuRow('add-lead', t('addLead'), () => addNode('lead', { x: ctxMenu.wx, y: ctxMenu.wy })),
               menuRow('add-cond', t('addCond'), () => addNode('condition', { x: ctxMenu.wx, y: ctxMenu.wy })),
+              menuRow('add-cm', t('ctxAddComment'), () => addComment({ x: ctxMenu.wx, y: ctxMenu.wy }, null), { hint: shortcuts.addComment || '' }),
               h('div', { style: S.ctxDivider }),
               menuRow('undo', t('undo'), () => { setCtxMenu(null); undo(); }, { hint: shortcuts.undo || '' }),
               menuRow('redo', t('redo'), () => { setCtxMenu(null); redo(); }, { hint: shortcuts.redo || '' }),
@@ -7411,6 +8301,326 @@ window.__ModuleLoader__.load({
               transformOrigin: '0 0',
             },
           },
+            comments.map((cm) => {
+              const pal = commentPalette(cm.color);
+              const containedCount = nodesInsideComment(cm, nodes).length;
+              const isGroup = containedCount > 0;
+              const isPopOpen = commentEditFor === cm.id;
+              const isEditingTitle = commentTitleEditId === cm.id;
+              const isEditingBody = !isGroup && commentBodyEditId === cm.id;
+              const titlePx = COMMENT_FONT_SIZES[cm.fontSize] || COMMENT_FONT_SIZES.md;
+              const headScale = commentHeaderScale(view.k, cm.zoomScale);
+              const headBw = (1.5 / headScale).toFixed(2) + 'px';
+              const headDivBw = (1 / headScale).toFixed(2) + 'px';
+              const headRad = (10 / headScale).toFixed(2) + 'px';
+              const headLayoutW = cm.w / headScale;
+              const showHeadActions = headLayoutW >= 126 || isPopOpen;
+              const titleTextShown = (cm.title && cm.title.trim()) || t('commentTitlePh');
+              let estTitleW = 16 + (showHeadActions ? 48 : 0);
+              for (let ti = 0; ti < titleTextShown.length; ti += 1) {
+                estTitleW += titleTextShown.charCodeAt(ti) > 255 ? (titlePx * 1.04) : (titlePx * 0.62);
+              }
+              const headCanExpand = headScale > 1.01 && !isEditingTitle;
+              const headOverhang = headCanExpand && estTitleW > headLayoutW + 2;
+              const hasBody = Boolean(cm.body && cm.body.trim());
+              const firstBodyLine = hasBody ? cm.body.trim().split(/\r?\n/)[0].slice(0, 80) : '';
+              return h('div', {
+                key: cm.id,
+                'data-comment-id': cm.id,
+                'data-comment-mode': isGroup ? 'group' : 'note',
+                style: {
+                  ...S.commentBox,
+                  left: (cm.x + WORLD_PAD) + 'px',
+                  top: (cm.y + WORLD_PAD) + 'px',
+                  width: cm.w + 'px',
+                  height: cm.h + 'px',
+                  zIndex: isPopOpen ? 68 : 0,
+                  pointerEvents: 'none',
+                },
+              },
+                h('div', {
+                  'data-comment-body': cm.id,
+                  style: {
+                    ...S.commentBody,
+                    background: pal.bg,
+                    borderLeft: '1.5px solid ' + pal.border,
+                    borderRight: '1.5px solid ' + pal.border,
+                    borderBottom: '1.5px solid ' + pal.border,
+                    borderTop: 'none',
+                  },
+                }),
+                h('div', {
+                  style: {
+                    ...S.commentHeader,
+                    bottom: 'calc(100% - ' + COMMENT_HEADER_H + 'px)',
+                    width: headCanExpand
+                      ? 'max-content'
+                      : (isEditingTitle && headScale > 1.01
+                        ? Math.max(headLayoutW, 180).toFixed(1) + 'px'
+                        : (headScale > 1.01 ? (100 / headScale).toFixed(3) + '%' : '100%')),
+                    minWidth: headCanExpand ? (100 / headScale).toFixed(3) + '%' : undefined,
+                    maxWidth: headCanExpand ? Math.max(headLayoutW, 480).toFixed(1) + 'px' : undefined,
+                    background: pal.headBg,
+                    borderTop: headBw + ' solid ' + pal.border,
+                    borderLeft: headBw + ' solid ' + pal.border,
+                    borderRight: headBw + ' solid ' + pal.border,
+                    borderBottom: headDivBw + ' solid ' + pal.border,
+                    borderRadius: headRad + ' ' + headRad + ' ' + (headOverhang ? (6 / headScale).toFixed(2) + 'px' : '0') + ' 0',
+                    transform: headScale > 1.01 ? ('scale(' + headScale.toFixed(4) + ')') : undefined,
+                    transformOrigin: 'left bottom',
+                  },
+                  title: t('commentHeaderTip'),
+                  onMouseDown: (e) => onCommentHeaderDown(e, cm, 'title'),
+                  onContextMenu: (e) => onCommentContextMenu(e, cm),
+                  onDoubleClick: (e) => {
+                    e.stopPropagation();
+                    setCommentTitleEditId(cm.id);
+                  },
+                },
+                  isEditingTitle
+                    ? h('input', {
+                        style: { ...S.commentTitleInput, fontSize: Math.min(16, titlePx) + 'px' },
+                        value: cm.title,
+                        maxLength: 120,
+                        placeholder: t('commentTitlePh'),
+                        autoFocus: true,
+                        onMouseDown: (e) => e.stopPropagation(),
+                        onDoubleClick: (e) => e.stopPropagation(),
+                        onChange: (e) => updateComment(cm.id, { title: e.target.value.slice(0, 120) }),
+                        onBlur: () => setCommentTitleEditId((cur) => (cur === cm.id ? null : cur)),
+                        onKeyDown: (e) => {
+                          if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                          if (e.key === 'Enter' || e.key === 'Escape') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setCommentTitleEditId(null);
+                          }
+                        },
+                      })
+                    : h('span', {
+                        style: {
+                          ...S.commentTitleText,
+                          fontSize: titlePx + 'px',
+                          opacity: cm.title && cm.title.trim() ? 0.96 : 0.55,
+                        },
+                      }, titleTextShown),
+                  showHeadActions && h('button', {
+                    type: 'button',
+                    style: {
+                      ...S.commentHeadBtn,
+                      color: (isPopOpen || hasBody) ? pal.accent : C.dim,
+                      background: isPopOpen ? C.hover : 'transparent',
+                    },
+                    title: firstBodyLine ? (firstBodyLine + '\n' + t('commentStyleTip')) : t('commentStyleTip'),
+                    onMouseDown: (e) => e.stopPropagation(),
+                    onDoubleClick: (e) => e.stopPropagation(),
+                    onMouseEnter: (e) => { e.currentTarget.style.background = C.hover; },
+                    onMouseLeave: (e) => { e.currentTarget.style.background = isPopOpen ? C.hover : 'transparent'; },
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      setCommentBodyEditId(null);
+                      setCommentTitleEditId(null);
+                      setCommentEditFor(isPopOpen ? null : cm.id);
+                    },
+                  }, '📝'),
+                  showHeadActions && h('button', {
+                    type: 'button',
+                    style: S.commentHeadBtn,
+                    title: t('commentDelTip'),
+                    onMouseDown: (e) => e.stopPropagation(),
+                    onDoubleClick: (e) => e.stopPropagation(),
+                    onMouseEnter: (e) => { e.currentTarget.style.color = '#e5534b'; e.currentTarget.style.background = C.hover; },
+                    onMouseLeave: (e) => { e.currentTarget.style.color = C.dim; e.currentTarget.style.background = 'transparent'; },
+                    onClick: (e) => {
+                      e.stopPropagation();
+                      deleteComment(cm.id);
+                    },
+                  }, '×'),
+                ),
+                !isGroup && (isEditingBody
+                  ? h('textarea', {
+                      style: S.commentNoteArea,
+                      value: cm.body,
+                      maxLength: 4000,
+                      placeholder: t('commentBodyPh'),
+                      autoFocus: true,
+                      onMouseDown: (e) => e.stopPropagation(),
+                      onChange: (e) => updateComment(cm.id, { body: e.target.value.slice(0, 4000) }),
+                      onBlur: () => setCommentBodyEditId((cur) => (cur === cm.id ? null : cur)),
+                      onKeyDown: (e) => {
+                        if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCommentBodyEditId(null);
+                        }
+                      },
+                    })
+                  : h('div', {
+                      style: {
+                        ...S.commentNoteBody,
+                        color: hasBody ? C.text : C.dim,
+                        opacity: hasBody ? 0.92 : 0.56,
+                      },
+                      onMouseDown: (e) => onCommentHeaderDown(e, cm, 'body'),
+                      onContextMenu: (e) => onCommentContextMenu(e, cm),
+                      onDoubleClick: (e) => {
+                        e.stopPropagation();
+                        setCommentBodyEditId(cm.id);
+                      },
+                    }, hasBody ? cm.body : t('commentBodyHint'))),
+                isPopOpen && h('div', {
+                  style: {
+                    ...S.commentPopover,
+                    ...(headScale > 1.01
+                      ? { left: '0', right: 'auto', transform: 'scale(' + headScale.toFixed(4) + ')', transformOrigin: 'left top' }
+                      : null),
+                  },
+                  onMouseDown: (e) => e.stopPropagation(),
+                  onDoubleClick: (e) => e.stopPropagation(),
+                },
+                  h('div', {
+                    style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '7px', fontSize: '10px', fontWeight: 600, color: C.dim },
+                  },
+                    h('span', null, t('ctxEditComment')),
+                    h('button', {
+                      type: 'button',
+                      style: { background: 'transparent', border: 'none', color: C.dim, cursor: 'pointer', fontSize: '13px', padding: '0 2px', lineHeight: '14px' },
+                      onClick: () => setCommentEditFor(null),
+                    }, '×'),
+                  ),
+                  h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' } },
+                    h('input', {
+                      style: { ...S.refsInput, flex: '1 1 auto', height: '24px', fontSize: '11px' },
+                      value: cm.title,
+                      maxLength: 120,
+                      placeholder: t('commentTitlePh'),
+                      onChange: (e) => updateComment(cm.id, { title: e.target.value.slice(0, 120) }),
+                      onKeyDown: (e) => {
+                        if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                        if (e.key === 'Escape') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setCommentEditFor(null);
+                        }
+                      },
+                    }),
+                    h('span', { style: { fontSize: '9px', color: C.dim, fontVariantNumeric: 'tabular-nums', flex: '0 0 auto' } }, (cm.title || '').length + '/120'),
+                  ),
+                  h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '7px' } },
+                    h('span', { style: { fontSize: '10px', color: C.dim, flex: '0 0 auto' } }, t('commentColorLabel')),
+                    h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } },
+                      COMMENT_COLORS.map((cOpt) => {
+                        const activeColor = cm.color === cOpt.id;
+                        return h('button', {
+                          key: cOpt.id,
+                          type: 'button',
+                          style: {
+                            ...S.commentColorDot,
+                            background: cOpt.accent,
+                            border: activeColor ? '2px solid ' + C.text : '1px solid rgba(255,255,255,0.22)',
+                            boxShadow: activeColor ? ('0 0 0 2px ' + cOpt.border) : 'none',
+                          },
+                          onClick: () => updateComment(cm.id, { color: cOpt.id }, true),
+                        });
+                      }),
+                    ),
+                  ),
+                  h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '7px' } },
+                    h('span', { style: { fontSize: '10px', color: C.dim, flex: '0 0 auto' } }, t('commentSizeLabel')),
+                    h('div', { style: { display: 'inline-flex', alignItems: 'center', gap: '4px' } },
+                      [
+                        { id: 'sm', label: t('commentSizeSm') },
+                        { id: 'md', label: t('commentSizeMd') },
+                        { id: 'lg', label: t('commentSizeLg') },
+                      ].map((szOpt) => {
+                        const activeSz = (cm.fontSize || 'md') === szOpt.id;
+                        return h('button', {
+                          key: szOpt.id,
+                          type: 'button',
+                          style: activeSz ? S.condModeBtnOn : S.condAddBtn,
+                          onClick: () => updateComment(cm.id, { fontSize: szOpt.id }, true),
+                        }, szOpt.label);
+                      }),
+                    ),
+                  ),
+                  h('label', {
+                    style: { display: 'flex', alignItems: 'center', gap: '6px', fontSize: '10px', color: C.text, marginBottom: '8px', cursor: 'pointer', userSelect: 'none' },
+                  },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: cm.zoomScale !== false,
+                      onChange: (e) => updateComment(cm.id, { zoomScale: Boolean(e.target.checked) }, true),
+                    }),
+                    h('span', null, t('commentZoomLabel')),
+                  ),
+                  h('textarea', {
+                    style: S.commentPopArea,
+                    value: cm.body,
+                    maxLength: 4000,
+                    placeholder: t('commentBodyPh'),
+                    onChange: (e) => updateComment(cm.id, { body: e.target.value.slice(0, 4000) }),
+                    onKeyDown: (e) => {
+                      if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                      if (e.key === 'Escape') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setCommentEditFor(null);
+                      }
+                    },
+                  }),
+                  h('div', { style: { textAlign: 'right', fontSize: '9px', color: C.dim, marginTop: '3px', fontVariantNumeric: 'tabular-nums' } }, (cm.body || '').length + '/4000'),
+                ),
+                h('div', {
+                  style: { position: 'absolute', left: '-4px', top: (COMMENT_HEADER_H + 4) + 'px', bottom: '8px', width: '8px', cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 3 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'w'),
+                }),
+                h('div', {
+                  style: { position: 'absolute', right: '-4px', top: (COMMENT_HEADER_H + 4) + 'px', bottom: '8px', width: '8px', cursor: 'ew-resize', pointerEvents: 'auto', zIndex: 3 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'e'),
+                }),
+                h('div', {
+                  style: { position: 'absolute', left: '8px', right: '8px', bottom: '-4px', height: '8px', cursor: 'ns-resize', pointerEvents: 'auto', zIndex: 3 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 's'),
+                }),
+                h('div', {
+                  style: { position: 'absolute', left: '-5px', top: Math.round(COMMENT_HEADER_H - COMMENT_HEADER_H * headScale - 5) + 'px', width: '12px', height: '12px', cursor: 'nwse-resize', pointerEvents: 'auto', zIndex: 4 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'nw'),
+                }),
+                h('div', {
+                  style: {
+                    position: 'absolute',
+                    right: '-5px',
+                    top: (headOverhang ? (COMMENT_HEADER_H - 6) : Math.round(COMMENT_HEADER_H - COMMENT_HEADER_H * headScale - 5)) + 'px',
+                    width: '12px',
+                    height: '12px',
+                    cursor: 'nesw-resize',
+                    pointerEvents: 'auto',
+                    zIndex: 4,
+                  },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'ne'),
+                }),
+                h('div', {
+                  style: { position: 'absolute', left: '-5px', bottom: '-5px', width: '12px', height: '12px', cursor: 'nesw-resize', pointerEvents: 'auto', zIndex: 4 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'sw'),
+                }),
+                h('div', {
+                  style: { ...S.commentResize, zIndex: 4 },
+                  title: t('commentResizeTip'),
+                  onMouseDown: (e) => onCommentResizeDown(e, cm, 'se'),
+                },
+                  h('svg', { width: 10, height: 10, viewBox: '0 0 10 10', style: { display: 'block', pointerEvents: 'none' } },
+                    h('path', { d: 'M 9 3 L 3 9 M 9 6.5 L 6.5 9', stroke: pal.accent, strokeWidth: 1.4, strokeLinecap: 'round' }),
+                  ),
+                ),
+              );
+            }),
             h('svg', { width: contentW, height: contentH, style: { position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' } },
               h('g', null, edgeEls),
               cutPath.length > 1 && h('polyline', {
@@ -7804,13 +9014,28 @@ window.__ModuleLoader__.load({
                     })(),
                 isEntry
                   ? h('div', { style: S.titleReadonly }, t('leadThis'))
-                  : h('input', {
-                      style: S.title,
-                      value: node.label,
-                      onMouseDown: (e) => e.stopPropagation(),
-                      onFocus: () => setSelectedIds([node.id]),
-                      onChange: (e) => updateNode(node.id, { label: e.target.value }),
-                    }),
+                  : (nodeTitleEditId === node.id
+                    ? h('input', {
+                        style: S.title,
+                        value: node.label,
+                        autoFocus: true,
+                        onMouseDown: (e) => e.stopPropagation(),
+                        onFocus: () => setSelectedIds([node.id]),
+                        onBlur: () => setNodeTitleEditId((cur) => (cur === node.id ? null : cur)),
+                        onKeyDown: (e) => {
+                          if ((e.nativeEvent && e.nativeEvent.isComposing) || e.keyCode === 229) return;
+                          if (e.key === 'Enter' || e.key === 'Escape') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setNodeTitleEditId(null);
+                          }
+                        },
+                        onChange: (e) => updateNode(node.id, { label: e.target.value }),
+                      })
+                    : h('div', {
+                        style: { ...S.titleReadonly, cursor: 'grab' },
+                        onMouseDown: (e) => onNodeDown(e, node.id, { clickTitle: true }),
+                      }, node.label || '')),
                 isEntry
                   ? h(React.Fragment, null,
                     h('div', { style: S.leadLabel },
@@ -8099,7 +9324,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, COMMENT_COLORS, COMMENT_FONT_SIZES, normalizeCommentsUI, nodesInsideComment, boundsForNodes, refitCommentsAfterLayout, commentHeaderScale, resizeCommentBox, mergeCommentsForDoc, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

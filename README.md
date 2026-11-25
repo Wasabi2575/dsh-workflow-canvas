@@ -92,6 +92,9 @@ Drop a **Condition** node anywhere in the graph to route downstream automaticall
   - **Clear visuals & free limit control**: Loop members get a color-coded outer dashed outline & `↺` badge (never clashing with running/done/failed borders), connected by an outer bypass rail; click the midpoint **`↺ ×3`** pill to adjust max retries (`1–10`) or remove the loop.
   - **Feedback & circuit-break**: Retries reset only strict loop members (bypass nodes are never re-run), inject the condition's rejection reason while reusing healthy warm sessions, and circuit-break at max retries by handing all round summaries to the nearest downstream Lead.
 - **Per-node & global `+ Refs` list**: Click **`+ Refs`** in the top-right title bar of any node (Entry Lead global refs, downstream Leads, Subagents, or Condition nodes) to attach up to 16 reference file paths, URLs, or constraints — deduplicated and injected into prompts automatically at run time.
+- **Comment frames & standalone notes (`C` / right-click)**: Select nodes and press `C` (or right-click **`💬 Group with comment`**) to wrap them in a real-time geometric comment frame, or press `C` on blank canvas for a standalone note; drag the header to move contained nodes together (hold `Alt` for box only), resize from 3 edges or any of the 4 corners, click title/note to edit inline, customize 6 theme-safe colors / S-M-L font size / zoomed-out title readability, and let the agent inspect/create/patch comments semantically via `nodeIds` (zero subagent execution tokens).
+
+![Comment frame wrapping workflow nodes](docs/images/comment-box-en.png)
 
 ![Controlled retry loop: Implement → Test & Verify → Checks Passed ↺ Auto-fix](docs/images/retry-loop-en.png)
 
@@ -124,7 +127,7 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 ## Let the agent draw or edit the canvas from chat
 
 - **Sketch from one sentence** (`canvas_generate`): *"Build a parallel research workflow on the canvas: two subagents investigate competitors and feasibility, pause for me to decide, then write the plan."*
-- **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Upgrade the condition node to 3 branches (Pass / Minor Fix / Rewrite) and re-wire downstream."* (Updates in place while preserving your layout.)
+- **Patch in place** (`canvas_inspect` + `canvas_patch`): *"Upgrade the condition node to 3 branches (Pass / Minor Fix / Rewrite), re-wire downstream, and group the first two research nodes in a blue comment frame."* (Updates in place while preserving your layout, including reading/adding/editing/removing comment frames & notes.)
 - **Switch presets or toggle on/off** (`canvas_preset`): *"List my saved presets and switch to the SWE Delivery workflow"* or *"Disable the canvas for now"* (works even when the canvas is disabled; also alerts you when an enabled workflow doesn't match your request).
 
 ![In-place canvas editing from chat via canvas_patch](docs/images/chat-patch-canvas.gif)
@@ -133,7 +136,8 @@ Active nodes glow blue with animated flow wires and turn green when done. **Clic
 
 | Control / Shortcut | Action |
 |---|---|
-| `Shift+A` / Drag-wire drop | Add a node at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition) |
+| `Shift+A` / Drag-wire drop | Add a node or comment at cursor, or drag from an output socket onto blank canvas to create & auto-connect (`1` Subagent, `2` Lead, `3` Condition, `4` Comment) |
+| `C` / Right-click `💬 Group with comment / Add comment` | Press `C` with nodes selected to wrap them in a group comment frame, or on blank canvas for a standalone note (zero extra tokens); drag the header to move contained nodes together (hold `Alt` for box only), click title/body to edit inline, click `📝` for title, body, 6 colors, font size & zoom readability; auto-refits on auto-layout & direction flip and persists in presets, JSON export/import, and Undo/Redo |
 | Middle-drag / `Space` + left-drag | Pan the canvas |
 | Wheel / bottom-right `⊡` & `100%` pill | Zoom around cursor / fit all nodes / click to reset 100%, drag left-right to scrub zoom |
 | `⇄ Horiz` / `⇅ Vert` | Switch canvas direction and auto-layout, **remembered as the default for new sessions** (vertical mode uses top-in / bottom-out curves; Condition nodes support `Out R / Out L` side toggle) |

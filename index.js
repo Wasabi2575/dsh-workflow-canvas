@@ -34,6 +34,8 @@ import {
   downstreamLabels,
   normalizeKind,
   normalizeRefs,
+  normalizeComments,
+  applyCommentPatch,
   normalizeBranch,
   normalizeBranches,
   conditionBranches,
@@ -818,6 +820,9 @@ function inspectPlan(sid) {
     out.presetName = payload.presetName.trim();
   }
   if (planRefs) out.refs = planRefs;
+  const validIds = new Set(['lead', ...nodes.map((n) => n.id)]);
+  const comments = normalizeComments(payload.comments, { validNodeIds: validIds });
+  if (comments.length) out.comments = comments;
   // Never attach `error: undefined`: DSH's lossless JSON validator rejects keys with undefined values.
   if (payload.error) out.error = String(payload.error);
   return out;
@@ -879,6 +884,8 @@ function buildActiveCanvasContext(sid) {
   );
   if (loopCount > 0) metaParts.push(loopCount + ' 条受控回环（自动按条件重试与超限熔断）');
   if (globalRefs.length > 0) metaParts.push('全局参考 ×' + globalRefs.length);
+  const commentCount = Array.isArray(payload.comments) ? payload.comments.length : 0;
+  if (commentCount > 0) metaParts.push('注释 ×' + commentCount);
   const lines = [
     '[Workflow Canvas Active]',
     '右侧画布「● 已启用」（' + metaParts.join('；') + '）。',
@@ -1035,6 +1042,7 @@ function handleCanvasPreset(scope, sid, args) {
     enabled: nextEnabled,
     presetName: match.name,
     plan,
+    ...(Array.isArray(canvasDoc.comments) && canvasDoc.comments.length ? { comments: canvasDoc.comments } : null),
   }, MAX_STORED_SESSIONS);
   runBySession.delete(key);
   lastRunBySession.delete(key);
@@ -2210,6 +2218,11 @@ export function apply(ctx) {
                 syncPresetsCatalog(next.presets);
                 delete next.presets;
               }
+              if (next && next.comments !== undefined) {
+                const normCm = normalizeComments(next.comments);
+                if (normCm.length) next.comments = normCm;
+                else delete next.comments;
+              }
               touchMapLRU(canvasBySession, id, next, MAX_STORED_SESSIONS);
               const curRun = runBySession.get(id);
               const sameActivePlan = Boolean(
@@ -2300,6 +2313,11 @@ export function apply(ctx) {
                   required: ['from', 'to'],
                 },
               },
+              comments: {
+                type: 'array',
+                description: 'Optional comment frames/notes: {id?, title, body?, color?, fontSize?, nodeIds?}.',
+                items: { type: 'object' },
+              },
             },
             required: ['nodes'],
           },
@@ -2319,6 +2337,7 @@ export function apply(ctx) {
               const canvas = v.canvas || {};
               const nodes = Array.isArray(canvas.nodes) ? canvas.nodes : [];
               const edges = Array.isArray(canvas.edges) ? canvas.edges : [];
+              const comments = Array.isArray(canvas.comments) ? canvas.comments : [];
               const lines = nodes.map((n) => '- [' + n.id + '] '
                 + (n.kind === 'lead' ? '〔Lead〕' : (n.kind === 'condition' ? '〔条件〕' : ''))
                 + n.label
@@ -2328,7 +2347,8 @@ export function apply(ctx) {
                 : '';
               return [{
                 type: 'text',
-                text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线\n'
+                text: '已生成画布：' + nodes.length + ' 个节点、' + edges.length + ' 条连线'
+                  + (comments.length ? ('、' + comments.length + ' 条注释') : '') + '\n'
                   + lines.join('\n')
                   + warnBlock
                   + (v.delivered
@@ -2348,7 +2368,12 @@ export function apply(ctx) {
               const sid = agent && agent.id !== undefined ? String(agent.id) : '';
               const previous = sid ? canvasBySession.get(sid) : undefined;
               const nextEnabled = previous ? Boolean(previous.enabled) : true;
-              const canvas = { nodes: result.nodes, edges: result.edges, enabled: nextEnabled };
+              const canvas = {
+                nodes: result.nodes,
+                edges: result.edges,
+                ...(Array.isArray(result.comments) && result.comments.length ? { comments: result.comments } : null),
+                enabled: nextEnabled,
+              };
               const delivered = sid ? publishCanvas(scope, sid, canvas) : false;
               if (sid) {
                 const entryNode = canvas.nodes.find((n) => n && n.id === 'lead');
@@ -2362,6 +2387,7 @@ export function apply(ctx) {
                 touchMapLRU(canvasBySession, sid, {
                   enabled: nextEnabled,
                   plan: planObj,
+                  ...(Array.isArray(result.comments) && result.comments.length ? { comments: result.comments } : null),
                 }, MAX_STORED_SESSIONS);
                 runBySession.delete(sid);
                 lastRunBySession.delete(sid);
@@ -2383,7 +2409,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_patch',
-          description: 'Edit the current canvas in place (keeps layout): update/add/remove nodes and links. Prefer over canvas_generate for edits.',
+          description: 'Edit the current canvas in place (keeps layout): update/add/remove nodes, links, and comments. Prefer over canvas_generate for edits.',
           parameters: {
             type: 'object',
             properties: {
@@ -2393,6 +2419,8 @@ export function apply(ctx) {
               removeNodes: { type: 'array', items: { type: 'string' } },
               edges: { type: 'array', items: { type: 'object' } },
               removeEdges: { type: 'array', description: 'Match by from/to.', items: { type: 'object' } },
+              comments: { type: 'array', description: 'Comments to upsert by id or add ({id?, title, body?, color?, fontSize?, nodeIds?}).', items: { type: 'object' } },
+              removeComments: { type: 'array', items: { type: 'string' } },
             },
           },
           output: {
@@ -2422,9 +2450,23 @@ export function apply(ctx) {
               if (!payload || !payload.plan) return { error: '当前会话还没有画布数据，先用「启用」同步一次。' };
               const patched = applyPatch(payload.plan, args);
               const nextPlan = patched.plan;
-              touchMapLRU(canvasBySession, sid, { enabled: payload.enabled, plan: nextPlan }, MAX_STORED_SESSIONS);
-              runBySession.delete(sid);
-              publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
+              const validNodeIds = new Set(['lead', ...nextPlan.nodes.map((n) => n.id)]);
+              const cmPatched = applyCommentPatch(payload.comments, args, validNodeIds);
+              const nextSessionRec = {
+                enabled: payload.enabled,
+                ...(typeof payload.presetName === 'string' && payload.presetName ? { presetName: payload.presetName } : null),
+                plan: nextPlan,
+                ...(cmPatched.comments.length ? { comments: cmPatched.comments } : null),
+              };
+              touchMapLRU(canvasBySession, sid, nextSessionRec, MAX_STORED_SESSIONS);
+              const planChanged = patched.touched.length > 0 || patched.removed.length > 0
+                || patched.taskPatched || patched.refsPatched
+                || (Array.isArray(args && args.edges) && args.edges.length > 0)
+                || (Array.isArray(args && args.removeEdges) && args.removeEdges.length > 0);
+              if (planChanged) {
+                runBySession.delete(sid);
+                publishRunState(scope, sid, { status: 'idle', decisions: {}, pruned: [], blockedEdges: [], waitingLead: null });
+              }
               saveStore();
               const patchDoc = {
                 mode: 'merge',
@@ -2435,14 +2477,19 @@ export function apply(ctx) {
               };
               if (patched.taskPatched) patchDoc.task = nextPlan.task;
               if (patched.refsPatched) patchDoc.refs = nextPlan.refs || [];
+              if (cmPatched.patchItems.length) patchDoc.comments = cmPatched.patchItems;
+              if (cmPatched.removed.length) patchDoc.removeComments = cmPatched.removed;
               const delivered = publishCanvas(scope, sid, patchDoc);
               const warnings = [
                 ...(Array.isArray(patched.warnings) ? patched.warnings : []),
+                ...(Array.isArray(cmPatched.warnings) ? cmPatched.warnings : []),
                 ...analyzeCanvasWarnings(nextPlan.nodes, nextPlan.edges),
               ];
               const summary = '已更新 ' + patched.touched.length + ' 个节点'
                 + (patched.taskPatched ? '、已更新总任务' : '')
-                + '、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条';
+                + '、删除 ' + patched.removed.length + ' 个、连线 ' + nextPlan.edges.length + ' 条'
+                + (cmPatched.touched.length ? ('、更新注释 ' + cmPatched.touched.length + ' 条') : '')
+                + (cmPatched.removed.length ? ('、删除注释 ' + cmPatched.removed.length + ' 条') : '');
               return { delivered, summary, warnings };
             } catch (error) {
               return { error: String((error && error.message) || error) };
@@ -2458,7 +2505,7 @@ export function apply(ctx) {
       try {
         scope.effect(() => scope.tools.register({
           name: 'canvas_inspect',
-          description: 'Read current session canvas (enabled, presetName, task, nodes, links, paused). Call before canvas_patch.',
+          description: 'Read current session canvas (enabled, presetName, task, nodes, links, comments, paused). Call before canvas_patch.',
           parameters: {
             type: 'object',
             properties: {},
@@ -2475,6 +2522,7 @@ export function apply(ctx) {
                 refs: { type: 'array', items: { type: 'string' } },
                 nodes: { type: 'array' },
                 edges: { type: 'array' },
+                comments: { type: 'array' },
                 warnings: { type: 'array', items: { type: 'string' } },
                 paused: { type: 'boolean' },
                 error: { type: 'string' },
@@ -2521,12 +2569,22 @@ export function apply(ctx) {
                 + ' --(' + e.type + (e.branch ? ':' + e.branch : '')
                 + (e.loop ? ', ↺ loop ×' + normalizeMaxIterations(e.maxIterations) : '')
                 + ')--> ' + e.to);
+              const commentLines = Array.isArray(v.comments) && v.comments.length
+                ? v.comments.map((cm) => {
+                  const meta = [cm.color || 'gray'];
+                  if (Array.isArray(cm.nodeIds) && cm.nodeIds.length) meta.push('包裹: ' + cm.nodeIds.join(', '));
+                  else meta.push('独立便签');
+                  return '- [' + cm.id + '] ' + (cm.title || '（无标题）') + ' (' + meta.join(', ') + ')'
+                    + (cm.body ? '：' + cm.body : '');
+                })
+                : [];
               return [{
                 type: 'text',
                 text: head.join('\n')
                   + warnBlock
                   + '\n\n节点（' + nodeLines.length + '）：\n' + (nodeLines.join('\n') || '（无）')
-                  + '\n\n连线（' + edgeLines.length + '）：\n' + (edgeLines.join('\n') || '（无）'),
+                  + '\n\n连线（' + edgeLines.length + '）：\n' + (edgeLines.join('\n') || '（无）')
+                  + (commentLines.length ? ('\n\n注释（' + commentLines.length + '）：\n' + commentLines.join('\n')) : ''),
               }];
             },
           },
@@ -2815,6 +2873,8 @@ export {
   briefFor,
   normalizeBranches,
   normalizeRefs,
+  normalizeComments,
+  applyCommentPatch,
   normalizeMaxIterations,
   loopMemberIds,
   validateLoopEdges,

@@ -49,10 +49,14 @@ are performed by the conversation itself.
   duplicate/delete, layout, undo/redo) without conflicting with right-drag wire
   cutting (`>= 6px`). Bottom-right floating `⊡ | 100%` pill handles fit and
   scrub zoom, and simultaneous pan + wheel zoom stays anchored without drift.
-- **Multi-select & customizable shortcuts**: marquee drag or `Shift`/`Ctrl`+click
-  to multi-select; `Shift+A` adds at cursor, `Shift+D` duplicates selected nodes
+- **Multi-select, comment boxes & customizable shortcuts**: marquee drag or `Shift`/`Ctrl`+click
+  to multi-select; `Shift+A` adds nodes or comments at cursor, `C` wraps selected nodes in a
+  real-time geometric comment frame (or creates a standalone note on blank canvas — zero extra
+  tokens; drag header to move nodes inside, hold `Alt` for box only, `📝` for 6 colors / S-M-L
+  size / zoomed-out title scaling, auto-refits on auto-layout & direction flip, and persists in
+  presets & JSON export/import), `Shift+D` duplicates selected nodes
   together with internal wires, `Delete` removes selected, `Ctrl+Z` /
-  `Ctrl+Shift+Z` (`Ctrl+Y`) undo/redo (including node drags and layout flips),
+  `Ctrl+Shift+Z` (`Ctrl+Y`) undo/redo (including node drags, comments, and layout flips),
   and `Esc` closes popups. Customize bindings under `⋯ → ⌨ Shortcuts`.
 - **Live preset sync**: custom presets sync automatically across already-open
   sessions (with a manual `↻` refresh button and `H`/`V` direction tags).
@@ -63,10 +67,10 @@ are performed by the conversation itself.
 
 | Tool | Effect |
 |---|---|
-| `canvas_inspect` | reads the current session canvas (enabled state, active preset name, task, nodes, links) |
+| `canvas_inspect` | reads the current session canvas (enabled state, active preset name, task, nodes, links, comments) |
 | `canvas_preset` | lists saved user presets & built-in templates (`list`), switches the canvas to a preset/template (`apply`), or enables/disables the canvas in place (`toggle`) — works even while disabled |
-| `canvas_generate` | replaces the canvas with a node/edge sketch |
-| `canvas_patch` | edits in place: update nodes by id, add/remove nodes and links |
+| `canvas_generate` | replaces the canvas with a node/edge/comment sketch |
+| `canvas_patch` | edits in place: update nodes by id, add/remove nodes, links, and comment frames/notes |
 
 `canvas_generate` and `canvas_patch` atomically publish `<workspace>/.dsh/canvas/<session>.json`,
 which the panel polls via `remote.workspaceFiles.stat` (`version`-fingerprinted, pausing while collapsed/hidden and backing off when idle) and applies in merge mode so

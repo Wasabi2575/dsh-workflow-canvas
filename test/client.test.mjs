@@ -1401,3 +1401,151 @@ test('client hardening: null/blank defaults, Windows reserved id sanitizer, mult
   assert.equal(condRow.reason, '条件执行失败', 'no leading em-dash when branchLabels is empty');
   assert.equal(skippedRow.runs, 0, 'pruned node reports 0 runs even if present in done');
 });
+
+test('comment box helpers: normalizeCommentsUI, geometric membership, layout refit, header zoom scale & WorkflowCanvas render (#15)', () => {
+  const store = new Map();
+  const c = loadClientTestExports(store);
+
+  assert.equal(c.DEFAULT_SHORTCUTS.addComment, 'C');
+  assert.equal(c.COMMENT_COLORS.length, 6);
+
+  // Sanitization & clamping
+  const normalized = c.normalizeCommentsUI([
+    null,
+    { id: 'c1', x: 10.4, y: -20.6, w: 50, h: 20, title: '第一阶段', body: '并行调研', color: 'invalid', fontSize: 'xl', zoomScale: false },
+    { id: 'c1', x: 99, y: 99, w: 300, h: 200 }, // duplicate id skipped
+    { id: 'c2', x: 500, y: 500, w: 260, h: 148, title: '独立便签', body: '记得检查权限', color: 'amber', fontSize: 'lg' },
+  ]);
+  assert.equal(normalized.length, 2);
+  assert.deepEqual({ ...normalized[0] }, {
+    id: 'c1',
+    x: 10,
+    y: -21,
+    w: 180,
+    h: 96,
+    title: '第一阶段',
+    body: '并行调研',
+    color: 'gray',
+    fontSize: 'md',
+    zoomScale: false,
+  });
+  assert.equal(normalized[1].color, 'amber');
+  assert.equal(normalized[1].fontSize, 'lg');
+  assert.equal(normalized[1].zoomScale, true);
+
+  // Real-time geometric membership + boundsForNodes + refitCommentsAfterLayout
+  const nodesLR = [
+    { id: 'lead', kind: 'lead', x: 40, y: 100, label: 'Lead', task: 'demo' },
+    { id: 'a', kind: 'agent', x: 340, y: 40, label: 'A', role: 'r1' },
+    { id: 'b', kind: 'agent', x: 340, y: 320, label: 'B', role: 'r2' },
+    { id: 'out', kind: 'agent', x: 700, y: 180, label: 'Out', role: 'r3' },
+  ];
+  const edges = [
+    { id: 'e1', from: 'lead', to: 'a', type: 'prompt' },
+    { id: 'e2', from: 'lead', to: 'b', type: 'prompt' },
+    { id: 'e3', from: 'a', to: 'out', type: 'prompt' },
+    { id: 'e4', from: 'b', to: 'out', type: 'prompt' },
+  ];
+  const groupBox = c.boundsForNodes([nodesLR[1], nodesLR[2]]);
+  assert.ok(groupBox.x < 340 && groupBox.y < 40 - 40, 'boundsForNodes adds side + header padding');
+  assert.ok(groupBox.x + groupBox.w > 340 + 216 && groupBox.y + groupBox.h > 320 + 234);
+
+  const groupComment = { id: 'cg', ...groupBox, title: '并行阶段', body: '互不依赖', color: 'blue', fontSize: 'md', zoomScale: true };
+  const noteComment = { id: 'cn', x: -300, y: -200, w: 240, h: 140, title: '备忘', body: '仅作说明', color: 'amber', fontSize: 'sm', zoomScale: true };
+
+  assert.deepEqual(c.nodesInsideComment(groupComment, nodesLR).map((n) => n.id), ['a', 'b']);
+  assert.deepEqual(c.nodesInsideComment(noteComment, nodesLR).map((n) => n.id), []);
+
+  // Flip to vertical (tb) layout -> group comment refits around new positions of [a, b], standalone note stays put
+  const nodesTB = c.layoutGraph(nodesLR, edges, 'tb');
+  const refitted = c.refitCommentsAfterLayout([groupComment, noteComment], nodesLR, nodesTB);
+  assert.deepEqual(c.nodesInsideComment(refitted[0], nodesTB).map((n) => n.id).sort(), ['a', 'b'], 'refitted group still contains a & b after tb layout');
+  assert.equal(refitted[1].x, -300, 'standalone note keeps original x');
+  assert.equal(refitted[1].y, -200, 'standalone note keeps original y');
+
+  // Zoom readability scaling
+  assert.equal(c.commentHeaderScale(1.2, true), 1);
+  assert.equal(c.commentHeaderScale(0.5, false), 1);
+  assert.equal(c.commentHeaderScale(0.5, true), 2);
+  assert.ok(Math.abs(c.commentHeaderScale(0.2, true) - (1 / 0.38)) < 1e-6, 'caps extreme zoom-out scale cleanly');
+
+  // 3-edge + 4-corner window-style resizing (clamping pins opposite edge without sliding)
+  const baseRect = { x: 100, y: 200, w: 300, h: 200 };
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 'w', -40, 0) }, { x: 60, y: 200, w: 340, h: 200 });
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 'w', 250, 0) }, { x: 220, y: 200, w: 180, h: 200 }, 'west clamp pins right edge at 400');
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 'nw', -30, -50) }, { x: 70, y: 150, w: 330, h: 250 });
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 'ne', 20, 200) }, { x: 100, y: 304, w: 320, h: 96 }, 'north clamp pins bottom edge at 400');
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 'sw', 50, 40) }, { x: 150, y: 200, w: 250, h: 240 });
+  assert.deepEqual({ ...c.resizeCommentBox(baseRect, 's', 99, 60) }, { x: 100, y: 200, w: 300, h: 260 });
+
+  // Render WorkflowCanvas with both a group comment and a standalone note in localStorage
+  c.saveDoc('s-cm-render', { nodes: nodesLR, edges, comments: [groupComment, noteComment], enabled: false, direction: 'lr' }, 1000);
+  const tree = c.WorkflowCanvas({ sessionId: 's-cm-render' });
+  const collectComments = (el, acc = []) => {
+    if (!el || typeof el !== 'object') return acc;
+    if (Array.isArray(el)) {
+      for (const item of el) collectComments(item, acc);
+      return acc;
+    }
+    if (el.props && el.props['data-comment-id']) acc.push(el);
+    if (el.children) collectComments(el.children, acc);
+    return acc;
+  };
+  const renderedComments = collectComments(tree);
+  assert.equal(renderedComments.length, 2, 'renders both comment boxes');
+  const byCid = new Map(renderedComments.map((el) => [el.props['data-comment-id'], el]));
+  assert.equal(byCid.get('cg').props['data-comment-mode'], 'group');
+  assert.equal(byCid.get('cg').props.style.pointerEvents, 'none', 'group box body stays click-through');
+  assert.equal(byCid.get('cg').props.style.border, undefined, 'outer box draws no top border that would slice through a zoomed-out scaled header');
+  const bodyEl = byCid.get('cg').children.find((ch) => ch && ch.props && ch.props['data-comment-body'] === 'cg');
+  assert.ok(bodyEl && bodyEl.props.style.top === '30px' && bodyEl.props.style.borderTop === 'none', 'body frame starts cleanly below header seam');
+  assert.equal(byCid.get('cn').props['data-comment-mode'], 'note');
+
+  // AI mergeCommentsForDoc: generate + tb relayout resolves nodeIds; merge patch updates/adds/removes cleanly
+  const genComments = c.mergeCommentsForDoc(
+    [],
+    [
+      { id: 'ai-g', title: '并行阶段', body: '只读调研', color: 'blue', nodeIds: ['a', 'b'] },
+      { id: 'ai-n', title: '全局备注', body: '勿动锁文件', color: 'amber' },
+    ],
+    [],
+    nodesTB,
+    false,
+    true,
+  );
+  assert.equal(genComments.length, 2);
+  assert.deepEqual(c.nodesInsideComment(genComments[0], nodesTB).map((n) => n.id).sort(), ['a', 'b'], 'generated comment refits onto tb-laid-out nodeIds');
+  assert.ok(genComments[1].y < nodesTB[0].y, 'standalone AI note places cleanly above graph without overlapping nodes');
+
+  const patchedComments = c.mergeCommentsForDoc(
+    genComments,
+    [
+      { id: 'ai-g', title: '并行调研（更新）', color: 'green' }, // no nodeIds -> preserves geometry
+      { id: 'ai-new', title: '终审区', nodeIds: ['out'], color: 'purple' },
+    ],
+    ['ai-n'],
+    nodesTB,
+    true,
+    false,
+  );
+  assert.equal(patchedComments.length, 2);
+  const updG = patchedComments.find((x) => x.id === 'ai-g');
+  const addNew = patchedComments.find((x) => x.id === 'ai-new');
+  assert.equal(updG.title, '并行调研（更新）');
+  assert.equal(updG.color, 'green');
+  assert.equal(updG.x, genComments[0].x, 'updating title/color without nodeIds preserves existing box position');
+  assert.deepEqual(c.nodesInsideComment(addNew, nodesTB).map((n) => n.id), ['out'], 'new AI patch comment wraps target nodeIds');
+
+  // Even when a merge patch echoes the same nodeIds, a manually resized box is preserved instead of snapping back
+  const manualWide = [{ ...genComments[0], w: genComments[0].w + 140, h: genComments[0].h + 90 }];
+  const keptManual = c.mergeCommentsForDoc(
+    manualWide,
+    [{ id: 'ai-g', title: '保留手动大小', nodeIds: ['a', 'b'] }],
+    [],
+    nodesTB,
+    true,
+    false,
+  );
+  assert.equal(keptManual[0].w, manualWide[0].w, 'same nodeIds set preserves user manual resize');
+  assert.equal(keptManual[0].h, manualWide[0].h);
+});
