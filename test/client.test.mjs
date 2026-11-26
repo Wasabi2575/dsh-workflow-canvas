@@ -2,82 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
-import {
-  inactiveNodeSets,
-  edgeKey,
-  loopMemberIds,
-  normalizeRefs,
-  normalizeMaxIterations,
-  normalizeCanvas,
-  withoutEntry,
-} from '../lib/graph.js';
-import { safeSessionFileBase } from '../lib/telemetry.js';
-
-function loadClientTestExports(storageMap, stateOverrides = {}) {
-  let loaded = null;
-  const store = storageMap instanceof Map ? storageMap : null;
-  const mockLocalStorage = store
-    ? {
-        get length() { return store.size; },
-        key: (i) => Array.from(store.keys())[i] ?? null,
-        getItem: (k) => (store.has(k) ? store.get(k) : null),
-        setItem: (k, v) => { store.set(String(k), String(v)); },
-        removeItem: (k) => { store.delete(String(k)); },
-      }
-    : {
-        getItem: () => null,
-        setItem: () => {},
-      };
-  const sandbox = {
-    window: {
-      __ModuleLoader__: {
-        load(mod) { loaded = mod; },
-      },
-      localStorage: mockLocalStorage,
-    },
-    console,
-    Math,
-    Date,
-    JSON,
-    Map,
-    Set,
-    Array,
-    Object,
-    String,
-    Number,
-    Boolean,
-    RegExp,
-    Infinity,
-    encodeURIComponent,
-    decodeURIComponent,
-  };
-  const code = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
-  // Seed real component state by hook declaration order, without rewriting the
-  // renderer or mocking graph decisions. Each fixture gets a fresh component.
-  const stateNames = [...code.slice(code.indexOf('function WorkflowCanvas(')).matchAll(/const \[(\w+),\s*\w+\] = useState\(/g)].map(m => m[1]);
-  for (const key of Object.keys(stateOverrides)) assert.ok(stateNames.includes(key), 'known state fixture: ' + key);
-  let stateIndex = 0;
-  vm.runInNewContext(code, sandbox);
-  assert.ok(loaded, 'client module registered');
-  assert.equal(loaded.id, 'dsh-workflow-canvas', 'module id matches published package name');
-  const mod = loaded.factory((name) => {
-    if (name === 'react') {
-      return {
-        createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
-        useState: (v) => {
-          const name = stateNames[stateIndex++];
-          return [Object.hasOwn(stateOverrides, name) ? stateOverrides[name] : (typeof v === 'function' ? v() : v), () => {}];
-        },
-        useRef: (v) => ({ current: v }),
-        useEffect: () => {},
-        Component: class {},
-        Fragment: Symbol('Fragment'),
-      };
-    }
-    throw new Error('unexpected require: ' + name);
-  });
-  return mod.__test;
-}
+import { inactiveNodeSets } from '../lib/graph.js';
+import { loadClientTestExports } from './helpers.mjs';
 
 const client = loadClientTestExports();
 
@@ -253,35 +179,6 @@ test('inactive Leads block descendants but independent paths and role-bearing Le
   assert.ok(inactiveNodeSets(plan.nodes, plan.edges).reachable.has('review'));
 });
 
-test('client/backend classification and projected plans agree across DAGs, node orders and controlled loops', () => {
-  const ids = ['lead', 'stage', 'worker', 'gate'];
-  const candidates = ids.flatMap((from, i) => ids.slice(i + 1).map(to => ({ from, to })));
-  for (const role of ['', 'Confirm']) for (const kind of ['lead', 'agent', 'condition']) {
-    for (let mask = 0; mask < (1 << candidates.length); mask += 1) {
-      const nodes = [
-        { id: 'lead', kind: 'lead', task: 't' }, { id: 'stage', kind: 'lead', role },
-        { id: 'worker', kind: 'agent' }, { id: 'gate', kind },
-      ];
-      const edges = candidates.filter((_, i) => mask & (1 << i));
-      if (kind === 'condition' && edges.some(e => e.from === 'worker' && e.to === 'gate')) {
-        edges.push({ from: 'gate', to: 'worker', loop: true, branch: 'false' });
-      }
-      const host = inactiveNodeSets(nodes, edges);
-      for (const ordered of [nodes, [...nodes].reverse()]) {
-        const ui = client.classifyCanvasNodes(ordered, edges);
-        for (const key of ['reachable', 'soloLeads', 'deadEnds', 'noOutgoing']) {
-          assert.deepEqual([...ui[key]].sort(), [...host[key]].sort(), key + ':' + mask);
-        }
-        const built = client.buildPlan(ordered, edges);
-        if (built.plan) {
-          const projected = inactiveNodeSets(built.plan.nodes, built.plan.edges);
-          assert.ok(built.plan.nodes.every(n => projected.reachable.has(n.id) && !projected.deadEnds.has(n.id)), JSON.stringify({ role, kind, mask, edges, plan: built.plan }));
-        }
-      }
-    }
-  }
-});
-
 test('inactive border stays dashed over selection, warning and historical run borders', () => {
   for (const state of [null, client.S.nodeSel, { border: '1px solid orange' }, { border: '1.5px solid blue' }, { border: '1px solid green' }]) {
     const style = client.nodeActivityStyle(state, true);
@@ -400,7 +297,6 @@ test('terminal and skipped no-outgoing nodes use identical yellow badges, not tw
   assert.deepEqual({ ...styles[0] }, { ...styles[1] });
 });
 
-
 test('buildPlan rejects raw forward cycles before inactive-node filtering', () => {
   const nodes = [{ id: 'lead', kind: 'lead', task: 't' }, { id: 'a' }, { id: 'b' }, { id: 'safe', kind: 'lead', role: 'Confirm' }];
   const edges = [{ from: 'lead', to: 'a' }, { from: 'a', to: 'b' }, { from: 'b', to: 'a' }, { from: 'lead', to: 'safe' }];
@@ -441,7 +337,6 @@ test('Lead ancestry bitsets support many Leads, preserve terminals and prune lon
     assert.ok(result.deadEnds.has('a0') && result.deadEnds.has('a7999'));
   }
 });
-
 
 test('optimized Lead ancestry matches independent full ancestor walks on seeded DAGs', () => {
   let seed = 91;
@@ -1729,145 +1624,6 @@ test('loopProgressDisplay & WorkflowCanvas unify round/retry/exhausted progress 
   const idleSumPill = findByAttr(treeIdle, 'data-summary-pill', 'idle');
   assert.ok(idleSumPill, 'Run Summary pill renders in muted idle state before any run');
   assert.equal(idleSumPill.props.style.opacity, 0.6);
-});
-
-test('full client/backend shared-logic parity: edgeKey, safeSessionFileBase, loopMemberIds, normalizeRefs, normalizeMaxIterations & buildPlan vs withoutEntry', () => {
-  const c = loadClientTestExports();
-
-  // 1) edgeKeyUI === lib/graph.js:edgeKey
-  const edgeSamples = [
-    { from: 'lead', to: 'n1', type: 'prompt' },
-    { from: 'n1', to: 'n2', type: 'structured' },
-    { from: 'n1', to: 'n2', type: 'session-ref' },
-    { from: 'gate', to: 'n1', type: 'prompt', branch: 'false', loop: true },
-    { from: 'gate', to: 'n3', branch: '小修' },
-    { from: 'a', to: 'b' },
-  ];
-  for (const e of edgeSamples) {
-    assert.equal(c.edgeKeyUI(e), edgeKey(e), 'edgeKey parity for ' + JSON.stringify(e));
-  }
-
-  // 2) sanitizeSessionFileBaseUI === lib/telemetry.js:safeSessionFileBase
-  const sidSamples = [
-    'session-abc123_XYZ-01',
-    '../evil/../../path',
-    'CON',
-    'nul.txt',
-    'COM9',
-    'lpt1.log',
-    'a:b*c?d<e>f|g',
-    '...leading.dots',
-    '',
-    '   ',
-    'x'.repeat(240),
-    'CON.' + 'a'.repeat(200),
-  ];
-  for (const sid of sidSamples) {
-    assert.equal(c.sanitizeSessionFileBaseUI(sid), safeSessionFileBase(sid), 'safeSessionFileBase parity for ' + JSON.stringify(sid));
-  }
-
-  // 3) normalizeMaxIterationsUI === lib/graph.js:normalizeMaxIterations
-  const iterSamples = [undefined, null, '', true, false, 0, -5, 1, 3, 3.9, 10, 99, '7', '0', 'abc', NaN, Infinity];
-  for (const v of iterSamples) {
-    assert.equal(c.normalizeMaxIterationsUI(v), normalizeMaxIterations(v), 'normalizeMaxIterations parity for ' + String(v));
-  }
-
-  // 4) normalizeRefsUI === (lib/graph.js:normalizeRefs || [])
-  const refSamples = [
-    undefined,
-    [],
-    ['  docs/a.md  ', '', 'docs/a.md', { path: 'src/b.js' }, { text: 'rule 1' }, null, 42],
-    Array.from({ length: 24 }, (_, i) => 'ref-' + i),
-  ];
-  for (const r of refSamples) {
-    assert.deepEqual([...c.normalizeRefsUI(r)], normalizeRefs(r) || [], 'normalizeRefs parity');
-  }
-
-  // 5) loopMemberIdsUI === lib/graph.js:loopMemberIds (diamond loop + outside bypass + invalid entry loop)
-  const loopGraphNodes = [
-    { id: 'lead', kind: 'lead', label: 'Lead' },
-    { id: 'n1', kind: 'agent', label: 'Impl' },
-    { id: 'n2', kind: 'agent', label: 'Test' },
-    { id: 'bypass', kind: 'agent', label: 'Bypass' },
-    { id: 'gate', kind: 'condition', label: 'Gate' },
-    { id: 'final', kind: 'lead', label: 'Final', role: 'ship' },
-  ];
-  const loopGraphEdges = [
-    { id: 'e0', from: 'lead', to: 'n1', type: 'prompt' },
-    { id: 'e1', from: 'n1', to: 'n2', type: 'prompt' },
-    { id: 'e2', from: 'n1', to: 'bypass', type: 'prompt' },
-    { id: 'e3', from: 'n2', to: 'gate', type: 'prompt' },
-    { id: 'e4', from: 'gate', to: 'final', type: 'prompt', branch: 'true' },
-    { id: 'e5', from: 'bypass', to: 'final', type: 'prompt' },
-    { id: 'el', from: 'gate', to: 'n1', type: 'prompt', branch: 'false', loop: true, maxIterations: 3 },
-  ];
-  for (const le of [loopGraphEdges[6], { from: 'gate', to: 'lead', loop: true }, { from: 'gate', to: 'bypass', loop: true }]) {
-    const uiSet = [...c.loopMemberIdsUI(loopGraphNodes, loopGraphEdges, le)].sort();
-    const beSet = [...loopMemberIds(loopGraphNodes, loopGraphEdges, le)].sort();
-    assert.deepEqual(uiSet, beSet, 'loopMemberIds parity for ' + le.from + '->' + le.to);
-  }
-
-  // 6) buildPlan <-> normalizeCanvas + withoutEntry field-by-field parity on a generate doc
-  // containing explicit entry `lead` + `lead -> n1` edge (historical entry-Lead leak regression)
-  const genDoc = normalizeCanvas({
-    task: 'Parity test task',
-    refs: ['README.md', 'docs/spec.md'],
-    nodes: [
-      { id: 'lead', kind: 'lead', label: 'Entry Lead', role: 'ignored-entry-role' },
-      { id: 'n1', kind: 'agent', label: 'Implement', role: 'Write code', preset: 'standard', refs: ['src/app.js'] },
-      { id: 'gate', kind: 'condition', label: 'Quality Gate', role: 'Check tests', branches: ['Pass', 'Fix'], multiMatch: false },
-      { id: 'final', kind: 'lead', label: 'Ship', role: 'Final review' },
-    ],
-    edges: [
-      { from: 'lead', to: 'n1', type: 'prompt' },
-      { from: 'n1', to: 'gate', type: 'structured' },
-      { from: 'gate', to: 'final', type: 'prompt', branch: 'Pass' },
-      { from: 'gate', to: 'n1', type: 'prompt', branch: 'Fix', loop: true, maxIterations: 4 },
-    ],
-  });
-  assert.ok(!genDoc.error, 'normalizeCanvas succeeds on generate doc with explicit entry lead');
-
-  // Client builds its plan from the exact same normalized canvas document
-  const uiNodes = genDoc.nodes.map((n) => ({ ...n }));
-  const uiEdges = genDoc.edges.map((e, idx) => ({ id: e.id || ('e' + idx), ...e }));
-  const clientBuilt = c.buildPlan(uiNodes, uiEdges, { direction: 'lr' });
-  assert.ok(!clientBuilt.error, 'client buildPlan succeeds without error');
-
-  // Compare projected runnable plan fields strictly against Host `withoutEntry`
-  const hostRunnableNodes = withoutEntry(genDoc.nodes);
-  const projectNode = (n) => ({
-    id: n.id,
-    kind: n.kind,
-    label: n.label,
-    role: n.role || '',
-    preset: n.kind === 'condition' ? 'minimal' : (n.preset || 'standard'),
-    branches: n.branches ? n.branches.map((b) => (b && typeof b === 'object' ? { id: b.id, label: b.label } : b)) : null,
-    multiMatch: Boolean(n.multiMatch),
-    refs: n.refs ? [...n.refs] : [],
-  });
-  const projectEdge = (e) => ({
-    from: e.from,
-    to: e.to,
-    type: e.type || 'prompt',
-    branch: e.branch || '',
-    loop: Boolean(e.loop),
-    maxIterations: e.loop ? normalizeMaxIterations(e.maxIterations) : null,
-  });
-
-  assert.equal(clientBuilt.plan.task, genDoc.task, 'plan.task matches');
-  assert.deepEqual([...(clientBuilt.plan.refs || [])], [...(genDoc.nodes.find((n) => n.id === 'lead').refs || [])], 'plan.refs matches entry Lead refs');
-  assert.ok(!clientBuilt.plan.nodes.some((n) => n.id === 'lead'), 'client buildPlan strips entry lead');
-  assert.ok(!hostRunnableNodes.some((n) => n.id === 'lead'), 'host withoutEntry strips entry lead');
-  assert.deepEqual(
-    clientBuilt.plan.nodes.map(projectNode),
-    hostRunnableNodes.map(projectNode),
-    'client buildPlan nodes match host withoutEntry nodes field-by-field',
-  );
-  assert.deepEqual(
-    clientBuilt.plan.edges.map(projectEdge),
-    genDoc.edges.map(projectEdge),
-    'client buildPlan edges match host normalized edges field-by-field',
-  );
 });
 
 test('interaction matrix (UI): comment frame wrapping loop & condition nodes survives lr <-> tb auto-layout refit and plan serialization', () => {

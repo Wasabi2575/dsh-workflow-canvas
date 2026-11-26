@@ -120,8 +120,9 @@ sequenceDiagram
 
 1. **节点反查标记**：`spawnOnce` 启动子代理时，固定把 `spec.label` 设为 `<节点名>#<nodeId>`。
 2. **状态与遥测实时追踪**：客户端在对话运行期间每 700ms（以及挂载与每轮结束时）读取 `sessions.list` 投影中的 `subagentCatalog` 与 `subagentTiming`，用末尾正则 `/#([^\s#]+)$/` 精准反查子代理状态（`running` 具最高优先级，避免多轮重试被历史记录覆盖）与 `childId`；同时轮询 Host 写入的 `<workspace>/.dsh/canvas/<sid>.run.json` 获取条件判决（`decisions`）、剪枝集（`pruned`）、阻断边（`blockedEdges`）、回环实时轮次（`loopCounts` / `nodeAttempts`）、待拍板状态（`waitingLead`）以及零 Token 复盘快照（`summary`：各节点耗时、回退/续接标记与回环历史，绝不注入模型上下文）。
-3. **Lead「待拍板」权威状态、统一终止与执行复盘**：优先以 `.run.json` 报告的权威状态为准（`need-lead` 高亮 **`⏸ 待拍板`**，`halted` / `done` / `idle` 绝不误回弹锁死），仅在缺失 `.run.json` 时回退到前向边启发式推导；左上角 **`⏹ 终止`** 按钮常态可见（空闲灰标、运行或待拍板亮红）；存在运行遥测时，左下角同步出现 **复盘** 胶囊（及 `⋯ → 📊 执行复盘`）展示本地统计与一键导出 Markdown。
+3. **Lead「待拍板」权威状态、统一终止与执行复盘**：优先以 `.run.json` 报告的权威状态为准（`need-lead` 高亮 **`⏸ 待拍板`**，`halted` / `done` / `idle` 绝不误回弹锁死），仅在缺失 `.run.json` 时回退到前向边启发式推导；左上角 **`⏹ 终止`** 按钮常态可见（空闲灰标、运行或待拍板亮红）；左下角 **复盘** 胶囊同样常驻可见（运行前呈灰色，运行后亮起并同步 `⋯ → 📊 执行复盘` 展示本地统计与一键导出 Markdown）。
 4. **一键直达真实子对话**：点击任意子代理节点左下角状态胶囊（如 `进行中 ↗` / `已完成 ↗`），客户端调用 `sidebarRight.openResource('dsh-resource://subagentchat/session/<childId>?parent=<sessionId>&mode=<mode>', { kind: 'subagentchat', preferNewPane: true })`，直接在新侧边窗格打开该子代理的真实对话记录。
+5. **分组注释框与独立便签**：注释元数据通过 `/canvas-sync` 与 `.dsh/canvas/<sid>.json` 在端到端间同步（AI 侧仅读写语义字段 `id` / `title` / `body` / `color` / `fontSize` / `nodeIds`，绝不参与 DAG 执行或消耗子代理 Token）。
 
 ---
 
@@ -129,6 +130,6 @@ sequenceDiagram
 
 为了让模型在开启画布后稳定、准确地遵循编排而又不污染其它会话或子代理，插件采用四层协同引导：
 1. **会话级 `systemPrompt.context` 强注入**：仅对画布处于「`● 已启用`」的当前主会话（按 `sessionId` 严格匹配，绝不泄漏到子代理）每轮自动注入画布摘要（节点概览、受控回环条数、全局参考数、记忆/权限/断点续跑提示；若暂停在中间 Lead 则注入待拍板说明、`leadResult` / `cancel: true` / `reset: true` 与回环打回理由）。
-2. **Skill 目录注册**：`index.js` 通过 `ctx.skills.registerProvider` 注册内置技能 `workflow-canvas`，摘要中包含中英触发词（`canvas / workflow / 条件分支 / 回环重试 / 画布 / 工作流 / 编排`）与 4 个 `canvas_*` 工具名；正文读取自 [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md)。
-3. **工具说明互指**：`canvas_inspect`、`canvas_generate`、`canvas_patch`、`canvas_workflow` 的工具描述均提示模型按需先加载 `workflow-canvas` 技能，而工具定义始终在上下文中。
+2. **Skill 目录注册**：`index.js` 通过 `ctx.skills.registerProvider` 注册内置技能 `workflow-canvas`，摘要中包含中英触发词（`画布 / 工作流 / 预设 / 条件分支 / 回环 / 注释`）与全部 5 个 `canvas_*` 工具名；正文读取自 [skills/workflow-canvas/SKILL.md](../skills/workflow-canvas/SKILL.md)。
+3. **工具说明互指**：`canvas_inspect`、`canvas_preset`、`canvas_generate`、`canvas_patch`、`canvas_workflow` 的工具描述协同引导模型按需加载 `workflow-canvas` 技能，而工具定义始终在上下文中。
 4. **项目级锁定（可选）**：在项目 `AGENTS.md` 中加一行显式指令，可在任意对话中实现最高触发稳定性。

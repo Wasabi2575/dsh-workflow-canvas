@@ -8,12 +8,14 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 
 - `index.js` — Backend DSH Cordis plugin: DAG/loop executor, `canvas_*` tools, `/canvas-sync` & `/canvas-stop` commands, `systemPrompt.context` builder, and `.run.json` run-state telemetry.
 - `lib/graph.js` — Pure ESM graph, condition, loop, prompt clipping, error-classifier, normalization, and patch helpers shared by `index.js`.
+- `lib/presets.js` — Pure ESM built-in starter templates, preset resolution, and preset-to-canvas/plan conversion shared by `index.js`.
 - `lib/telemetry.js` — Pure ESM zero-token run-summary snapshot builder, LRU map eviction helpers, and throttled stale `.dsh/canvas/*.json` cleanup.
 - `client.js` — Frontend sidebar UI (vanilla React via `h`, zero build step): canvas rendering, pan/zoom/layout (`lr` & `tb`), undo/redo, presets, `I18N` (`zh`/`en`), and `helpBody`.
 - `skills/workflow-canvas/SKILL.md` — Runtime DSH plugin skill read by the host agent.
 - `docs/DETAIL.md`, `docs/MECHANISM.zh.md`, `docs/MECHANISM.md`, `README.zh.md`, `README.md` — User & architecture docs.
 - `locale/zh.json`, `locale/en.json` — Plugin manifest/metadata localization.
-- `test/executor.test.mjs`, `test/client.test.mjs` — Node built-in test suites.
+- `scripts/check.mjs` — Zero-dependency static health & consistency gate (`npm run check`).
+- `test/` — Node built-in test suites (`helpers.mjs`, `executor.test.mjs`, `loops.test.mjs`, `tools.test.mjs`, `parity.test.mjs`, `client.test.mjs`).
 
 ## 2. Verification & Environment
 
@@ -82,7 +84,7 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 
 When adding or changing features, node fields, tools, commands, or UI controls, keep all affected surfaces in sync:
 
-1. **Agent runtime surface (`index.js`)**: `buildActiveCanvasContext`, tool schemas/descriptions, and tool `render()` outputs (`canvas_inspect`, `canvas_workflow`, `canvas_patch`, `canvas_generate`).
+1. **Agent runtime surface (`index.js`, `lib/presets.js`)**: `buildActiveCanvasContext`, `SKILL_DESCRIPTION` (must match `skills/workflow-canvas/SKILL.md` frontmatter `description`), built-in templates, tool schemas/descriptions, and tool `render()` outputs (`canvas_inspect`, `canvas_preset`, `canvas_workflow`, `canvas_patch`, `canvas_generate`).
 2. **Client UI & serialization (`client.js`)**: `I18N` (`zh`/`en`), `helpBody` (`zh`/`en`), `buildPlan`, `applyCanvasDoc` (including remote field deletion cleanup), presets, and JSON import/export.
 3. **Docs & metadata**: `README.zh.md`, `README.md`, `docs/DETAIL.md`, `docs/MECHANISM.zh.md`, `docs/MECHANISM.md`, `skills/workflow-canvas/SKILL.md`, `locale/zh.json`, `locale/en.json`, `package.json` `description`.
-4. **Tests**: Cover new backend logic in `test/executor.test.mjs` and client helpers in `test/client.test.mjs`.
+4. **Tests**: Cover new backend logic in `test/executor.test.mjs`, `test/loops.test.mjs`, or `test/tools.test.mjs`, and client helpers in `test/client.test.mjs`; whenever changing shared helpers (`edgeKey`, `safeSessionFileBase`, `loopMemberIds`, `normalizeRefs`, `normalizeMaxIterations`, `buildPlan`/`withoutEntry`, `classifyCanvasNodes`, built-in templates), keep `test/parity.test.mjs` in sync.

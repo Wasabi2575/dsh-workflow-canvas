@@ -2210,7 +2210,7 @@ async function executePlan(scope, plan, args, exec) {
 
 /** Agent-facing guide, shipped as a skill so any agent can load it on demand. */
 const SKILL_NAME = 'workflow-canvas';
-const SKILL_DESCRIPTION = 'Workflow canvas (画布/工作流/预设/条件分支/回环): inspect, switch presets, toggle, draw, edit, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow.';
+const SKILL_DESCRIPTION = 'Workflow canvas (画布/工作流/预设/条件分支/回环/注释): inspect, switch presets, toggle, draw, edit, annotate, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow.';
 function skillPath() {
   try {
     return fileURLToPath(new URL('./skills/workflow-canvas/SKILL.md', import.meta.url));

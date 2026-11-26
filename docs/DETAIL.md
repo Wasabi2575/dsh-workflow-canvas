@@ -93,8 +93,9 @@ Lead pause via `/canvas-stop`. Intermediate Lead nodes pause with
 completes directly with `status: "done"` and `finalLead`. Once a run begins,
 loop bypass pills and member corner badges immediately track live retry/round
 progress from Round 1 (`↺ 0/N`, red `↺ Exhausted N/N` on circuit-break, retained
-after stop/completion), and a compact bottom-left **Summary** pill (and
-`⋯ → 📊 Run summary`) displays live elapsed time, per-node duration bars,
+after stop/completion). A compact bottom-left **Summary** pill stays visible
+(muted gray before the first run, lighting up live once execution begins; also
+under `⋯ → 📊 Run summary`) to display elapsed time, per-node duration bars,
 fallback/session-continuation badges, condition verdicts, and round-by-round
 loop progress with node focus, child-chat jump, and Markdown copy — computed
 strictly from `.run.json` telemetry with zero extra tokens.

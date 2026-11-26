@@ -276,6 +276,7 @@ if (packRes.status !== 0) {
     const required = [
       'index.js',
       'lib/graph.js',
+      'lib/presets.js',
       'lib/telemetry.js',
       'client.js',
       'cordis.patch.yml',
@@ -306,6 +307,23 @@ if (packRes.status !== 0) {
   } catch (err) {
     fail(`Could not parse npm pack --dry-run --json output: ${err.message}`);
   }
+}
+
+// 8. SKILL_DESCRIPTION parity between index.js and skills/workflow-canvas/SKILL.md
+try {
+  const indexSrc = readUtf8('index.js');
+  const skillSrc = readUtf8('skills/workflow-canvas/SKILL.md');
+  const idxMatch = indexSrc.match(/const SKILL_DESCRIPTION\s*=\s*'([^']+)'/);
+  const fmMatch = skillSrc.match(/^---\r?\n[\s\S]*?^description:\s*(.+)$/m);
+  if (!idxMatch) fail('Could not locate SKILL_DESCRIPTION in index.js');
+  else if (!fmMatch) fail('Could not locate description in skills/workflow-canvas/SKILL.md frontmatter');
+  else if (idxMatch[1].trim() !== fmMatch[1].trim()) {
+    fail('SKILL_DESCRIPTION in index.js differs from skills/workflow-canvas/SKILL.md frontmatter description');
+  } else {
+    pass('SKILL_DESCRIPTION matches skills/workflow-canvas/SKILL.md');
+  }
+} catch (err) {
+  fail(`SKILL_DESCRIPTION parity check error: ${err.message}`);
 }
 
 console.log('');
