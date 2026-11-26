@@ -1324,13 +1324,18 @@ window.__ModuleLoader__.load({
     let hostCtx = null;
     let cachedModels = [];
 
+    // Keep aligned with lib/graph.js: normalizeRefs.
     function normalizeRefsUI(rawRefs) {
       if (!Array.isArray(rawRefs) || !rawRefs.length) return [];
       const out = [];
       const seen = new Set();
       for (const r of rawRefs) {
         if (out.length >= 16) break;
-        const s = typeof r === 'string' ? r.trim() : '';
+        let s = '';
+        if (typeof r === 'string') s = r.trim();
+        else if (r && typeof r === 'object') {
+          s = String(r.text !== undefined ? r.text : (r.path !== undefined ? r.path : '')).trim();
+        }
         if (!s || seen.has(s)) continue;
         seen.add(s);
         out.push(s);
@@ -2342,6 +2347,11 @@ window.__ModuleLoader__.load({
         if (n && n.id === 'lead') n.kind = 'lead';
       }
       return doc;
+    }
+
+    // Keep aligned with lib/graph.js: edgeKey.
+    function edgeKeyUI(e) {
+      return String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
     }
 
     function normalizeMaxIterationsUI(val) {
@@ -7136,7 +7146,7 @@ window.__ModuleLoader__.load({
         now: summaryNow,
         fallbackTiming: clientRunTimingRef.current,
       });
-      const edgeKeyForState = (e) => String(e.from) + '->' + String(e.to) + '|' + String(e.type || 'prompt') + '|' + String(e.branch || '');
+      const edgeKeyForState = edgeKeyUI;
       const loopPillItems = [];
 
       const edgeEls = edges.map((edge) => {
@@ -9491,7 +9501,7 @@ window.__ModuleLoader__.load({
           try { console.error('[workflow-canvas] apply failed', error); } catch (_e) { /* ignore */ }
         }
       },
-      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, loopProgressDisplay, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, COMMENT_COLORS, COMMENT_FONT_SIZES, normalizeCommentsUI, nodesInsideComment, boundsForNodes, refitCommentsAfterLayout, commentHeaderScale, resizeCommentBox, mergeCommentsForDoc, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
+      __test: { I18N, S, canvasActivityKey, WorkflowCanvas, isDockElementHidden, sanitizeSessionFileBaseUI, extractCanvasJsonFromText, findNearestInputSnap, topoOrder, wouldCycle, classifyCanvasNodes, nodeActivityStyle, soloLeadNodeIds, layoutGraph, builtinTemplates, deadEndNodeIds, nextEffectLevel, nextMaxParallel, dropdownAlign, zoomAroundPoint, scrubZoom, applyPanStep, normalizeDirection, loadDefaultDirection, saveDefaultDirection, loadPresets, savePresets, buildPlan, loadDoc, saveDoc, pruneSessionStorage, storageKey, socketCenterY, nodeHeight, conditionBranchesForUI, distanceToEdge, edgeCurve, compatibleTargetsForWire, conditionVerdictSummary, entryRunButtonState, stopButtonState, deriveLeadStatuses, loopProgressDisplay, formatDurationMs, buildRunSummaryView, formatRunSummaryMarkdown, outputSocketX, inputSocketPos, outputSocketPos, normalizeRefsUI, edgeKeyUI, COMMENT_COLORS, COMMENT_FONT_SIZES, normalizeCommentsUI, nodesInsideComment, boundsForNodes, refitCommentsAfterLayout, commentHeaderScale, resizeCommentBox, mergeCommentsForDoc, clampMenuPos, cloneSelection, nextSelectionOnNodeClick, DEFAULT_SHORTCUTS, normalizeShortcut, formatShortcutFromEvent, matchesShortcut, applyShortcutBinding, normalizeMaxIterationsUI, loopMemberIdsUI, loopGroupsForUI, pruneInvalidLoopEdges, canLinkAsLoop, analyzeLoopSelection, loopEdgeArc },
     };
   },
 });

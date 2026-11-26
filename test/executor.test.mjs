@@ -3727,3 +3727,411 @@ test('loop progress telemetry (#17): emits Round 1 progress, exhaustion flag, ca
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('interaction matrix: in-flight condition cancel -> retryFailed leaves zero partial verdict and reuses upstream', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-im-cond-'));
+  try {
+    const sid = 's-im-cond-' + Date.now();
+    const runFilePath = join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.run.json');
+    const plan = {
+      task: '条件在飞取消测试',
+      nodes: [
+        { id: 'prep', kind: 'agent', label: '前置', role: 'prepare' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+        { id: 'ok', kind: 'agent', label: '通过分支', role: 'pass-step' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'prep', type: 'prompt' },
+        { id: 'e1', from: 'prep', to: 'gate', type: 'prompt' },
+        { id: 'e2', from: 'gate', to: 'ok', type: 'prompt', branch: 'true' },
+      ],
+    };
+    const spawned1 = [];
+    let resolveHangingGate;
+    const scope1 = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        interrupt() {},
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          spawned1.push(id);
+          if (id === 'gate') {
+            return Promise.resolve({
+              childId: 'kid-gate-hang',
+              result: new Promise((resolve) => { resolveHangingGate = resolve; }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          return Promise.resolve({
+            childId: 'kid-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: 'prep-ready' }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const run1 = executePlan(scope1, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    for (let i = 0; i < 40 && !resolveHangingGate; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(resolveHangingGate, 'condition judge reached in-flight state');
+    abortSessionRun(scope1, sid, null, { cancelRootTurn: false });
+    resolveHangingGate({ output: [{ type: 'text', text: '{"pass": false, "reason": "stale"}' }], stopReason: 'aborted' });
+    const res1 = await run1;
+    assert.equal(res1.status, 'halted');
+    assert.equal(res1.decisions.length, 0, 'cancelled in-flight condition leaves zero decisions in return payload');
+    const haltedRun = JSON.parse(readFileSync(runFilePath, 'utf8'));
+    assert.deepEqual(haltedRun.decisions, {}, 'cancelled in-flight condition leaves zero half-verdict in .run.json');
+
+    // Follow-up retryFailed reuses prep, re-runs gate cleanly, and finishes ok branch
+    const spawned2 = [];
+    const scope2 = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          spawned2.push(id);
+          const txt = id === 'gate' ? '{"pass": true, "reason": "通过"}' : 'ok-done';
+          return Promise.resolve({
+            childId: 'kid2-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const res2 = await executePlan(scope2, plan, { retryFailed: true }, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(res2.status, 'done');
+    assert.ok(!spawned2.includes('prep'), 'retryFailed reuses succeeded upstream prep');
+    assert.deepEqual(spawned2, ['gate', 'ok']);
+    assert.equal(res2.decisions.length, 1);
+    assert.equal(res2.decisions[0].pass, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('interaction matrix: Run 1 late cancellation cleanup never clobbers Run 2 ownership or .run.json', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-im-race-'));
+  try {
+    const sid = 's-im-race-' + Date.now();
+    const runFilePath = join(dir, '.dsh', 'canvas', safeSessionFileBase(sid) + '.run.json');
+    const plan = {
+      task: '竞态所有权测试',
+      nodes: [{ id: 'a', kind: 'agent', label: 'A', role: 'work' }],
+      edges: [{ id: 'e0', from: 'lead', to: 'a', type: 'prompt' }],
+    };
+
+    let resolveRun1Child;
+    const scope1 = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        interrupt() {},
+        startActivation() {
+          return Promise.resolve({
+            childId: 'kid-r1',
+            result: new Promise((resolve) => { resolveRun1Child = resolve; }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const run1 = executePlan(scope1, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    for (let i = 0; i < 40 && !resolveRun1Child; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(resolveRun1Child, 'Run 1 child started');
+
+    // Cancel Run 1 synchronously (clears activeRunBySession & runBySession) BEFORE its child promise settles
+    abortSessionRun(scope1, sid, null, { cancelRootTurn: false });
+
+    // Start Run 2 on the exact same sessionId while Run 1's child is still dangling
+    let resolveRun2Child;
+    const scope2 = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        interrupt() {},
+        startActivation() {
+          return Promise.resolve({
+            childId: 'kid-r2',
+            result: new Promise((resolve) => { resolveRun2Child = resolve; }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const run2 = executePlan(scope2, plan, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+    for (let i = 0; i < 40 && !resolveRun2Child; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(resolveRun2Child, 'Run 2 started cleanly on same session');
+
+    // Now let Run 1's delayed child resolve so Run 1's finishAborted + finally execute while Run 2 is live
+    resolveRun1Child({ output: [], stopReason: 'aborted' });
+    const res1 = await run1;
+    assert.equal(res1.status, 'halted');
+
+    // Verify Run 1 did NOT overwrite Run 2's `.run.json` to halted AND did NOT release Run 2's re-entrancy lock
+    const midRunFile = JSON.parse(readFileSync(runFilePath, 'utf8'));
+    assert.equal(midRunFile.status, 'running', 'Run 1 late cleanup must not overwrite Run 2 running .run.json');
+    const reentrantRes = await executePlan(scope2, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.ok(typeof reentrantRes.error === 'string' && reentrantRes.error.includes('正在执行中'), 'Run 2 still holds activeRunBySession ownership lock');
+
+    // Finally finish Run 2 cleanly
+    resolveRun2Child({ output: [{ type: 'text', text: 'run2-ok' }], stopReason: 'completed' });
+    const res2 = await run2;
+    assert.equal(res2.status, 'done');
+    assert.equal(res2.results.a, 'run2-ok');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('interaction matrix: pinned memoryChildId x loop retry reuses warm session when healthy, starts fresh when Round 1 crashes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-im-memloop-'));
+  try {
+    // Part A: Healthy Round 1 on pinned memoryChildId -> Round 2 continues that same warm session with incremental prompt
+    const sidA = 's-im-memloop-ok-' + Date.now();
+    const callsA = [];
+    let implRoundA = 0;
+    const planA = {
+      task: '钉选记忆健康回环',
+      nodes: [
+        { id: 'impl', kind: 'agent', label: '实现', role: 'code', keepSession: true, memoryChildId: 'kid-pinned-2' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'impl', type: 'prompt' },
+        { id: 'e1', from: 'impl', to: 'gate', type: 'prompt' },
+        { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 2 },
+      ],
+    };
+    const promptTextOf = (spec) => Array.isArray(spec.prompt)
+      ? spec.prompt.map((p) => (p && p.text) || '').join('\n')
+      : String(spec.prompt || '');
+    const scopeA = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          if (id === 'impl') {
+            implRoundA += 1;
+            callsA.push({ childId: spec.childId || null, prompt: promptTextOf(spec) });
+            return Promise.resolve({
+              childId: spec.childId || 'kid-fresh-a',
+              result: Promise.resolve({ output: [{ type: 'text', text: 'impl-r' + implRoundA }], stopReason: 'completed' }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          const txt = implRoundA === 1 ? '{"pass": false, "reason": "补一个边界判断"}' : '{"pass": true, "reason": "通过"}';
+          return Promise.resolve({
+            childId: 'kid-gate-' + implRoundA,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const resA = await executePlan(scopeA, planA, {}, { agent: { id: sidA }, signal: new AbortController().signal });
+    assert.equal(resA.status, 'done');
+    assert.equal(callsA.length, 2);
+    assert.equal(callsA[0].childId, 'kid-pinned-2', 'Round 1 enters pinned memoryChildId');
+    assert.equal(callsA[1].childId, 'kid-pinned-2', 'Round 2 continues healthy warm session');
+    assert.ok(callsA[1].prompt.includes('补一个边界判断'), 'Round 2 passes rejection feedback incrementally');
+
+    // Part B: Crashed Round 1 on pinned memoryChildId -> Round 2 skips memoryChildId and starts a clean fresh session
+    const sidB = 's-im-memloop-crash-' + Date.now();
+    const callsB = [];
+    let implRoundB = 0;
+    const planB = {
+      task: '钉选记忆崩溃回环',
+      nodes: [
+        { id: 'impl', kind: 'agent', label: '实现', role: 'code', keepSession: true, memoryChildId: 'kid-pinned-bad' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'impl', type: 'prompt' },
+        { id: 'e1', from: 'impl', to: 'gate', type: 'prompt' },
+        { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 2 },
+      ],
+    };
+    const scopeB = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          if (id === 'impl') {
+            implRoundB += 1;
+            callsB.push({ childId: spec.childId || null, prompt: promptTextOf(spec) });
+            if (implRoundB === 1) {
+              return Promise.resolve({
+                childId: spec.childId || 'kid-pinned-bad',
+                result: Promise.resolve({ output: [], stopReason: 'error', diagnostic: 'corrupted context' }),
+                dispose: () => Promise.resolve(),
+              });
+            }
+            return Promise.resolve({
+              childId: 'kid-fresh-clean',
+              result: Promise.resolve({ output: [{ type: 'text', text: 'fixed-in-fresh' }], stopReason: 'completed' }),
+              dispose: () => Promise.resolve(),
+            });
+          }
+          const txt = implRoundB === 1 ? '{"pass": false, "reason": "上轮崩溃请重做"}' : '{"pass": true, "reason": "新会话已修复"}';
+          return Promise.resolve({
+            childId: 'kid-gate-b-' + implRoundB,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const resB = await executePlan(scopeB, planB, {}, { agent: { id: sidB }, signal: new AbortController().signal });
+    assert.equal(resB.status, 'done');
+    assert.equal(callsB.length, 2);
+    assert.equal(callsB[0].childId, 'kid-pinned-bad', 'Round 1 attempts pinned memoryChildId');
+    assert.equal(callsB[1].childId, null, 'Round 2 skips crashed pinned memoryChildId and starts a clean fresh session');
+    assert.ok(callsB[1].prompt.includes('上轮崩溃请重做'), 'Fresh retry session still receives full brief + feedback');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('interaction matrix: loop mid-retry cancel -> retryFailed/fromNodes, exhaustion -> Lead pause -> reset, and canvas_preset guard while running', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-canvas-im-combo-'));
+  try {
+    // 1) Loop mid-retry cancel -> retryFailed reuses outside prep node
+    const sid = 's-im-combo-' + Date.now();
+    const plan = {
+      task: '组合矩阵',
+      nodes: [
+        { id: 'prep', kind: 'agent', label: '准备', role: 'prep' },
+        { id: 'impl', kind: 'agent', label: '实现', role: 'code' },
+        { id: 'gate', kind: 'condition', label: '门禁', role: 'check' },
+        { id: 'mid', kind: 'lead', label: '中审', role: 'review' },
+        { id: 'ship', kind: 'agent', label: '发布', role: 'deploy' },
+      ],
+      edges: [
+        { id: 'e0', from: 'lead', to: 'prep', type: 'prompt' },
+        { id: 'e1', from: 'prep', to: 'impl', type: 'prompt' },
+        { id: 'e2', from: 'impl', to: 'gate', type: 'prompt' },
+        { id: 'e3', from: 'gate', to: 'mid', type: 'prompt', branch: 'true' },
+        { id: 'el', from: 'gate', to: 'impl', type: 'prompt', branch: 'false', loop: true, maxIterations: 1 },
+        { id: 'e4', from: 'mid', to: 'ship', type: 'prompt' },
+      ],
+    };
+
+    let implCalls = 0;
+    let resolveR2;
+    const scopeRun1 = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        interrupt() {},
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          if (id === 'impl') {
+            implCalls += 1;
+            if (implCalls === 2) {
+              return Promise.resolve({
+                childId: 'kid-r2-hang',
+                result: new Promise((resolve) => { resolveR2 = resolve; }),
+                dispose: () => Promise.resolve(),
+              });
+            }
+          }
+          const txt = id === 'gate' ? '{"pass": false, "reason": "需要返工"}' : ('ok:' + id);
+          return Promise.resolve({
+            childId: 'kid-' + id + '-' + implCalls,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const pRun1 = executePlan(scopeRun1, plan, {}, { agent: { id: sid }, signal: new AbortController().signal });
+    for (let i = 0; i < 40 && !resolveR2; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.ok(resolveR2, 'reached retry round 2');
+
+    // While actively running, canvas_preset list still works, while apply/toggle are blocked cleanly
+    const listWhileRunning = handleCanvasPreset(scopeRun1, sid, { action: 'list' });
+    assert.ok(!listWhileRunning.error && Array.isArray(listWhileRunning.builtinTemplates), 'canvas_preset list works during active run');
+    const applyWhileRunning = handleCanvasPreset(scopeRun1, sid, { action: 'apply', name: '标准流水线' });
+    assert.ok(typeof applyWhileRunning.error === 'string' && applyWhileRunning.error.includes('正在运行'), 'canvas_preset apply blocked during active run');
+    const toggleWhileRunning = handleCanvasPreset(scopeRun1, sid, { action: 'toggle', enabled: false });
+    assert.ok(typeof toggleWhileRunning.error === 'string' && toggleWhileRunning.error.includes('正在运行'), 'canvas_preset toggle blocked during active run');
+
+    // Cancel mid-retry
+    abortSessionRun(scopeRun1, sid, null, { cancelRootTurn: false });
+    resolveR2({ output: [], stopReason: 'aborted' });
+    const r1 = await pRun1;
+    assert.equal(r1.status, 'halted');
+
+    // 2) retryFailed reuses `prep`, then exhausts loop (maxIterations: 1) and hands off to intermediate Lead `mid`
+    const spawnedAfterCancel = [];
+    const scopeExhaust = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          spawnedAfterCancel.push(id);
+          const txt = id === 'gate' ? '{"pass": false, "reason": "仍不达标"}' : ('done:' + id);
+          return Promise.resolve({
+            childId: 'kid-ex-' + id + '-' + spawnedAfterCancel.length,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const r2 = await executePlan(scopeExhaust, plan, { retryFailed: true }, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(r2.status, 'need-lead');
+    assert.equal(r2.node.label, '中审');
+    assert.ok(!spawnedAfterCancel.includes('prep'), 'retryFailed after loop cancel reuses completed prep outside loop');
+    assert.equal(r2.loops[0].exhausted, true);
+
+    // 3) Resuming paused Lead after exhaustion with leadResult completes downstream `ship`
+    const r3 = await executePlan(scopeExhaust, plan, { leadResult: 'Lead 人工拍板放行' }, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(r3.status, 'done');
+    assert.equal(r3.results.ship, 'done:ship');
+
+    // 4) fromNodes: ['impl'] reuses `prep` again and passes on Round 1
+    const spawnedFrom = [];
+    const scopePass = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          spawnedFrom.push(id);
+          const txt = id === 'gate' ? '{"pass": true, "reason": "全部通过"}' : ('pass:' + id);
+          return Promise.resolve({
+            childId: 'kid-from-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const r4 = await executePlan(scopePass, plan, { fromNodes: ['impl'] }, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(r4.status, 'need-lead');
+    assert.ok(!spawnedFrom.includes('prep'), 'fromNodes reuses prep outside target segment');
+    assert.deepEqual(spawnedFrom, ['impl', 'gate']);
+    assert.equal(r4.loops[0].used, 0);
+    assert.equal(r4.loops[0].exhausted, false);
+
+    // 5) reset: true from paused Lead discards pause and starts cleanly from prep
+    const spawnedReset = [];
+    const scopeReset = {
+      sessions: { get: () => ({ header: { cwd: dir } }) },
+      subagents: {
+        startActivation(spec) {
+          const id = String(spec.label || '').split('#').pop();
+          spawnedReset.push(id);
+          const txt = id === 'gate' ? '{"pass": true, "reason": "重置后通过"}' : ('reset:' + id);
+          return Promise.resolve({
+            childId: 'kid-reset-' + id,
+            result: Promise.resolve({ output: [{ type: 'text', text: txt }], stopReason: 'completed' }),
+            dispose: () => Promise.resolve(),
+          });
+        },
+      },
+    };
+    const r5 = await executePlan(scopeReset, plan, { reset: true }, { agent: { id: sid }, signal: new AbortController().signal });
+    assert.equal(r5.status, 'need-lead');
+    assert.deepEqual(spawnedReset, ['prep', 'impl', 'gate']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -340,7 +340,12 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   };
 
   // On a controlled loop retry where the previous run of this node was healthy,
-  // resume its warm child session with a concise incremental correction prompt.
+  // resume its warm child session (which already holds any Round 1 pinned/saved memory)
+  // with a concise incremental correction prompt. If the prior round crashed/returned empty
+  // (so `warmChildId` was intentionally dropped) or the warm session itself is refused,
+  // skip `keepSession`/`memoryChildId` on this retry round and start a fresh session
+  // with the full brief + rejection feedback rather than looping inside a broken context.
+  let skipMemoryOnRetry = Boolean(loopCtx && !loopCtx.warmChildId);
   if (warmPrompt && loopCtx && loopCtx.warmChildId && !forcedChild) {
     const continued = await run(loopCtx.warmChildId, warmPrompt);
     if (signal && signal.aborted) return continued;
@@ -351,6 +356,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
     if (continued.reason !== 'activation-failed') {
       return continued;
     }
+    skipMemoryOnRetry = true;
     /* warm session refused: fall through to a fresh session with the full brief + feedback */
   }
 
@@ -372,7 +378,7 @@ async function spawnOnce(scope, plan, node, results, parent, signal, route, forc
   // Memory: prefer an explicitly pinned `memoryChildId` from the node dropdown,
   // then the saved memory slot (`childByNode`), then this process's live child.
   // A cold resume that the Host refuses falls through to a fresh session.
-  if (node.keepSession) {
+  if (node.keepSession && !skipMemoryOnRetry) {
     const pinned = typeof node.memoryChildId === 'string' ? node.memoryChildId.trim() : '';
     const saved = childByNode.get(childKey(node.id));
     const inProcess = liveChild.get(childKey(node.id));

@@ -64,7 +64,7 @@ flowchart LR
    - 执行器维护一个**可调并发上限**（默认 4，可在 `⋯` 菜单或参数中调为 `1–8`）的**动态并发池（`inFlight` + `Promise.race`）**：
      - 只要有任意在跑子代理完成、空出并发槽位，**任何依赖已满足的下游子代理会立刻启动**，不再傻等同层较慢的兄弟节点；
      - 遇到**条件节点（`kind: "condition"`）**时，以轻量只读模式（`minimal`）+ 严格结构化 `outputSchema` 判断命中分支（支持默认 `if/else`、任意多路 `switch/case` 单选与 `multiMatch` 多选并行），随即阻断未命中出边并用祖先感知 BFS 剪枝未命中分支（包括防止上游 `session-ref` 侧线绕过条件）；若所有分支均未命中或条件节点自身失败，则绝不瞎猜分支，直接跳过中间分支转交最近下游 Lead（无下游 Lead 时熔断暂停）；
-     - 遇到命中的**受控回环边（`loop: true, maxIterations: 1–10`）**时（`multiMatch` 下回环优先）：若未超单环上限与全局安全上限（`20` 次），精准重置 `descendants(入口) ∩ ancestors(条件)` 环内节点的运行状态（环外旁路不受影响），把打回理由注入回环入口（同时支持子代理与 `Lead` 节点），并在入口上一轮执行健康时自动复用其热子会话发送增量修正提示词（崩溃/空输出则丢弃旧会话重开）；若达到上限则熔断停止回跳，汇总 `1..N` 轮失败理由转交最近下游 Lead 拍板；
+     - 遇到命中的**受控回环边（`loop: true, maxIterations: 1–10`）**时（`multiMatch` 下回环优先）：若未超单环上限与全局安全上限（`20` 次），精准重置 `descendants(入口) ∩ ancestors(条件)` 环内节点的运行状态（环外旁路不受影响），把打回理由注入回环入口（同时支持子代理与 `Lead` 节点），并在入口上一轮执行健康时自动复用其热子会话发送增量修正提示词（**与记忆钉选 `memoryChildId` 的优先级**：首轮优先进入钉选/记忆会话；若首轮健康完成，重试轮复用同一热会话发送增量修正；若首轮崩溃、空输出或热会话被 Host 拒绝，则该重试轮跳过 `memoryChildId`/`keepSession` 改开干净新会话带完整背景与打回理由重做，避免在损坏上下文里死循环）；若达到上限则熔断停止回跳，汇总 `1..N` 轮失败理由转交最近下游 Lead 拍板；
      - 遇到**中间 Lead 节点**（支持 `Lead → Lead` 阶段串联）时暂停并返回 `status: "need-lead"`；遇到**末尾终审 Lead**（无剩余下游）时直接一步返回 `status: "done"` 与 `finalLead`，无需多余回调轮次；
    - 支持 **`retryFailed: true`** 或 **`fromNodes: [...]`** 局部重跑：自动复用上次已成功节点的缓存结果，仅重跑失败/目标节点及其下游；传 `reset: true` 则从头重跑；传 **`cancel: true`** 或通过画布 **`⏹ 终止`** 触发并发命令 **`/canvas-stop`**（亦对齐 DSH 原生聊天停止按钮）时，立即调用 `subagents.interrupt(cid, { kind: 'user' })`、`drainDescendants([rootAgent])` 与 `rootAgent.cancel({ kind: 'user' }, { keepInbox: true })`，以 `abortPromise` 秒级跳出并发池、阻止拉起备用模型重试，同时保留已完成节点缓存并清空 `waitingLead` / `.run.json`。
 
