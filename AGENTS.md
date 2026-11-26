@@ -2,7 +2,7 @@
 
 Repository-level constraints and architecture map for developing `dsh-workflow-canvas`, a DeepSeek Harness (DSH) sidebar workflow canvas plugin.
 
-> Note: `AGENTS.md` and `.agents/` are workspace dev-agent files and are excluded from npm publishing by `package.json`'s `"files"` whitelist. Do not confuse `.agents/skills/` with `skills/workflow-canvas/SKILL.md`, which is the user-facing DSH plugin skill shipped in the package.
+> Note: `AGENTS.md` is a repository contributor/dev-agent guide and is excluded from npm publishing by `package.json`'s `"files"` whitelist. Do not confuse it with `skills/workflow-canvas/SKILL.md`, which is the user-facing DSH plugin skill shipped in the package.
 
 ## 1. Repository Map
 
@@ -20,10 +20,6 @@ Repository-level constraints and architecture map for developing `dsh-workflow-c
 - Static health & consistency gate: `npm run check` (`scripts/check.mjs`: JS syntax, JSON/locale parity, `I18N` parity & dead keys, `S.*` dead styles, local doc links, backward-compatible `inject`, npm tarball size & hygiene)
 - Test suite: `npm test` (`node --test`)
 - **`client.js` `vm` sandbox tests**: Arrays/objects returned from the `vm` context have different prototypes — unwrap them (`[...arr]`, `{ ...obj }`) before `assert.deepEqual`.
-- **Windows PowerShell 5.1**:
-  - Do not chain commands with `&&` (use `;` or check `$LASTEXITCODE`).
-  - Pass Chinese text to `gh` CLI via UTF-8 files (`--body-file` / `--notes-file`), never inline quoted args.
-  - When loading UTF-8 text in PowerShell for JSON serialization, use `[System.IO.File]::ReadAllText(path, [System.Text.Encoding]::UTF8)` (not `Get-Content -Raw`, which attaches PSObject metadata).
 
 ## 3. DSH Host API Contract (Zero Guessing)
 
@@ -90,16 +86,3 @@ When adding or changing features, node fields, tools, commands, or UI controls, 
 2. **Client UI & serialization (`client.js`)**: `I18N` (`zh`/`en`), `helpBody` (`zh`/`en`), `buildPlan`, `applyCanvasDoc` (including remote field deletion cleanup), presets, and JSON import/export.
 3. **Docs & metadata**: `README.zh.md`, `README.md`, `docs/DETAIL.md`, `docs/MECHANISM.zh.md`, `docs/MECHANISM.md`, `skills/workflow-canvas/SKILL.md`, `locale/zh.json`, `locale/en.json`, `package.json` `description`.
 4. **Tests**: Cover new backend logic in `test/executor.test.mjs` and client helpers in `test/client.test.mjs`.
-
-For major changes or before cutting a release, activate the `pre-release-audit` skill (`.agents/skills/pre-release-audit/SKILL.md`).
-
-## 6. Git & Release Hard Rules
-
-- **NEVER run `git add .` or `git add -A`**: local untracked directories (such as local runtime data or scratch folders) must stay untracked. Always stage explicit file paths.
-- **NEVER run `npm publish` directly**: complete tests, commit, tag, push, GitHub issue replies/closures, and GitHub Release, then output the exact publish command for the user using the active workspace path:
-  ```cmd
-  cd /d <repo-root> && npm publish
-  ```
-- **GitHub Issues & Releases**:
-  - Always comment on each resolved issue (via UTF-8 `--body-file`) **before** closing it (`--reason completed`).
-  - Always publish **bilingual (zh + en)** GitHub Release notes via `--notes-file`.

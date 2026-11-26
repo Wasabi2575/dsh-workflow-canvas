@@ -270,8 +270,8 @@ if (packRes.status !== 0) {
       p.startsWith('scripts/') ||
       p.startsWith('test/') ||
       p.startsWith('.dsh/') ||
-      p.startsWith('promo/') ||
-      p === 'AGENTS.md'
+      p === 'AGENTS.md' ||
+      p === 'GEMINI.md'
     );
     const required = [
       'index.js',
