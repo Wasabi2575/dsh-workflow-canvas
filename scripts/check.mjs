@@ -317,10 +317,17 @@ try {
   const fmMatch = skillSrc.match(/^---\r?\n[\s\S]*?^description:\s*(.+)$/m);
   if (!idxMatch) fail('Could not locate SKILL_DESCRIPTION in index.js');
   else if (!fmMatch) fail('Could not locate description in skills/workflow-canvas/SKILL.md frontmatter');
-  else if (idxMatch[1].trim() !== fmMatch[1].trim()) {
-    fail('SKILL_DESCRIPTION in index.js differs from skills/workflow-canvas/SKILL.md frontmatter description');
-  } else {
-    pass('SKILL_DESCRIPTION matches skills/workflow-canvas/SKILL.md');
+  else {
+    const rawFm = fmMatch[1].trim();
+    const isQuoted = (rawFm.startsWith('"') && rawFm.endsWith('"')) || (rawFm.startsWith("'") && rawFm.endsWith("'"));
+    const unquotedFm = isQuoted ? rawFm.slice(1, -1) : rawFm;
+    if (!isQuoted && /:\s/.test(rawFm)) {
+      fail('SKILL.md frontmatter description contains unquoted ": " (invalid YAML on GitHub)');
+    } else if (idxMatch[1].trim() !== unquotedFm.trim()) {
+      fail('SKILL_DESCRIPTION in index.js differs from skills/workflow-canvas/SKILL.md frontmatter description');
+    } else {
+      pass('SKILL_DESCRIPTION matches skills/workflow-canvas/SKILL.md (valid YAML)');
+    }
   }
 } catch (err) {
   fail(`SKILL_DESCRIPTION parity check error: ${err.message}`);

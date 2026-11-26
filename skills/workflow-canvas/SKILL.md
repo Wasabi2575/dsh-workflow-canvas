@@ -1,6 +1,6 @@
 ---
 name: workflow-canvas
-description: Workflow canvas (画布/工作流/预设/条件分支/回环/注释): inspect, switch presets, toggle, draw, edit, annotate, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow.
+description: "Workflow canvas (画布/工作流/预设/条件分支/回环/注释): inspect, switch presets, toggle, draw, edit, annotate, run or cancel a DSH subagent graph. Load before using canvas_inspect, canvas_preset, canvas_generate, canvas_patch or canvas_workflow."
 ---
 
 # Workflow canvas
